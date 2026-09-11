@@ -489,11 +489,17 @@ interface PermissionRequestUi {
 }
 
 function showPermissionPrompt(request: PermissionRequestUi): void {
-  const overlay = $("#perm-overlay") as HTMLElement;
-  const desc = $("#perm-desc") as HTMLParagraphElement;
-  const optionsWrap = $("#perm-options") as HTMLDivElement;
-  const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
+  const overlay = $("perm-overlay");
+  const desc = $("perm-desc");
+  const optionsWrap = $("perm-options");
   const permId = request.toolCall.toolCallId;
+  // Guard against a stale sidebar (no modal markup): answer "cancelled" so the
+  // host never hangs, rather than crashing the message handler.
+  if (!overlay || !desc || !optionsWrap) {
+    browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId: "cancelled" }).catch(() => {});
+    return;
+  }
+  const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
 
   // Friendly per-tool description.
   desc.textContent =
@@ -523,7 +529,8 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
 }
 
 function hidePermissionPrompt(): void {
-  (($("#perm-overlay") as HTMLElement) || document.createElement("div")).classList.add("hidden");
+  const overlay = $("perm-overlay");
+  if (overlay) overlay.classList.add("hidden");
 }
 
 $<HTMLButtonElement>("new-session").addEventListener("click", () => {

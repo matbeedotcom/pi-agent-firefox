@@ -414,11 +414,17 @@ browser.runtime.onMessage.addListener((message) => {
     }
 });
 function showPermissionPrompt(request) {
-    const overlay = $("#perm-overlay");
-    const desc = $("#perm-desc");
-    const optionsWrap = $("#perm-options");
-    const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
+    const overlay = $("perm-overlay");
+    const desc = $("perm-desc");
+    const optionsWrap = $("perm-options");
     const permId = request.toolCall.toolCallId;
+    // Guard against a stale sidebar (no modal markup): answer "cancelled" so the
+    // host never hangs, rather than crashing the message handler.
+    if (!overlay || !desc || !optionsWrap) {
+        browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId: "cancelled" }).catch(() => { });
+        return;
+    }
+    const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
     // Friendly per-tool description.
     desc.textContent =
         tool === "browser_screenshot"
@@ -446,7 +452,9 @@ function showPermissionPrompt(request) {
     overlay.classList.remove("hidden");
 }
 function hidePermissionPrompt() {
-    ($("#perm-overlay") || document.createElement("div")).classList.add("hidden");
+    const overlay = $("perm-overlay");
+    if (overlay)
+        overlay.classList.add("hidden");
 }
 $("new-session").addEventListener("click", () => {
     $("new-panel").classList.toggle("hidden");
