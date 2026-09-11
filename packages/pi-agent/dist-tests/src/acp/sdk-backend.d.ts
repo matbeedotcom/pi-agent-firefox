@@ -1,11 +1,3 @@
-/**
- * Production Pi backend: Pi SDK `createAgentSession()` in-process
- * (PRODUCT.md §6 "Preferred long-term implementation").
- *
- * Each ACP session maps to one independent Pi `AgentSession` with its own
- * SessionManager (persistence, cwd, model state). The ACP boundary never
- * exposes the SDK directly.
- */
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 /** The concrete Model type as returned by ModelRuntime.getModel. */
 export type PiModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
@@ -23,13 +15,23 @@ export declare class PiSdkBackend implements PiBackend {
     private readonly opts;
     private modelRuntime;
     private runtimePromise;
+    /** One coherent services bundle per effective session cwd (cached). */
+    private servicesByCwd;
+    private builtinFactories;
+    private builtinFactoriesPromise;
     private sessions;
     readonly thinkingLevels: readonly ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
     constructor(opts: PiBackendOptions);
     get ready(): Promise<void>;
     private initRuntime;
     private runtime;
-    private settingsManager;
+    private builtinFactoriesOnce;
+    /**
+     * Get (creating on first use) the cwd-bound services for a session cwd.
+     * The shared ModelRuntime lets extension-registered providers (llama.cpp
+     * etc.) become visible to every session without re-loading the catalog.
+     */
+    private servicesFor;
     createSession(opts: CreateSessionOptions): Promise<BackendSession>;
     openSession(opts: OpenSessionOptions): Promise<BackendSession>;
     private spawnSession;

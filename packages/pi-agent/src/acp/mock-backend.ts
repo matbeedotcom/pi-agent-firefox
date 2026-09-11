@@ -11,7 +11,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { PI_BROWSER_ERROR, PiBrowserProtocolError, codeFromErrorObject, isStructuredErrorObject } from "@pi-browser/protocol";
 import type {
   BackendEvent,
   BackendPromptResult,
@@ -100,7 +100,14 @@ export class MockSession implements BackendSession {
       this.emit({ type: "tool_end", toolCallId, toolName: spec.toolName, result, isError: false });
       this.executedTools.push({ toolCallId, toolName: spec.toolName, isError: false, result });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // Preserve the structured code in the agent-visible failure text so
+      // consumers can tell a BROWSER_TAB_CLOSED from a generic MCP failure.
+      let message = err instanceof Error ? err.message : String(err);
+      if (err instanceof PiBrowserProtocolError) {
+        message = `[${err.code}] ${message}`;
+      } else if (isStructuredErrorObject(err)) {
+        message = `[${codeFromErrorObject(err)}] ${err.message}`;
+      }
       this.emit({ type: "tool_end", toolCallId, toolName: spec.toolName, result: { message }, isError: true });
       this.executedTools.push({ toolCallId, toolName: spec.toolName, isError: true, result: message });
     }

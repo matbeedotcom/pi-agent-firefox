@@ -1,2 +1,5 @@
 #!/bin/sh
-exec "/mnt/NVME2TB/.local/share/pi-node/node-v22.22.3-linux-x64/bin/node" "/home/acidhax/dev/personal/firefox-acp-addon/packages/pi-agent/dist/native-host/main.js" "$@"
+# Node lives under $HOME so that confined browsers (e.g. snap Firefox) can
+# exec it: the native host process inherits the browser's namespace.
+export PI_BROWSER_LOG_FILE=/tmp/pi-browser-host.log
+exec "$HOME/.local/lib/pi-browser/node" "/home/acidhax/dev/personal/firefox-acp-addon/packages/pi-agent/dist/native-host/main.js" "$@"

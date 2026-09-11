@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BROWSER_TOOLS, BROWSER_TOOL_NAMES, getBrowserTool, isBrowserTool, isMutatingBrowserTool, } from "../src/browser-tools.js";
+import { CONTROL_TOOLS, CONTROL_TOOL_NAMES, getControlTool, isControlTool, isMutatingControlTool, } from "../src/control-tools.js";
 import { codeFromErrorObject, isPiBrowserErrorCode, PI_BROWSER_ERROR, PI_BROWSER_ERROR_CODES, PiBrowserProtocolError, toErrorObject, } from "../src/errors.js";
 import { PI_BROWSER, PI_BROWSER_META, X_PI_BROWSER } from "../src/integration.js";
 import { isJsonRpcNotification, isJsonRpcRequest, isJsonRpcResponse } from "../src/jsonrpc.js";
@@ -16,6 +17,40 @@ test("browser tool registry: names are unique and well-formed", () => {
     assert.equal(getBrowserTool("browser_click")?.readOnly, false);
     assert.equal(isMutatingBrowserTool("browser_click"), true);
     assert.equal(isMutatingBrowserTool("browser_get_dom"), false);
+});
+test("control tool registry: names are unique, well-formed, and disjoint from browser tools", () => {
+    const names = CONTROL_TOOLS.map((t) => t.name);
+    assert.equal(new Set(names).size, names.length);
+    for (const name of names) {
+        assert.match(name, /^pi_[a-z_]+$/);
+    }
+    assert.deepEqual([...CONTROL_TOOL_NAMES], names);
+    // Disjoint from the browser tool surface.
+    for (const name of names) {
+        assert.ok(!isBrowserTool(name), `${name} collides with a browser tool`);
+    }
+    assert.ok(isControlTool("pi_new_session"));
+    assert.ok(!isControlTool("pi_nope"));
+    assert.equal(getControlTool("pi_get_state")?.readOnly, true);
+    assert.equal(isMutatingControlTool("pi_prompt"), true);
+    assert.equal(isMutatingControlTool("pi_get_state"), false);
+});
+test("control tool input schemas are JSON Schema objects", () => {
+    for (const tool of CONTROL_TOOLS) {
+        assert.equal(tool.inputSchema.type, "object");
+        assert.equal(tool.inputSchema.additionalProperties, false);
+        assert.ok(typeof tool.description === "string" && tool.description.length > 10);
+        const props = (tool.inputSchema.properties ?? {});
+        const required = (tool.inputSchema.required ?? []);
+        for (const r of required)
+            assert.ok(props[r], `${tool.name}: required ${r} missing from properties`);
+    }
+    // Every mutating session tool takes an explicit sessionId (no implicit targets).
+    for (const name of ["pi_prompt", "pi_cancel", "pi_close_session", "pi_select_session", "pi_bind_current_tab", "pi_unbind_tab", "pi_open_bound_tab"]) {
+        const def = getControlTool(name);
+        assert.ok(def, name);
+        assert.ok(def.inputSchema.required.includes("sessionId"), `${name} requires an explicit sessionId`);
+    }
 });
 test("browser tool input schemas are JSON Schema objects", () => {
     for (const tool of BROWSER_TOOLS) {

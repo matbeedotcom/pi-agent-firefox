@@ -10,8 +10,10 @@
  */
 import {
   BROWSER_TOOLS,
+  CONTROL_TOOLS,
   MCP_PROTOCOL_VERSION,
   PI_BROWSER,
+  isControlTool,
   type ConnectMcpRequest,
   type ConnectMcpResponse,
   type DisconnectMcpRequest,
@@ -20,6 +22,27 @@ import {
 } from "@pi-browser/protocol";
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
 import type { ToolDispatcher } from "./tool-dispatcher.js";
+
+/**
+ * Executes a control tool (pi_*) in the background event page. The add-on
+ * wires this to its session-action handlers (the same code path the sidebar
+ * uses), so MCP control calls and UI actions stay behaviorally identical.
+ */
+export type ControlHandler = (
+  tool: string,
+  args: Record<string, unknown>,
+) => Promise<unknown>;
+
+function controlTextResult(payload: unknown) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
+      },
+    ],
+  };
+}
 
 interface McpConnection {
   connectionId: string;
@@ -90,7 +113,7 @@ export class McpServer {
         return {};
       case "tools/list":
         return {
-          tools: BROWSER_TOOLS.map((t) => ({
+          tools: [...BROWSER_TOOLS, ...CONTROL_TOOLS].map((t) => ({
             name: t.name,
             description: t.description,
             inputSchema: t.inputSchema,
@@ -103,6 +126,16 @@ export class McpServer {
         }
         if (!params.name) {
           throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, "tools/call missing name");
+        }
+        if (isControlTool(params.name)) {
+          if (!this.control) {
+            throw new PiBrowserProtocolError(
+              PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+              `control tool not available on this server: ${params.name}`,
+            );
+          }
+          const result = await this.control(params.name, params.arguments ?? {});
+          return controlTextResult(result) as MessageMcpResponse;
         }
         return (await this.dispatcher.handleToolCall({
           sessionId: conn.sessionId,
@@ -119,5 +152,8 @@ export class McpServer {
     this.connections.delete(req.connectionId);
   }
 
-  constructor(private readonly dispatcher: ToolDispatcher) {}
+  constructor(
+    private readonly dispatcher: ToolDispatcher,
+    private readonly control: ControlHandler | undefined = undefined,
+  ) {}
 }

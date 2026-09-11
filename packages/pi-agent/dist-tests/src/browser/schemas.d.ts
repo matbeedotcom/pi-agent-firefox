@@ -15,4 +15,6 @@ export interface BrowserToolSchema {
 }
 /** One entry per protocol browser tool, with its TypeBox parameter schema. */
 export declare const BROWSER_TOOL_SCHEMAS: readonly BrowserToolSchema[];
+/** One entry per protocol control tool, with its TypeBox parameter schema. */
+export declare const CONTROL_TOOL_SCHEMAS: readonly BrowserToolSchema[];
 //# sourceMappingURL=schemas.d.ts.map

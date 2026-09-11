@@ -1,17 +1,47 @@
 /**
- * Production Pi backend: Pi SDK `createAgentSession()` in-process
+ * Production Pi backend: Pi SDK agent sessions in-process
  * (PRODUCT.md §6 "Preferred long-term implementation").
  *
  * Each ACP session maps to one independent Pi `AgentSession` with its own
  * SessionManager (persistence, cwd, model state). The ACP boundary never
  * exposes the SDK directly.
+ *
+ * Sessions are created through the SDK's *services* layer
+ * (`createAgentSessionServices` + `createAgentSessionFromServices`) so that
+ * the resource loader runs exactly as it does in the pi CLI: built-in
+ * extensions (the llama.cpp provider) and user-installed packages from
+ * settings are loaded, and provider credentials resolve. A raw
+ * `createAgentSession()` skips that layer and leaves providers unregistered.
  */
-import { createAgentSession, defineTool, ModelRuntime, SettingsManager, SessionManager, } from "@earendil-works/pi-coding-agent";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createAgentSessionFromServices, createAgentSessionServices, defineTool, ModelRuntime, SessionManager, } from "@earendil-works/pi-coding-agent";
+/**
+ * Load the pi package's built-in extension factories (e.g. the llama.cpp
+ * provider). The package's exports map only exposes the root entry, so the
+ * dist/extensions module is imported by resolved file path.
+ */
+async function loadBuiltinExtensionFactories(log) {
+    try {
+        const mainUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
+        const distDir = path.dirname(fileURLToPath(mainUrl));
+        const mod = (await import(path.join(distDir, "extensions", "index.js")));
+        return mod.builtInExtensions ?? [];
+    }
+    catch (err) {
+        log.warn("failed to load built-in pi extensions (providers may be unavailable)", err);
+        return [];
+    }
+}
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
 export class PiSdkBackend {
     opts;
     modelRuntime;
     runtimePromise;
+    /** One coherent services bundle per effective session cwd (cached). */
+    servicesByCwd = new Map();
+    builtinFactories;
+    builtinFactoriesPromise;
     sessions = new Set();
     thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
     constructor(opts) {
@@ -37,16 +67,52 @@ export class PiSdkBackend {
         await this.initRuntime();
         return this.modelRuntime;
     }
-    settingsManager() {
-        return SettingsManager.inMemory({});
+    builtinFactoriesOnce() {
+        this.builtinFactoriesPromise ??= loadBuiltinExtensionFactories(this.opts.log).then((f) => {
+            this.builtinFactories = f;
+            return f;
+        });
+        return this.builtinFactoriesPromise;
+    }
+    /**
+     * Get (creating on first use) the cwd-bound services for a session cwd.
+     * The shared ModelRuntime lets extension-registered providers (llama.cpp
+     * etc.) become visible to every session without re-loading the catalog.
+     */
+    async servicesFor(cwd) {
+        const modelRuntime = await this.runtime();
+        const existing = this.servicesByCwd.get(cwd);
+        if (existing)
+            return existing;
+        const extensionFactories = await this.builtinFactoriesOnce();
+        const services = await createAgentSessionServices({
+            cwd,
+            modelRuntime,
+            ...(this.opts.agentDir ? { agentDir: this.opts.agentDir } : {}),
+            resourceLoaderOptions: { extensionFactories: extensionFactories },
+        });
+        // Extension providers (e.g. llama.cpp) are registered during services
+        // creation, but their model lists populate via an async refresh phase.
+        // Settle the runtime before any session is spawned against it, so model
+        // resolution (default model, session restore) sees the full catalog.
+        try {
+            await Promise.race([
+                modelRuntime.getAvailable(),
+                new Promise((resolve) => setTimeout(resolve, 15_000).unref?.()),
+            ]);
+        }
+        catch (err) {
+            this.opts.log.warn("model availability refresh failed", err);
+        }
+        this.servicesByCwd.set(cwd, services);
+        this.opts.log.info(`session services ready for cwd=${cwd}`);
+        return services;
     }
     async createSession(opts) {
-        const modelRuntime = await this.runtime();
         const sessionManager = SessionManager.create(opts.cwd);
         const session = await this.spawnSession({
             cwd: opts.cwd,
             sessionManager,
-            modelRuntime,
             customTools: opts.customTools,
             modelValueId: opts.modelValueId,
             thinkingLevel: opts.thinkingLevel,
@@ -55,7 +121,6 @@ export class PiSdkBackend {
         return session;
     }
     async openSession(opts) {
-        const modelRuntime = await this.runtime();
         const info = (await SessionManager.listAll()).find((s) => s.id === opts.sessionId);
         if (!info) {
             throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `Pi session not found: ${opts.sessionId}`);
@@ -64,7 +129,6 @@ export class PiSdkBackend {
         const session = await this.spawnSession({
             cwd: info.cwd || process.cwd(),
             sessionManager,
-            modelRuntime,
             customTools: opts.customTools,
             modelValueId: undefined, // restored from the session file
             thinkingLevel: undefined,
@@ -73,15 +137,9 @@ export class PiSdkBackend {
         return session;
     }
     async spawnSession(args) {
-        const { cwd, sessionManager, modelRuntime, customTools, modelValueId, thinkingLevel } = args;
-        const options = {
-            cwd,
-            sessionManager,
-            modelRuntime,
-            settingsManager: this.settingsManager(),
-        };
-        if (this.opts.agentDir)
-            options.agentDir = this.opts.agentDir;
+        const { cwd, sessionManager, customTools, modelValueId, thinkingLevel } = args;
+        const services = await this.servicesFor(cwd);
+        const options = { services, sessionManager };
         if (modelValueId) {
             const model = this.resolveModel(modelValueId);
             if (model)
@@ -94,14 +152,16 @@ export class PiSdkBackend {
         }
         let agentSession;
         try {
-            const created = await createAgentSession(options);
+            const created = await createAgentSessionFromServices(options);
             agentSession = created.session;
-            if (created.modelFallbackMessage) {
-                this.opts.log.warn(`session ${agentSession.sessionId}: ${created.modelFallbackMessage}`);
-            }
         }
         catch (err) {
             throw new PiBrowserProtocolError(PI_BROWSER_ERROR.PI_START_FAILED, `failed to start Pi session: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        const m = agentSession.model;
+        if (!m || m.provider === "unknown") {
+            this.opts.log.warn(`session ${agentSession.sessionId}: no model resolved ` +
+                "(provider not configured?) — prompts will fail until a model is selected");
         }
         return this.wrapSession(agentSession, cwd);
     }

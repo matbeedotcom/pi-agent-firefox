@@ -5,11 +5,30 @@
  */
 import * as esbuild from "esbuild";
 import { cp, mkdir, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(root, "dist");
+
+// esbuild does not type-check: fail the build on type errors (e.g. an
+// unimported global) before anything ships to Firefox.
+import { existsSync } from "node:fs";
+function findTsc(from) {
+  let dir = from;
+  for (;;) {
+    const candidate = path.join(dir, "node_modules", "typescript", "bin", "tsc");
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error("typescript not found in node_modules tree");
+    dir = parent;
+  }
+}
+execFileSync(process.execPath, [findTsc(root), "-p", "tsconfig.json", "--noEmit"], {
+  cwd: root,
+  stdio: "inherit",
+});
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });

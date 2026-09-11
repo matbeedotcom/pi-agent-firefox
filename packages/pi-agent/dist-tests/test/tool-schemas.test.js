@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BROWSER_TOOLS } from "@pi-browser/protocol";
-import { BROWSER_TOOL_SCHEMAS } from "../src/browser/schemas.js";
+import { BROWSER_TOOLS, CONTROL_TOOLS } from "@pi-browser/protocol";
+import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS } from "../src/browser/schemas.js";
 /**
  * The TypeBox schemas (used by Pi for validation + LLM tool definitions)
  * and the protocol JSON Schemas (served by Firefox over MCP) must stay in
@@ -60,11 +60,13 @@ function compareSchemas(tb, json, path) {
     }
     return diffs;
 }
-test("TypeBox schemas match the protocol JSON schemas", () => {
+function checkSync(defs, tbSchemas, label) {
     const allDiffs = [];
-    assert.equal(BROWSER_TOOL_SCHEMAS.length, BROWSER_TOOLS.length);
-    for (const def of BROWSER_TOOLS) {
-        const tb = BROWSER_TOOL_SCHEMAS.find((s) => s.name === def.name);
+    if (tbSchemas.length !== defs.length) {
+        return [`${label}: ${tbSchemas.length} TypeBox schemas != ${defs.length} protocol tools`];
+    }
+    for (const def of defs) {
+        const tb = tbSchemas.find((s) => s.name === def.name);
         if (!tb) {
             allDiffs.push(`${def.name}: missing TypeBox schema`);
             continue;
@@ -72,9 +74,14 @@ test("TypeBox schemas match the protocol JSON schemas", () => {
         if (tb.description !== def.description) {
             allDiffs.push(`${def.name}: description drift`);
         }
-        const diffs = compareSchemas(normalizeForCompare(tb.parameters), def.inputSchema, def.name);
-        allDiffs.push(...diffs);
+        allDiffs.push(...compareSchemas(normalizeForCompare(tb.parameters), def.inputSchema, def.name));
     }
+    return allDiffs;
+}
+test("TypeBox schemas match the protocol JSON schemas", () => {
+    const allDiffs = [];
+    allDiffs.push(...checkSync(BROWSER_TOOLS, BROWSER_TOOL_SCHEMAS, "browser tools"));
+    allDiffs.push(...checkSync(CONTROL_TOOLS, CONTROL_TOOL_SCHEMAS, "control tools"));
     assert.deepEqual(allDiffs, [], allDiffs.join("\n"));
 });
 //# sourceMappingURL=tool-schemas.test.js.map

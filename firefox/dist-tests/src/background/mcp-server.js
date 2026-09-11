@@ -8,10 +8,21 @@
  * regardless of transport, so migrating away from x-pi-browser/tool changes
  * only the wire path.
  */
-import { BROWSER_TOOLS, MCP_PROTOCOL_VERSION, PI_BROWSER, } from "@pi-browser/protocol";
+import { BROWSER_TOOLS, CONTROL_TOOLS, MCP_PROTOCOL_VERSION, PI_BROWSER, isControlTool, } from "@pi-browser/protocol";
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+function controlTextResult(payload) {
+    return {
+        content: [
+            {
+                type: "text",
+                text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
+            },
+        ],
+    };
+}
 export class McpServer {
     dispatcher;
+    control;
     connections = new Map();
     /** serverId -> session that declared it. */
     serverSessions = new Map();
@@ -67,7 +78,7 @@ export class McpServer {
                 return {};
             case "tools/list":
                 return {
-                    tools: BROWSER_TOOLS.map((t) => ({
+                    tools: [...BROWSER_TOOLS, ...CONTROL_TOOLS].map((t) => ({
                         name: t.name,
                         description: t.description,
                         inputSchema: t.inputSchema,
@@ -80,6 +91,13 @@ export class McpServer {
                 }
                 if (!params.name) {
                     throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, "tools/call missing name");
+                }
+                if (isControlTool(params.name)) {
+                    if (!this.control) {
+                        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `control tool not available on this server: ${params.name}`);
+                    }
+                    const result = await this.control(params.name, params.arguments ?? {});
+                    return controlTextResult(result);
                 }
                 return (await this.dispatcher.handleToolCall({
                     sessionId: conn.sessionId,
@@ -94,7 +112,8 @@ export class McpServer {
     async handleDisconnect(req) {
         this.connections.delete(req.connectionId);
     }
-    constructor(dispatcher) {
+    constructor(dispatcher, control = undefined) {
         this.dispatcher = dispatcher;
+        this.control = control;
     }
 }

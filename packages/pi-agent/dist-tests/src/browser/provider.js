@@ -13,7 +13,7 @@
  * migrating changes only the transport.
  */
 import { BROWSER_SCREENSHOT_TIMEOUT_MS, BROWSER_TOOL_TIMEOUT_MS, codeFromErrorObject, isStructuredErrorObject, PI_BROWSER_ERROR, PiBrowserProtocolError, X_PI_BROWSER, } from "@pi-browser/protocol";
-import { BROWSER_TOOL_SCHEMAS } from "./schemas.js";
+import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS } from "./schemas.js";
 import { McpAcpClient } from "./mcp-acp-client.js";
 export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
 import { TransportClosedError, TransportTimeoutError } from "../native-host/transport.js";
@@ -152,9 +152,14 @@ export class BrowserToolProvider {
     /**
      * Build the Pi custom-tool specs for a session. The session id is bound
      * lazily (idRef) because the backend assigns it at session creation.
+     *
+     * Control tools (pi_*) are only registered for the MCP-over-ACP mode:
+     * they are served by the add-on's MCP server and have no equivalent on
+     * the legacy x-pi-browser/tool callback path.
      */
     createTools(idRef, mode, mcpServerId) {
-        return BROWSER_TOOL_SCHEMAS.map((entry) => ({
+        const schemas = mode === "mcp-acp" ? [...BROWSER_TOOL_SCHEMAS, ...CONTROL_TOOL_SCHEMAS] : BROWSER_TOOL_SCHEMAS;
+        return schemas.map((entry) => ({
             name: entry.name,
             label: entry.name,
             description: entry.description,

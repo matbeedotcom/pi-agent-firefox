@@ -5,7 +5,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-import { BROWSER_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { BROWSER_TOOLS, CONTROL_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
 import { SessionStore } from "../src/background/session-store.js";
 import { ToolDispatcher } from "../src/background/tool-dispatcher.js";
 import { McpServer } from "../src/background/mcp-server.js";
@@ -218,7 +218,16 @@ test("McpServer: connect with unknown serverId fails; declared server connects",
       content: [{ type: "text", text: `ok:${p.sessionId}:${p.tool}` }],
     }),
   } as never;
-  const server = new McpServer(fakeDispatcher);
+  const controlCalls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const control = async (tool: string, args: Record<string, unknown>) => {
+    controlCalls.push({ tool, args });
+    if (tool === "pi_get_state") return { status: { state: "connected" }, sessions: [{ sessionId: "session-1" }] };
+    if (tool === "pi_cancel") {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, "unknown session: s404");
+    }
+    return { ok: true };
+  };
+  const server = new McpServer(fakeDispatcher, control);
 
   await assert.rejects(
     server.handleConnect({ serverId: "nope" }),
@@ -239,14 +248,17 @@ test("McpServer: connect with unknown serverId fails; declared server connects",
 
   await server.handleMessage({ connectionId: conn.connectionId, method: "notifications/initialized" });
 
-  // tools/list serves all 8 MCP-compatible browser tools
+  // tools/list serves the browser tools + the control tools
   const list = (await server.handleMessage({ connectionId: conn.connectionId, method: "tools/list" })) as {
     tools: Array<{ name: string }>;
   };
-  assert.equal(list.tools.length, BROWSER_TOOLS.length);
-  assert.deepEqual(list.tools.map((t) => t.name).sort(), [...BROWSER_TOOLS.map((t) => t.name)].sort());
+  assert.equal(list.tools.length, BROWSER_TOOLS.length + CONTROL_TOOLS.length);
+  assert.deepEqual(
+    list.tools.map((t) => t.name).sort(),
+    [...BROWSER_TOOLS.map((t) => t.name), ...CONTROL_TOOLS.map((t) => t.name)].sort(),
+  );
 
-  // tools/call routes to the dispatcher with the right session
+  // tools/call routes browser tools to the dispatcher with the right session
   const call = (await server.handleMessage({
     connectionId: conn.connectionId,
     method: "tools/call",
@@ -254,9 +266,55 @@ test("McpServer: connect with unknown serverId fails; declared server connects",
   })) as { content: Array<{ text: string }> };
   assert.equal(call.content[0].text, "ok:session-1:browser_get_page");
 
+  // tools/call routes control tools to the control handler (args passed through)
+  const state = (await server.handleMessage({
+    connectionId: conn.connectionId,
+    method: "tools/call",
+    params: { name: "pi_get_state", arguments: {} },
+  })) as { content: Array<{ type: string; text: string }> };
+  assert.equal(state.content[0].type, "text");
+  assert.ok(state.content[0].text.includes("\"status\""), "control result JSON-serialized");
+  assert.deepEqual(controlCalls, [{ tool: "pi_get_state", args: {} }]);
+
+  await server.handleMessage({
+    connectionId: conn.connectionId,
+    method: "tools/call",
+    params: { name: "pi_new_session", arguments: { cwd: "/work/x" } },
+  });
+  assert.deepEqual(controlCalls[1], { tool: "pi_new_session", args: { cwd: "/work/x" } });
+
+  // Structured errors from the control handler propagate unchanged
+  await assert.rejects(
+    server.handleMessage({
+      connectionId: conn.connectionId,
+      method: "tools/call",
+      params: { name: "pi_cancel", arguments: { sessionId: "s404" } },
+    }),
+    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.SESSION_NOT_FOUND,
+  );
+
   await server.handleDisconnect({ connectionId: conn.connectionId });
   await assert.rejects(
     server.handleMessage({ connectionId: conn.connectionId, method: "tools/list" }),
     (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+  );
+});
+
+test("McpServer: control tools are rejected without a control handler", async () => {
+  const fakeDispatcher = {
+    handleToolCall: async () => ({ content: [{ type: "text", text: "ok" }] }),
+  } as never;
+  const server = new McpServer(fakeDispatcher);
+  const serverId = server.declareFor("session-2");
+  const conn = await server.handleConnect({ serverId });
+  await server.handleMessage({ connectionId: conn.connectionId, method: "initialize", params: { protocolVersion: "2025-06-18" } });
+  await server.handleMessage({ connectionId: conn.connectionId, method: "notifications/initialized" });
+  await assert.rejects(
+    server.handleMessage({
+      connectionId: conn.connectionId,
+      method: "tools/call",
+      params: { name: "pi_get_state", arguments: {} },
+    }),
+    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
   );
 });

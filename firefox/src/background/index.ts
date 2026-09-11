@@ -9,6 +9,7 @@ import {
   AGENT_METHODS,
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
+  X_PI_BROWSER,
   type SessionInfo,
   type SessionNotification,
   type SessionUpdate,
@@ -16,7 +17,7 @@ import {
 import { AcpClient, notifyHost, type HostStatus } from "./acp-client.js";
 import { SessionStore } from "./session-store.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
-import { McpServer } from "./mcp-server.js";
+import { McpServer, type ControlHandler } from "./mcp-server.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -24,11 +25,50 @@ import { McpServer } from "./mcp-server.js";
 
 const store = new SessionStore();
 const dispatcher = new ToolDispatcher(store);
-const mcpServer = new McpServer(dispatcher);
+
+/**
+ * Control tools (pi_*) served over the MCP channel (PRODUCT.md §26, Phase 5).
+ * They execute the same handlers as the sidebar's pi/action bridge, so the
+ * agent and the UI have one behavioral source of truth. A web page can never
+ * reach these: the only path is agent → host → mcp/message → here (§49-4/5).
+ */
+const controlHandler: ControlHandler = (tool, args) => {
+  switch (tool) {
+    case "pi_get_state":
+      return handleAction("get_state", {});
+    case "pi_new_session":
+      return handleAction("new_session", { cwd: typeof args.cwd === "string" ? args.cwd : undefined });
+    case "pi_select_session":
+      return handleAction("select_session", { sessionId: String(args.sessionId ?? "") });
+    case "pi_prompt":
+      return handleAction("prompt", { sessionId: String(args.sessionId ?? ""), text: String(args.text ?? "") });
+    case "pi_cancel":
+      return handleAction("cancel", { sessionId: String(args.sessionId ?? "") });
+    case "pi_close_session":
+      return handleAction("close_session", { sessionId: String(args.sessionId ?? "") });
+    case "pi_set_config_option":
+      return handleAction("set_config", {
+        sessionId: String(args.sessionId ?? ""),
+        configId: String(args.configId ?? ""),
+        value: args.value,
+      });
+    case "pi_bind_current_tab":
+      return handleAction("bind_current_tab", { sessionId: String(args.sessionId ?? "") });
+    case "pi_unbind_tab":
+      return handleAction("unbind", { sessionId: String(args.sessionId ?? "") });
+    case "pi_open_bound_tab":
+      return handleAction("open_bound_tab", { sessionId: String(args.sessionId ?? "") });
+    default:
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown control tool: ${tool}`);
+  }
+};
+
+const mcpServer = new McpServer(dispatcher, controlHandler);
 
 let hostStatus: HostStatus = { state: "connecting" };
 let activeSessionId: string | undefined;
 let initialized = false;
+let bootstrapInFlight = false;
 
 // ---------------------------------------------------------------------------
 // Sidebar bridge
@@ -157,9 +197,17 @@ const client = new AcpClient({
   onStatus(status: HostStatus) {
     hostStatus = status;
     pushState();
-    if (status.state === "connected" && !initialized) {
-      initialized = true;
-      void bootstrap();
+    // The port is up: drive the ACP initialize handshake (which flips the
+    // status to "connected" on success) and sync session state. Deferred to
+    // a later task so connect() has fully finished (port assigned, listeners
+    // attached) before any request goes out.
+    if (status.state === "connecting" && !initialized && !bootstrapInFlight) {
+      bootstrapInFlight = true;
+      setTimeout(() => {
+        void bootstrap().finally(() => {
+          bootstrapInFlight = false;
+        });
+      }, 0);
     }
     if (status.state === "disconnected" || status.state === "not_installed") {
       initialized = false;
@@ -168,8 +216,10 @@ const client = new AcpClient({
 });
 
 async function bootstrap(): Promise<void> {
+  if (!client.connected) return; // port dropped during boot; reconnect cycle retries
   try {
     await client.initialize();
+    initialized = true;
   } catch (err) {
     console.error("[pi-browser] initialize failed", err);
     hostStatus = { state: "disconnected", detail: err instanceof Error ? err.message : String(err) };
@@ -349,3 +399,14 @@ void (async () => {
   pushState();
   client.start();
 })();
+
+// Keep the MV3 event page alive: Firefox unloads idle event pages, which
+// would silently drop the Native Messaging port (and with it the session).
+// A periodic liveness ping doubles as the x-pi-browser/ping probe.
+setInterval(() => {
+  if (client.connected && hostStatus.state === "connected") {
+    client.request(X_PI_BROWSER.ping, {}, 5_000).catch(() => {
+      /* the port's onDisconnect handler deals with dropped links */
+    });
+  }
+}, 25_000);

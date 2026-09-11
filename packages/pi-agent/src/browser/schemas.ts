@@ -7,7 +7,7 @@
  * test/tool-schemas.test.ts enforces the sync.
  */
 import { Type, type TSchema } from "typebox";
-import { BROWSER_TOOLS } from "@pi-browser/protocol";
+import { BROWSER_TOOLS, CONTROL_TOOLS } from "@pi-browser/protocol";
 
 const empty = () => Type.Object({}, { additionalProperties: false });
 
@@ -75,6 +75,79 @@ export interface BrowserToolSchema {
 /** One entry per protocol browser tool, with its TypeBox parameter schema. */
 export const BROWSER_TOOL_SCHEMAS: readonly BrowserToolSchema[] = BROWSER_TOOLS.map((def) => {
   const parameters = SCHEMAS[def.name];
+  if (!parameters) throw new Error(`missing TypeBox schema for tool ${def.name}`);
+  return { name: def.name, description: def.description, parameters, readOnly: def.readOnly };
+});
+
+// ---------------------------------------------------------------------------
+// Control tools (pi_*)
+// ---------------------------------------------------------------------------
+
+const sessionId = Type.String({ description: "ACP session id (e.g. from pi_get_state)." });
+
+const CONTROL_SCHEMAS: Record<string, TSchema> = {
+  pi_get_state: empty(),
+
+  pi_new_session: Type.Object(
+    {
+      cwd: Type.String({ description: "Working directory for the new session (absolute path)." }),
+    },
+    { additionalProperties: false, required: ["cwd"] },
+  ),
+
+  pi_select_session: Type.Object(
+    { sessionId },
+    { additionalProperties: false, required: ["sessionId"] },
+  ),
+
+  pi_prompt: Type.Object(
+    {
+      sessionId,
+      text: Type.String({ description: "Prompt text." }),
+    },
+    { additionalProperties: false, required: ["sessionId", "text"] },
+  ),
+
+  pi_cancel: Type.Object(
+    { sessionId },
+    { additionalProperties: false, required: ["sessionId"] },
+  ),
+
+  pi_close_session: Type.Object(
+    { sessionId },
+    { additionalProperties: false, required: ["sessionId"] },
+  ),
+
+  pi_set_config_option: Type.Object(
+    {
+      sessionId,
+      configId: Type.String({ description: "Config option id, e.g. \"model\" or \"thinking\"." }),
+      value: Type.Union([Type.String(), Type.Boolean()], {
+        description: "Value id (string) or flag (boolean) for the option.",
+      }),
+    },
+    { additionalProperties: false, required: ["sessionId", "configId", "value"] },
+  ),
+
+  pi_bind_current_tab: Type.Object(
+    { sessionId },
+    { additionalProperties: false, required: ["sessionId"] },
+  ),
+
+  pi_unbind_tab: Type.Object(
+    { sessionId },
+    { additionalProperties: false, required: ["sessionId"] },
+  ),
+
+  pi_open_bound_tab: Type.Object(
+    { sessionId },
+    { additionalProperties: false, required: ["sessionId"] },
+  ),
+};
+
+/** One entry per protocol control tool, with its TypeBox parameter schema. */
+export const CONTROL_TOOL_SCHEMAS: readonly BrowserToolSchema[] = CONTROL_TOOLS.map((def) => {
+  const parameters = CONTROL_SCHEMAS[def.name];
   if (!parameters) throw new Error(`missing TypeBox schema for tool ${def.name}`);
   return { name: def.name, description: def.description, parameters, readOnly: def.readOnly };
 });

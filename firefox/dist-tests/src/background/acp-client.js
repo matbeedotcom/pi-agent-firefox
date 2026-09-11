@@ -44,7 +44,6 @@ export class AcpClient {
     connect() {
         if (this.stopped)
             return;
-        this.setStatus({ state: "connecting" });
         let port;
         try {
             port = browser.runtime.connectNative(PI_BROWSER.nativeHost);
@@ -53,7 +52,10 @@ export class AcpClient {
             this.failConnection("not_installed", err instanceof Error ? err.message : String(err));
             return;
         }
+        // Assign the port BEFORE emitting the "connecting" status: status
+        // listeners may immediately issue requests (initialize) against it.
         this.port = port;
+        this.setStatus({ state: "connecting" });
         port.onMessage.addListener((msg) => this.onMessage(msg));
         port.onDisconnect.addListener(() => {
             const message = browser.runtime.lastError?.message ?? "native port disconnected";

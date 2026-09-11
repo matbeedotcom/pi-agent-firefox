@@ -79,6 +79,10 @@ export declare class BrowserToolProvider {
     /**
      * Build the Pi custom-tool specs for a session. The session id is bound
      * lazily (idRef) because the backend assigns it at session creation.
+     *
+     * Control tools (pi_*) are only registered for the MCP-over-ACP mode:
+     * they are served by the add-on's MCP server and have no equivalent on
+     * the legacy x-pi-browser/tool callback path.
      */
     createTools(idRef: {
         id?: string;

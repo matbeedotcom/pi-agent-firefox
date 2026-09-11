@@ -34,6 +34,7 @@ import {
   PI_BROWSER_ERROR,
   X_PI_BROWSER,
   BROWSER_TOOLS,
+  CONTROL_TOOLS,
   isStructuredErrorObject,
   codeFromErrorObject,
   toErrorObject,
@@ -180,6 +181,8 @@ class FakeTabs {
     this.bindings = new Map(); // sessionId -> tabId
     this.calls = [];
     this.notifyLog = [];
+    this.activeTabId = undefined;
+    this.focusLog = [];
   }
 
   addTab(url, title = "Fake Page") {
@@ -197,6 +200,15 @@ class FakeTabs {
     return tabId;
   }
 
+  setActive(tabId) {
+    this.activeTabId = tabId;
+  }
+
+  focusTab(tabId) {
+    this.activeTabId = tabId;
+    this.focusLog.push(tabId);
+  }
+
   closeTab(tabId) {
     const tab = this.tabs.get(tabId);
     if (tab) tab.closed = true;
@@ -204,6 +216,10 @@ class FakeTabs {
 
   bind(sessionId, tabId) {
     this.bindings.set(sessionId, tabId);
+  }
+
+  unbind(sessionId) {
+    this.bindings.delete(sessionId);
   }
 
   tabFor(sessionId) {
@@ -261,8 +277,94 @@ class FakeTabs {
   }
 }
 
-function makeFakeFirefox(tabs) {
-  const mcpServer = new McpServer({ handleToolCall: (params) => Promise.resolve(tabs.dispatch(params)) });
+/**
+ * Fake add-on control handler: mirrors the real add-on's handleAction by
+ * driving the host through its own ACP client (exactly what the background
+ * event page does with its AcpClient). The mock script has no tool-result
+ * dataflow, so the sentinel "$new" resolves to the most recently created
+ * session — a test-double convenience for the scripted agent.
+ */
+function makeFakeControl(tabs, hostRef) {
+  const state = { lastNew: undefined, log: [] };
+  const ref = (id) => (id === "$new" ? state.lastNew : String(id ?? ""));
+  const handler = async (tool, args) => {
+    state.log.push({ tool, args });
+    switch (tool) {
+      case "pi_get_state": {
+        const list = await hostRef.current.request(AGENT_METHODS.session_list, { cwd: null });
+        return {
+          status: { state: "connected" },
+          sessions: (list.sessions ?? []).map((s) => ({
+            sessionId: s.sessionId,
+            cwd: s.cwd,
+            ...(tabs.bindings.has(s.sessionId) ? { binding: { tabId: tabs.bindings.get(s.sessionId) } } : {}),
+          })),
+        };
+      }
+      case "pi_new_session": {
+        const res = await hostRef.current.request(AGENT_METHODS.session_new, { cwd: String(args.cwd ?? "") });
+        state.lastNew = res.sessionId;
+        return { sessionId: res.sessionId };
+      }
+      case "pi_select_session": {
+        await hostRef.current.request(AGENT_METHODS.session_resume, { sessionId: ref(args.sessionId), cwd: "/work/fake" });
+        return {};
+      }
+      case "pi_prompt": {
+        const sessionId = ref(args.sessionId);
+        // Await the turn for determinism (the real add-on is fire-and-forget).
+        await hostRef.current.request(
+          AGENT_METHODS.session_prompt,
+          { sessionId, prompt: [{ type: "text", text: String(args.text ?? "") }] },
+          60_000,
+        );
+        return { accepted: true };
+      }
+      case "pi_cancel": {
+        await hostRef.current.request(AGENT_METHODS.session_cancel, { sessionId: ref(args.sessionId) });
+        return {};
+      }
+      case "pi_close_session": {
+        await hostRef.current.request(AGENT_METHODS.session_close, { sessionId: ref(args.sessionId) });
+        return {};
+      }
+      case "pi_set_config_option": {
+        await hostRef.current.request(AGENT_METHODS.session_set_config_option, {
+          sessionId: ref(args.sessionId),
+          configId: String(args.configId ?? ""),
+          value: args.value,
+        });
+        return {};
+      }
+      case "pi_bind_current_tab": {
+        if (tabs.activeTabId === undefined) {
+          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "no active tab to bind");
+        }
+        tabs.bind(ref(args.sessionId), tabs.activeTabId);
+        return { tabId: tabs.activeTabId };
+      }
+      case "pi_unbind_tab": {
+        tabs.unbind(ref(args.sessionId)); // idempotent, like the real store
+        return {};
+      }
+      case "pi_open_bound_tab": {
+        const sessionId = ref(args.sessionId);
+        const tabId = tabs.bindings.get(sessionId);
+        if (!tabId) {
+          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, `session ${sessionId} has no bound tab`);
+        }
+        tabs.focusTab(tabId);
+        return { focused: tabId };
+      }
+      default:
+        throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown control tool: ${tool}`);
+    }
+  };
+  return { handler, state };
+}
+
+function makeFakeFirefox(tabs, control) {
+  const mcpServer = new McpServer({ handleToolCall: (params) => Promise.resolve(tabs.dispatch(params)) }, control);
   const attach = (host) => {
     host.on(X_PI_BROWSER.tool, (params) => tabs.dispatch(params));
     host.on(X_PI_BROWSER.notify, (params) => {
@@ -492,6 +594,7 @@ test("browser tools (legacy transport): agent-driven calls, A/B isolation, stale
     { match: "shot", toolCalls: [{ toolName: "browser_screenshot", args: { format: "png" } }] },
     { match: "click-stale", toolCalls: [{ toolName: "browser_click", args: { ref: "el-99" } }] },
     { match: "click-ok", toolCalls: [{ toolName: "browser_click", args: { ref: "el-2" } }] },
+    { match: "type-it", toolCalls: [{ toolName: "browser_type", args: { ref: "el-2", text: "hello world", submit: false } }] },
   ]);
   const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
   fakeFirefox.attach(host);
@@ -586,6 +689,24 @@ test("browser tools (legacy transport): agent-driven calls, A/B isolation, stale
       .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
       .at(-1);
     assert.equal(okEnd.params.update.status, "completed", "B still works after A's tab closed");
+
+    // Typing into a referenced element (DoD: Pi can type into a referenced element).
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: b.sessionId, prompt: [{ type: "text", text: "type-it please" }] },
+      60_000,
+    );
+    const typeEnd = host
+      .sessionUpdates(b.sessionId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .at(-1);
+    assert.equal(typeEnd.params.update.status, "completed", "browser_type completed");
+    // The typed text + target ref reached the dispatcher (the content script
+    // result shape is {typed, chars, submitted}, so check the call args).
+    const typeCall = [...tabs.calls].reverse().find((c) => c.tool === "browser_type");
+    assert.equal(typeCall.sessionId, b.sessionId, "type targeted session B's tab");
+    assert.equal(typeCall.arguments.ref, "el-2", "type targeted the referenced element");
+    assert.equal(typeCall.arguments.text, "hello world", "typed text delivered");
   } finally {
     await shutdown(host);
   }
@@ -700,9 +821,11 @@ test("x-pi-browser/notify is accepted and does not break the channel", async () 
   }
 });
 
-test("tool surface: the add-on MCP server serves the protocol's 8 tools", async () => {
+test("tool surface: the add-on MCP server serves browser + control tools", async () => {
   const tabs = new FakeTabs();
-  const fake = makeFakeFirefox(tabs);
+  const hostRef = { current: null };
+  const control = makeFakeControl(tabs, hostRef);
+  const fake = makeFakeFirefox(tabs, control.handler);
   const mcp = fake.mcpServer;
   const serverId = mcp.declareFor("sess-x");
   const conn = await mcp.handleConnect({ serverId });
@@ -713,11 +836,152 @@ test("tool surface: the add-on MCP server serves the protocol's 8 tools", async 
   });
   await mcp.handleMessage({ connectionId: conn.connectionId, method: "notifications/initialized", params: undefined });
   const res = await mcp.handleMessage({ connectionId: conn.connectionId, method: "tools/list", params: undefined });
-  assert.equal(res.tools.length, BROWSER_TOOLS.length);
-  assert.deepEqual(res.tools.map((t) => t.name).sort(), [...BROWSER_TOOLS.map((t) => t.name)].sort());
+  assert.equal(res.tools.length, BROWSER_TOOLS.length + CONTROL_TOOLS.length);
+  assert.deepEqual(
+    res.tools.map((t) => t.name).sort(),
+    [...BROWSER_TOOLS.map((t) => t.name), ...CONTROL_TOOLS.map((t) => t.name)].sort(),
+  );
   for (const tool of res.tools) {
     assert.ok(tool.inputSchema?.type === "object", `${tool.name} has an object input schema`);
     assert.ok(typeof tool.description === "string" && tool.description.length > 0, `${tool.name} described`);
+  }
+});
+
+test("control tools (MCP-over-ACP): agent-driven session orchestration end to end", async () => {
+  const tabs = new FakeTabs();
+  const hostRef = { current: null };
+  const control = makeFakeControl(tabs, hostRef);
+  const fakeFirefox = makeFakeFirefox(tabs, control.handler);
+
+  // The driver agent's turn: read state, create a session, bind the active
+  // tab to it, prompt it, and read state again — all via control tools.
+  // The created session's own turn calls a browser tool on its bound tab.
+  const script = writeScript([
+    {
+      match: "orchestrate",
+      toolCalls: [
+        { toolName: "pi_get_state", args: {} },
+        { toolName: "pi_new_session", args: { cwd: "/work/demo-ctrl" } },
+        { toolName: "pi_bind_current_tab", args: { sessionId: "$new" } },
+        { toolName: "pi_prompt", args: { sessionId: "$new", text: "work now" } },
+        { toolName: "pi_get_state", args: {} },
+      ],
+    },
+    { match: "work now", toolCalls: [{ toolName: "browser_get_page", args: {} }] },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
+  hostRef.current = host;
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+
+    const tab = tabs.addTab("http://demo.test/", "Demo Page");
+    tabs.setActive(tab);
+
+    const decl = fakeFirefox.mcpServer.declarePending();
+    const driverRes = await host.request(AGENT_METHODS.session_new, {
+      cwd: "/work/driver",
+      mcpServers: [{ name: "firefox-browser", type: "acp", serverId: decl.serverId }],
+    });
+    const driverId = driverRes.sessionId;
+    decl.resolve(driverId);
+
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: driverId, prompt: [{ type: "text", text: "orchestrate the demo" }] },
+      120_000,
+    );
+
+    // Every control call went through the MCP-over-ACP path, in order.
+    assert.deepEqual(
+      control.state.log.map((c) => c.tool),
+      ["pi_get_state", "pi_new_session", "pi_bind_current_tab", "pi_prompt", "pi_get_state"],
+    );
+    const newSessionId = control.state.lastNew;
+    assert.ok(newSessionId, "a new session id was created via pi_new_session");
+
+    // The driver's stream carries the control tool results (incl. the id).
+    const driverEnds = host
+      .sessionUpdates(driverId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update))
+      .join("\n");
+    assert.ok(driverEnds.includes(newSessionId), "pi_new_session result carried the new session id");
+    // Tool result text is JSON-escaped inside the update, so match loosely.
+    assert.ok(driverEnds.includes("accepted"), "pi_prompt reported acceptance");
+    assert.ok(driverEnds.includes(String(tab)), "pi_bind result carried the bound tab id");
+
+    // The created session ran its turn: the prompt text reached it (the mock
+    // echoes it in its reply) and its browser tool hit the bound tab (via the
+    // legacy callback path, since it was created without an MCP server).
+    const newUpdates = host.sessionUpdates(newSessionId);
+    assert.ok(
+      newUpdates.some(
+        (u) => u.params.update?.sessionUpdate === "agent_message_chunk" && (u.params.update.content?.text ?? "").includes("work now"),
+      ),
+      "new session received the orchestrated prompt",
+    );
+    const newEnds = newUpdates
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update))
+      .join("\n");
+    assert.ok(newEnds.includes("http://demo.test/"), "new session's browser tool saw the bound tab");
+    const lastEnd = newUpdates.filter((u) => u.params.update?.sessionUpdate === "tool_call_update").at(-1);
+    assert.equal(lastEnd.params.update.status, "completed");
+
+    // State after the turn: the new session is listed (via the host's ACP).
+    const list = await host.request(AGENT_METHODS.session_list, { cwd: null });
+    assert.ok(list.sessions.some((s) => s.sessionId === newSessionId), "new session listed by the host");
+  } finally {
+    await shutdown(host);
+  }
+});
+
+test("control tools (MCP-over-ACP): structured errors round-trip with their codes", async () => {
+  const tabs = new FakeTabs();
+  const hostRef = { current: null };
+  const control = makeFakeControl(tabs, hostRef);
+  const fakeFirefox = makeFakeFirefox(tabs, control.handler);
+
+  const script = writeScript([
+    { match: "error tools", toolCalls: [
+      // session/close is idempotent; set_config_option on an unknown session
+      // is the structured SESSION_NOT_FOUND path.
+      { toolName: "pi_set_config_option", args: { sessionId: "nope-404", configId: "model", value: "mock/model-b" } },
+      { toolName: "pi_open_bound_tab", args: { sessionId: "never-bound" } },
+    ] },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
+  hostRef.current = host;
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+    const decl = fakeFirefox.mcpServer.declarePending();
+    const res = await host.request(AGENT_METHODS.session_new, {
+      cwd: "/work/d",
+      mcpServers: [{ name: "firefox-browser", type: "acp", serverId: decl.serverId }],
+    });
+    decl.resolve(res.sessionId);
+
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: res.sessionId, prompt: [{ type: "text", text: "trigger the error tools" }] },
+      60_000,
+    );
+    const ends = host
+      .sessionUpdates(res.sessionId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update))
+      .join("\n");
+    // Both failed, with their structured codes preserved through the wire.
+    const failed = host
+      .sessionUpdates(res.sessionId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update" && u.params.update.status === "failed");
+    assert.equal(failed.length, 2, `expected 2 failed control calls, got: ${ends}`);
+    assert.ok(ends.includes("SESSION_NOT_FOUND"), "SESSION_NOT_FOUND code preserved");
+    assert.ok(ends.includes("BROWSER_NOT_BOUND"), "BROWSER_NOT_BOUND code preserved");
+  } finally {
+    await shutdown(host);
   }
 });
 
