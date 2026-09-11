@@ -19,6 +19,8 @@ export class AcpClient {
     reconnectTimer;
     stopped = false;
     connecting = false;
+    /** True once any message has been received on the current port. */
+    heardFromHost = false;
     status = { state: "connecting" };
     constructor(handlers) {
         this.handlers = handlers;
@@ -66,6 +68,7 @@ export class AcpClient {
             return;
         }
         this.connecting = false;
+        this.heardFromHost = false;
         // Assign the port BEFORE emitting the "connecting" status: status
         // listeners may immediately issue requests (initialize) against it.
         this.port = port;
@@ -73,7 +76,15 @@ export class AcpClient {
         port.onMessage.addListener((msg) => this.onMessage(msg));
         port.onDisconnect.addListener(() => {
             const message = browser.runtime.lastError?.message ?? "native port disconnected";
-            const notInstalled = /could not connect|not be found|no such file|failed to load|application was not found/i.test(message);
+            // Lifecycle detection (robust across Firefox builds): some builds
+            // return a port that dies immediately WITHOUT a lastError when the
+            // host manifest is missing, so the message text is not a reliable
+            // signal. A port that dies before we ever heard from the host means
+            // the host never spoke -> missing/broken host (not_installed). A port
+            // that dies after a successful exchange is a mid-session drop.
+            const notInstalled = !this.heardFromHost ||
+                /could not connect|not be found|no such file|failed to load|application was not found/i.test(message);
+            this.heardFromHost = false;
             this.port = undefined;
             this.rejectAll(new Error(message));
             this.setStatus(notInstalled ? { state: "not_installed", detail: message } : { state: "disconnected", detail: message });
@@ -105,6 +116,7 @@ export class AcpClient {
     onMessage(msg) {
         if (typeof msg !== "object" || msg === null)
             return;
+        this.heardFromHost = true;
         const m = msg;
         if (typeof m.id === "number" && (m.result !== undefined || m.error !== undefined)) {
             const p = this.pending.get(m.id);

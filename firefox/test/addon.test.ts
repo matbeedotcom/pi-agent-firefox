@@ -84,17 +84,27 @@ const stub: {
     connectNative(_name: string) {
       (stub.runtime as any).connectNativeCalls++;
       if ((stub.runtime as any).mode === "fail") {
+        // Some Firefox builds throw synchronously when the host is missing.
         throw new Error("Could not connect to any native messaging host");
       }
       const listeners: { message: Array<(m: unknown) => void>; disconnect: Array<() => void> } = { message: [], disconnect: [] };
-      (stub.runtime as any).lastPort = {
+      const port = {
         listeners,
         postMessage() {},
         onMessage: { addListener: (fn: (m: unknown) => void) => listeners.message.push(fn) },
         onDisconnect: { addListener: (fn: () => void) => listeners.disconnect.push(fn) },
         disconnect() {},
       };
-      return (stub.runtime as any).lastPort;
+      (stub.runtime as any).lastPort = port;
+      if ((stub.runtime as any).mode === "dies-silent") {
+        // Real Firefox 155 (missing manifest): returns a port that dies
+        // immediately WITHOUT a lastError.
+        setTimeout(() => {
+          (stub.runtime as any).lastError = undefined;
+          listeners.disconnect.forEach((fn: () => void) => fn());
+        }, 0);
+      }
+      return port;
     },
     getManifest: () => ({ version: "0.1.0" }),
   },
@@ -443,23 +453,28 @@ function makeClient(statuses: string[]): AcpClient {
 
 test("AcpClient: auto-detects a host installed after the add-on loaded", async () => {
   const rt = stub.runtime as any;
+  const tick = (ms = 10) => new Promise<void>((r) => setTimeout(r, ms));
   const statuses: string[] = [];
   rt.connectNativeCalls = 0;
   rt.lastError = undefined;
 
   // 1) Add-on loads while the host is NOT installed (add-on-first order).
-  rt.mode = "fail";
+  //    Real Firefox 155 behavior: connectNative returns a port that dies
+  //    immediately without a lastError (no throw).
+  rt.mode = "dies-silent";
   const client = makeClient(statuses);
   client.start();
-  assert.equal(client.connected, false, "not connected while host missing");
   assert.equal(rt.connectNativeCalls, 1, "one connect attempt");
-  assert.ok(statuses.includes("not_installed"), `status reflects not_installed: ${statuses}`);
+  await tick(); // let the silent port die
+  assert.equal(client.connected, false, "not connected while host missing");
+  assert.ok(statuses.includes("not_installed"), `silent port death before any host message -> not_installed: ${statuses}`);
 
-  // 2) Host still missing: ensureConnected() is safe (no double connect in
-  //    flight) and does not hang the page.
+  // 2) Host still missing: ensureConnected() retries without hanging.
   client.ensureConnected();
   assert.equal(rt.connectNativeCalls, 2, "retry attempts the connect");
+  await tick();
   assert.equal(client.connected, false);
+  assert.ok(statuses[statuses.length - 1] === "not_installed", `still not_installed: ${statuses}`);
 
   // 3) The host gets installed (plugin-first completes later). The next
   //    keepalive ensureConnected() detects it — this is the auto-detection
@@ -474,10 +489,15 @@ test("AcpClient: auto-detects a host installed after the add-on loaded", async (
   client.ensureConnected();
   assert.equal(rt.connectNativeCalls, 3, "no duplicate ports while connected");
 
-  // 5) After a disconnect, the next ensureConnected() reconnects.
+  // 5) A drop AFTER a successful exchange is "disconnected" (mid-session
+  //    drop), not "not_installed" — the host exists, just crashed/closed.
+  rt.lastPort.listeners.message.forEach((fn: (m: unknown) => void) => fn({ id: 1, result: { pong: true } }));
   (rt.lastError = { message: "native port disconnected" });
   rt.lastPort.listeners.disconnect.forEach((fn: () => void) => fn());
   assert.equal(client.connected, false, "port dropped");
+  assert.ok(statuses[statuses.length - 1] === "disconnected", `post-exchange drop -> disconnected: ${statuses}`);
+
+  // 6) The next ensureConnected() reconnects.
   client.ensureConnected();
   assert.equal(client.connected, true, "reconnected after drop");
   assert.equal(rt.connectNativeCalls, 4);
