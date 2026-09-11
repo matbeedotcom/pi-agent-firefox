@@ -1,0 +1,31 @@
+{
+  "name": "@pi-browser/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi Browser: Native Messaging host + ACP adapter for Pi Coding Agent, plus /pi-browser installer commands",
+  "main": "./dist/native-host/main.js",
+  "files": [
+    "dist",
+    "extensions",
+    "native"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
+    "@pi-browser/protocol": "0.1.0",
+    "typebox": "^1.1.32"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.85.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
+  }
+}

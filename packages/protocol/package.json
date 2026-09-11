@@ -1,0 +1,26 @@
+{
+  "name": "@pi-browser/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared protocol types for Pi Browser: ACP surface, integration metadata, browser tool schemas, structured errors",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

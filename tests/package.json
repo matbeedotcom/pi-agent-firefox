@@ -1,0 +1,16 @@
+{
+  "name": "pi-browser-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-package integration tests for Pi Browser (fake-Firefox harness driving the real native host)",
+  "scripts": {
+    "test": "node --test src/"
+  },
+  "dependencies": {
+    "@pi-browser/protocol": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0"
+  }
+}

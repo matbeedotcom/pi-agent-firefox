@@ -1,0 +1,20 @@
+{
+  "name": "@pi-browser/firefox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi Browser Firefox add-on (build workspace)",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@pi-browser/protocol": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/firefox-webext-browser": "^143.0.0",
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  }
+}
