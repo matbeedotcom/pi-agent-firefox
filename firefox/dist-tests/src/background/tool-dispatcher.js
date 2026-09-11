@@ -14,15 +14,22 @@ import { PI_BROWSER_ERROR, PiBrowserProtocolError, getBrowserTool, } from "@pi-b
 function textResult(payload) {
     return { content: [{ type: "text", text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) }] };
 }
-function imageResult(dataUrl, mimeType) {
+function imageResult(dataUrl, mimeType, via) {
     const match = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
     if (!match)
         throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "bad capture data URL");
-    return { content: [{ type: "image", data: match[2], mimeType: match[1] }] };
+    const content = [{ type: "image", data: match[2], mimeType: match[1] }];
+    // A short note records which capture API produced the image (useful for
+    // diagnosing which path works in a given browser build).
+    if (via)
+        content.push({ type: "text", text: `screenshot via ${via}` });
+    return { content };
 }
 const DEFAULT_TIMEOUT_MS = 20_000;
 export class ToolDispatcher {
     store;
+    /** Last capture error (from captureTab) so the fallback path can report it. */
+    lastCaptureError;
     constructor(store) {
         this.store = store;
     }
@@ -83,25 +90,38 @@ export class ToolDispatcher {
         const format = args?.format === "jpeg" ? "jpeg" : "png";
         const quality = typeof args?.quality === "number" ? args.quality : 80;
         const opts = { format, quality };
-        // captureVisibleTab(windowId) captures the selected tab of that window.
-        // Before capturing we make the bound tab the selected tab and focus its
-        // window; the capture is retried with growing settle delays because
-        // window focus is delivered asynchronously by the WM on Linux, and the
-        // user's approval of the (permission-gated) screenshot is what makes the
-        // tab's host access (activeTab) live at capture time.
+        const mime = format === "jpeg" ? "image/jpeg" : "image/png";
+        // 1) captureTab(tabId) — captures the SPECIFIC tab's surface; no OS-focus
+        //    dependency. Requires <all_urls>. Try it first; the result note records
+        //    which API produced the image.
+        try {
+            const dataUrl = await browser.tabs.captureTab(tab.id, opts);
+            return imageResult(dataUrl, mime, "captureTab");
+        }
+        catch (err) {
+            // Fall through to captureVisibleTab below; remember the error for the
+            // final failure message if that also fails.
+            this.lastCaptureError = err;
+        }
+        // 2) captureVisibleTab(windowId) — captures the window's selected (visible)
+        //    tab. Before each attempt we make the bound tab the selected tab and
+        //    focus its window; retried with growing settle delays because window
+        //    focus is delivered asynchronously by the WM on Linux, and the user's
+        //    approval of the (permission-gated) screenshot is what makes the tab's
+        //    host access (activeTab) live at capture time.
         const isVisibilityError = (err) => {
             const message = err instanceof Error ? err.message : String(err);
             return /visible|active|not visible|focus|permission/i.test(message);
         };
         const settle = (ms) => new Promise((r) => setTimeout(r, ms));
         const delays = [300, 700, 1200, 2000, 3000];
-        let lastErr;
+        let lastErr = this.lastCaptureError;
         for (let i = 0; i < delays.length; i++) {
             await this.makeVisible(tab).catch(() => { });
             await settle(delays[i]);
             try {
                 const shot = await browser.tabs.captureVisibleTab(tab.windowId, opts);
-                return imageResult(shot, format === "jpeg" ? "image/jpeg" : "image/png");
+                return imageResult(shot, mime, "captureVisibleTab");
             }
             catch (err) {
                 lastErr = err;
@@ -113,8 +133,8 @@ export class ToolDispatcher {
         if (lastErr && !isVisibilityError(lastErr)) {
             throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `screenshot failed: ${message}`);
         }
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, `cannot capture tab ${tab.id}: it must be the visible tab of a focused window ` +
-            "(the tab was activated and its window focused before each attempt)");
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, `cannot capture tab ${tab.id}: tried captureTab and captureVisibleTab ` +
+            "(the tab was activated and its window focused before each attempt): " + message);
     }
     /**
      * Make the bound tab the active tab of its window and request OS focus for

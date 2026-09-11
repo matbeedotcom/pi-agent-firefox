@@ -8,6 +8,18 @@ import { BROWSER_TOOLS, CONTROL_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError 
 import { SessionStore } from "../src/background/session-store.js";
 import { ToolDispatcher } from "../src/background/tool-dispatcher.js";
 import { McpServer } from "../src/background/mcp-server.js";
+// Shared capture stub. Both capture APIs share the fail counter so tests can
+// model: 0 -> captureTab succeeds (direct); 1 -> captureTab fails, fallback
+// succeeds; N>1 -> enough failures to exhaust captureTab + the focus-settle
+// retry loop (everything fails).
+async function captureStub() {
+    const fail = globalThis.__captureFail;
+    if (fail && fail > 0) {
+        globalThis.__captureFail = fail - 1;
+        throw new Error(`Cannot capture a tab that is not visible in its window`);
+    }
+    return "data:image/png;base64,QUJD";
+}
 const stub = {
     storage: {
         local: {
@@ -21,16 +33,11 @@ const stub = {
         async get(tabId) {
             throw new Error(`no tab ${tabId}`);
         },
-        // captureVisibleTab(windowId, opts) — the dispatcher's capture path.
-        // Shares the fail counter so tests can model "fails then succeeds after
-        // the focus-settle retries" or "everything fails".
+        async captureTab(_tabId, _opts) {
+            return captureStub();
+        },
         async captureVisibleTab(_windowIdOrOpts, _maybeOpts) {
-            const fail = globalThis.__captureFail;
-            if (fail && fail > 0) {
-                globalThis.__captureFail = fail - 1;
-                throw new Error(`Cannot capture a tab that is not visible in its window`);
-            }
-            return "data:image/png;base64,QUJD";
+            return captureStub();
         },
         async reload() { },
         async update() {
@@ -176,28 +183,46 @@ test("ToolDispatcher: stale element ref surfaces BROWSER_ELEMENT_STALE", async (
     await assert.rejects(d.handleToolCall({ sessionId: "s1", tool: "browser_click", arguments: { ref: "el-9" } }), (err) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_ELEMENT_STALE);
     delete globalThis.__contentReply;
 });
-test("ToolDispatcher: screenshot of a background tab activates it, retries, and succeeds", async () => {
+test("ToolDispatcher: screenshot via captureTab (direct) records the method", async () => {
     const store = new SessionStore();
     await store.hydrate();
     store.bind("s1", { tabId: 9, windowId: 1 });
     stub.tabs.get = async () => tab(9);
-    // First capture attempt fails with the real-world visibility error; the
-    // retry after activation succeeds. This mirrors the snap/GNOME setup where
-    // the bound tab is a background tab until the addon activates it.
-    // A few capture attempts fail with the real-world visibility error, then
-    // succeed once the (simulated) window-manager focus settles. This mirrors
-    // the snap/GNOME setup where focus is delivered asynchronously.
-    globalThis.__captureFail = 2;
+    // No failures: captureTab (the specific-tab path) succeeds immediately.
+    globalThis.__captureFail = 0;
     const d = new ToolDispatcher(store);
     const result = (await d.handleToolCall({
         sessionId: "s1",
         tool: "browser_screenshot",
         arguments: {},
     }));
-    assert.equal(result.content[0].type, "image", "succeeded after the focus-settle retry loop");
+    assert.equal(result.content[0].type, "image", "first block is the image");
     assert.equal(result.content[0].mimeType, "image/png");
     // imageResult strips the data: prefix; data is raw base64.
     assert.equal(result.content[0].data, "QUJD");
+    // A short note records which capture API produced the image.
+    const note = result.content.find((c) => c.type === "text")?.text ?? "";
+    assert.ok(note.includes("captureTab"), `note names the method: ${note}`);
+    delete globalThis.__captureFail;
+});
+test("ToolDispatcher: screenshot falls back to captureVisibleTab when captureTab fails", async () => {
+    const store = new SessionStore();
+    await store.hydrate();
+    store.bind("s1", { tabId: 9, windowId: 1 });
+    stub.tabs.get = async () => tab(9);
+    // captureTab fails once (fail=1); the captureVisibleTab path then succeeds
+    // on its first attempt after activation.
+    globalThis.__captureFail = 1;
+    const d = new ToolDispatcher(store);
+    const result = (await d.handleToolCall({
+        sessionId: "s1",
+        tool: "browser_screenshot",
+        arguments: {},
+    }));
+    assert.equal(result.content[0].type, "image", "image returned via the fallback path");
+    assert.equal(result.content[0].data, "QUJD");
+    const note = result.content.find((c) => c.type === "text")?.text ?? "";
+    assert.ok(note.includes("captureVisibleTab"), `note names the fallback method: ${note}`);
     delete globalThis.__captureFail;
 });
 test("ToolDispatcher: screenshot that stays invisible raises structured BROWSER_PERMISSION_DENIED", async () => {
