@@ -410,3 +410,76 @@ button:disabled {
   color: var(--muted);
   border-color: var(--border);
 }
+
+/* ------------------------------------------------------------------ */
+/* Onboarding screen (no ACP server detected)                         */
+/* ------------------------------------------------------------------ */
+#onboard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 9, 14, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90; /* below the permission modal, which is more urgent */
+  backdrop-filter: blur(2px);
+}
+#onboard-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  width: min(340px, 92%);
+  max-height: 92%;
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+#onboard-badge {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 7px;
+  margin-bottom: 10px;
+}
+#onboard-card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+#onboard-desc {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+#onboard-steps {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+#onboard-steps li {
+  margin-bottom: 9px;
+}
+.step-code {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.step-code code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 7px;
+  font-size: 11px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+#onboard-options {
+  justify-content: flex-end;
+  gap: 8px;
+}

@@ -173,6 +173,17 @@ function renderAll(): void {
   renderSessions();
   renderActive();
   renderConversation();
+  renderOnboarding();
+}
+
+// Onboarding screen ("no ACP server detected"). Dismissal is per sidebar
+// open — it reappears the next time the sidebar opens while not_installed.
+let onboardDismissed = false;
+
+function renderOnboarding(): void {
+  const el = $<HTMLDivElement>("onboard-overlay");
+  const show = uiState.status.state === "not_installed" && !onboardDismissed;
+  el.classList.toggle("hidden", !show);
 }
 
 function renderStatus(): void {
@@ -567,6 +578,28 @@ $<HTMLInputElement>("cwd-input").addEventListener("keydown", (e) => {
 
 $<HTMLButtonElement>("refresh").addEventListener("click", () => {
   void action("refresh_sessions").catch(() => {});
+});
+
+// Onboarding: "Check again now" asks the background for an immediate
+// (idempotent) connect attempt; a status push then hides the screen if the
+// host appeared. "Dismiss" hides it for this sidebar open.
+$<HTMLButtonElement>("onboard-check").addEventListener("click", () => {
+  browser.runtime
+    .sendMessage({ type: "pi/ensure_connected" })
+    .then((res: { connected?: boolean } | undefined) => {
+      if (res?.connected) {
+        // Fast path: refresh so the UI flips before the next status push.
+        void action<UiState>("get_state").then((s) => {
+          uiState = s;
+          renderAll();
+        }).catch(() => {});
+      }
+    })
+    .catch(() => {});
+});
+$<HTMLButtonElement>("onboard-dismiss").addEventListener("click", () => {
+  onboardDismissed = true;
+  renderOnboarding();
 });
 
 $<HTMLButtonElement>("send").addEventListener("click", () => {

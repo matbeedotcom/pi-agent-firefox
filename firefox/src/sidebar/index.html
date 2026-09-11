@@ -58,6 +58,36 @@
       </div>
     </div>
 
+    <!-- Onboarding: no ACP server (native host) detected. Shown only in the
+         not_installed state; the add-on auto-connects once the host is
+         installed, so the primary action is just "check again". -->
+    <div id="onboard-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="onboard-title">
+      <div id="onboard-card">
+        <div id="onboard-badge">setup</div>
+        <h3 id="onboard-title">Connect Pi Browser to Pi</h3>
+        <p id="onboard-desc" class="muted">
+          No ACP server detected: the <code>dev.pi.browser</code> native host
+          (installed by the Pi package) isn't present yet. This page connects
+          on its own the moment it's installed — no reload needed.
+        </p>
+        <ol id="onboard-steps">
+          <li>Install the Pi package:
+            <div class="step-code"><code>npm install -g @pi-browser/agent</code><span class="muted">from this repo: <code>npm i -g packages/pi-agent</code></span></div>
+          </li>
+          <li>In any Pi session, run:
+            <div class="step-code"><code>/pi-browser install</code></div>
+          </li>
+          <li>Return here — the connection completes itself within ~10s.
+            <div class="step-code"><code>/pi-browser doctor</code><span class="muted">shows “OK (host + add-on connected)” when done</span></div>
+          </li>
+        </ol>
+        <div id="onboard-options" class="row">
+          <button id="onboard-check" class="perm-primary">Check again now</button>
+          <button id="onboard-dismiss" class="secondary">Dismiss</button>
+        </div>
+      </div>
+    </div>
+
     <script src="sidebar.js"></script>
   </body>
 </html>

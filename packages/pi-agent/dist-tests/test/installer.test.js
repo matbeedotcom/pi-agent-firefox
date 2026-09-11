@@ -162,10 +162,14 @@ test("status reports add-on auto-detection via heartbeat (missing / fresh / stal
         const install = await runCommand("install", ctx);
         assert.ok(install.ok);
         assert.ok(install.lines.some((l) => l.includes("auto-detects the host within ~10s")), `install hint mentions auto-detection: ${JSON.stringify(install.lines)}`);
-        // Host installed, add-on not yet seen.
+        assert.ok(install.lines.some((l) => l.includes("firefox/dist/manifest.json") && l.includes("about:debugging")), `install next-steps point at the loadable dist manifest: ${JSON.stringify(install.lines)}`);
+        // Host installed, add-on not yet seen -> step-by-step onboarding guide.
         let status = await runCommand("status", ctx);
         assert.ok(status.lines.some((l) => l.includes("add-on: not detected")), `missing heartbeat -> not detected: ${JSON.stringify(status.lines)}`);
         assert.ok(status.lines.some((l) => l.includes("HOST OK — add-on not detected")));
+        assert.ok(status.lines.some((l) => l.includes("npm run build -w @pi-browser/firefox")), `step 1 build: ${JSON.stringify(status.lines)}`);
+        assert.ok(status.lines.some((l) => l.includes("about:debugging") && l.includes("firefox/dist/manifest.json")), `step 2 load temp add-on: ${JSON.stringify(status.lines)}`);
+        assert.ok(status.lines.some((l) => l.includes("auto-connects") && l.includes("/pi-browser status")), `step 3 proceed: ${JSON.stringify(status.lines)}`);
         // A fresh add-on heartbeat flips status to connected.
         const hbDir = path.join(home, ".pi-browser");
         await mkdir(hbDir, { recursive: true });

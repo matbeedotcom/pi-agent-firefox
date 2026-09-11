@@ -352,6 +352,13 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
     sendResponse({ ok: true });
     return;
   }
+  if (msg.type === "pi/ensure_connected") {
+    // Onboarding: the sidebar's "Check again now" button. Idempotent no-op
+    // when already connected; otherwise attempts the connect immediately.
+    client.ensureConnected();
+    sendResponse({ ok: true, connected: client.connected });
+    return;
+  }
   if (msg.type !== "pi/action") return;
   void handleAction(msg.action ?? "", (msg.payload ?? {}) as never)
     .then((result) => sendResponse({ ok: true, ...(result !== undefined ? { result } : {}) }))

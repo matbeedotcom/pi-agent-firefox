@@ -40,23 +40,26 @@ export function buildEnv(ctx = {}) {
  * when the add-on connects and on every keepalive ping; a fresh heartbeat
  * means the add-on is loaded and connected.
  */
-function addonLine(homeDir) {
+function addonLines(homeDir) {
     const hb = readClientHeartbeat(homeDir);
     if (!hb) {
         return {
-            line: "add-on: not detected — load the Pi Browser add-on in Firefox " +
-                "(firefox/dist/manifest.json, id " + PI_BROWSER.extensionId + "); " +
-                "it auto-connects to the installed host within ~10s",
+            lines: [
+                "add-on: not detected — to finish setup:",
+                "  1. build the add-on (from source): npm run build -w @pi-browser/firefox  →  firefox/dist/",
+                "  2. Firefox → about:debugging#aboutThisFirefoxBrowser → “Load Temporary Add-on…” → pick firefox/dist/manifest.json (id " + PI_BROWSER.extensionId + ")",
+                "  3. wait ~10s — the add-on auto-connects (no reload needed); run /pi-browser status again",
+            ],
             detected: false,
             fresh: false,
         };
     }
     const ageS = Math.round(hb.ageMs / 1000);
     if (hb.ageMs <= ADDON_HEARTBEAT_FRESH_MS) {
-        return { line: `add-on: detected (heartbeat ${ageS}s ago)`, detected: true, fresh: true };
+        return { lines: [`add-on: detected (heartbeat ${ageS}s ago)`], detected: true, fresh: true };
     }
     return {
-        line: `add-on: last heartbeat ${ageS}s ago (stale — the add-on may be disconnected or awaiting reload)`,
+        lines: [`add-on: last heartbeat ${ageS}s ago (stale — the add-on may be disconnected or awaiting reload)`],
         detected: true,
         fresh: false,
     };
@@ -79,6 +82,7 @@ export async function runCommand(command, ctx = {}) {
                 note(l);
             note(`installed ${PI_BROWSER.nativeHost} (integration v${PI_BROWSER_META.version}, protocol v${PI_BROWSER_META.protocolVersion})`);
             note("next: load the Firefox add-on (firefox/dist/manifest.json, id " + PI_BROWSER.extensionId + ")");
+            note("  Firefox → about:debugging#aboutThisFirefoxBrowser → “Load Temporary Add-on…” → pick firefox/dist/manifest.json");
             note("if the add-on is already loaded, no reload is needed — it auto-detects the host within ~10s");
             return { ok: true, lines };
         }
@@ -87,12 +91,13 @@ export async function runCommand(command, ctx = {}) {
             for (const l of report.lines)
                 note(l);
             if (report.installed) {
-                const addon = addonLine(env.homeDir);
-                note(addon.line);
+                const addon = addonLines(env.homeDir);
+                for (const l of addon.lines)
+                    note(l);
                 if (addon.fresh)
                     note("status: OK (host + add-on connected)");
                 else
-                    note(addon.detected ? "status: HOST OK — add-on heartbeat stale (reload the add-on or check Firefox)" : "status: HOST OK — add-on not detected yet (load the add-on)");
+                    note(addon.detected ? "status: HOST OK — add-on heartbeat stale (reload the add-on or check Firefox)" : "status: HOST OK — add-on not detected yet (see steps above)");
             }
             else {
                 for (const issue of report.issues)
@@ -118,12 +123,13 @@ export async function runCommand(command, ctx = {}) {
                 note("doctor: HOST PROBE FAILED");
                 return { ok: false, lines };
             }
-            const addon = addonLine(env.homeDir);
-            note(addon.line);
+            const addon = addonLines(env.homeDir);
+            for (const l of addon.lines)
+                note(l);
             if (addon.fresh)
                 note("doctor: OK (host + add-on connected)");
             else
-                note(addon.detected ? "doctor: HOST OK — add-on heartbeat stale (reload the add-on or check Firefox)" : "doctor: HOST OK — next: load the add-on (it auto-connects within ~10s)");
+                note(addon.detected ? "doctor: HOST OK — add-on heartbeat stale (reload the add-on or check Firefox)" : "doctor: HOST OK — next: load the add-on (see steps above; it auto-connects within ~10s)");
             return { ok: true, lines };
         }
         case "uninstall": {
