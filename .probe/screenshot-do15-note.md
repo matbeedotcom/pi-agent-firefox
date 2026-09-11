@@ -40,24 +40,38 @@ permissible.
   - e2e (real host): approve → screenshot completes + a
     `session/request_permission` was emitted identifying `browser_screenshot`;
     deny → tool fails with a permission error and never reaches the dispatcher.
-- **Live-verified on desktop stable Firefox** (user): the approval modal
-  appears in the sidebar and the capture succeeds — `captureVisibleTab(windowId)`
-  works fine on a non-snap stable build.
-- **Snap Firefox caveat**: on the snap build (the E2E box), the same flow
-  intermittently reports the tab as not visible/focused — snap confinement
-  changes window/compositor focus semantics that `captureVisibleTab`'s
-  visibility check depends on. This is an environment artifact, not a code
-  defect; the desktop-stable result is authoritative.
+- **Live pixel-verified on desktop stable Firefox** (user + session transcript
+  `01a091b1`): the agent's `browser_screenshot` returned an image tagged
+  **`screenshot via captureTab`** — i.e. `browser.tabs.captureTab(tab.id)`
+  succeeded on the first attempt and the `captureVisibleTab` fallback was
+  never needed. The model then correctly described the captured pixels
+  ("Counter Demo" page, counter 0, +1 button, Note input, dark navy
+  background), confirming a real vision read of the screenshot, not a DOM
+  readout. DoD #15 is satisfied.
+- **Both APIs are supported**: `captureTab` is tried first (specific tab, no
+  OS-focus dependency); `captureVisibleTab(windowId)` remains the fallback
+  (covers builds where `captureTab`/`<all_urls>` is unavailable, e.g. the snap
+  build's intermittent focus/visibility quirks). The result note records which
+  path produced the image.
+- **Snap Firefox caveat**: on the snap build (the E2E box) the capture
+  intermittently reports the tab as not visible/focused — a confinement
+  artifact of `captureVisibleTab`'s visibility check, not a code defect.
+  Desktop-stable is the authoritative result.
 
 ## Capture path (tool-dispatcher.ts → screenshot)
 
-1. `browser.tabs.captureVisibleTab(tab.windowId, { format, quality })` —
-   captures the window's selected (visible) tab. Before each attempt the
-   dispatcher makes the bound tab the selected tab and focuses its window;
-   the capture is retried with growing settle delays (300→3000ms) because
-   window focus is delivered asynchronously by the WM on Linux, and the
-   user's approval of the (permission-gated) screenshot is what makes the
-   tab's host access (activeTab) live at capture time.
-2. If all attempts fail: structured `BROWSER_PERMISSION_DENIED` with the
+1. `browser.tabs.captureTab(tab.id, { format, quality })` — captures the
+   SPECIFIC tab's rendered surface; no OS-focus dependency (needs
+   `<all_urls>`). **Tried first; verified working on desktop stable** (the
+   result is tagged `screenshot via captureTab`).
+2. If that throws, fall back to `browser.tabs.captureVisibleTab(tab.windowId,
+   { format, quality })` (the window's selected/visible tab). Before each
+   attempt the dispatcher makes the bound tab the selected tab and focuses its
+   window; retried with growing settle delays (300→3000ms) because window focus
+   is delivered asynchronously by the WM on Linux, and the user's approval of
+   the (permission-gated) screenshot is what makes the tab's host access
+   (activeTab) live at capture time. Result tagged `screenshot via
+   captureVisibleTab`.
+3. If all attempts fail: structured `BROWSER_PERMISSION_DENIED` with the
    capture error message (so the agent can react, e.g. fall back to
    `browser_get_page`/`browser_get_dom`).
