@@ -82,20 +82,83 @@ export class ToolDispatcher {
     async screenshot(tab, args) {
         const format = args?.format === "jpeg" ? "jpeg" : "png";
         const quality = typeof args?.quality === "number" ? args.quality : 80;
-        try {
-            const dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, {
-                format,
-                quality,
-            });
-            return imageResult(dataUrl, format === "jpeg" ? "image/jpeg" : "image/png");
-        }
-        catch (err) {
+        const opts = { format, quality };
+        // Preferred: browser.tabs.captureTab(tabId) — captures the SPECIFIC tab's
+        // rendered surface directly, with NO dependency on OS window focus. This is
+        // what makes screenshots work while the agent UI (terminal/chat) holds
+        // focus, which is the normal case. Requires <all_urls> (declared).
+        //
+        // Fallback: captureVisibleTab (activeTab-permitted) — only works when the
+        // tab's window is the OS-focused one. We keep a short retry loop here
+        // because window focus is delivered asynchronously by the WM on Linux.
+        const isVisibilityError = (err) => {
             const message = err instanceof Error ? err.message : String(err);
-            // captureVisibleTab can only capture the active/visible tab.
-            if (/visible|active|not visible/i.test(message)) {
-                throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, `cannot capture tab ${tab.id}: it must be the visible tab in its window`);
+            return /visible|active|not visible|focus/i.test(message);
+        };
+        const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+        // 1) Direct tab capture (no focus required). A couple of retries cover the
+        //    brief window where the tab surface is still being composed.
+        for (let i = 0; i < 3; i++) {
+            try {
+                const dataUrl = await browser.tabs.captureTab(tab.id, opts);
+                return imageResult(dataUrl, format === "jpeg" ? "image/jpeg" : "image/png");
             }
+            catch (err) {
+                if (!isVisibilityError(err)) {
+                    const message = err instanceof Error ? err.message : String(err);
+                    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `screenshot failed: ${message}`);
+                }
+                await settle(300 * (i + 1));
+            }
+        }
+        // 2) Fallback: captureVisibleTab, retrying while the WM delivers focus.
+        const captureVisible = async () => {
+            try {
+                return await browser.tabs.captureVisibleTab(opts);
+            }
+            catch (err) {
+                if (!isVisibilityError(err))
+                    throw err;
+                return await browser.tabs.captureVisibleTab(tab.windowId, opts);
+            }
+        };
+        const delays = [300, 700, 1200, 2000, 3000];
+        let lastErr;
+        for (let i = 0; i < delays.length; i++) {
+            await this.makeVisible(tab).catch(() => { });
+            await settle(delays[i]);
+            try {
+                const dataUrl = await captureVisible();
+                return imageResult(dataUrl, format === "jpeg" ? "image/jpeg" : "image/png");
+            }
+            catch (err) {
+                lastErr = err;
+                if (!isVisibilityError(err))
+                    break;
+            }
+        }
+        const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
+        if (lastErr && !isVisibilityError(lastErr)) {
             throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `screenshot failed: ${message}`);
+        }
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, `cannot capture tab ${tab.id}: the tab's rendered surface is not available ` +
+            "(tried direct tab capture, then focused-window capture with retries)");
+    }
+    /**
+     * Make the bound tab the active tab of its window and request OS focus for
+     * that window. Focus is delivered asynchronously by the window manager
+     * (especially on Linux), so the caller must settle before capturing — this
+     * method only asserts the desired state and returns.
+     */
+    async makeVisible(tab) {
+        const tabId = tab.id;
+        const windowId = tab.windowId;
+        await browser.tabs.update(tabId, { active: true });
+        if (windowId) {
+            await browser.windows.update(windowId, { focused: true }).catch(() => {
+                // Some windows (e.g. pinned) reject focus updates; the capture retry
+                // path will surface a real failure if visibility was not achieved.
+            });
         }
     }
     /**

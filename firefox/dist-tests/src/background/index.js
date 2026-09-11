@@ -56,6 +56,49 @@ let hostStatus = { state: "connecting" };
 let activeSessionId;
 let initialized = false;
 let bootstrapInFlight = false;
+const pendingPermissions = new Map();
+/** Match the host's PERMISSION_TIMEOUT_MS with a small buffer. */
+const PERMISSION_PROMPT_TIMEOUT_MS = 125_000;
+function pushPermissionRequest(request) {
+    browser.runtime
+        .sendMessage({ type: "pi/permission_request", request })
+        .catch(() => {
+        /* sidebar not open */
+    });
+}
+/** Resolve a pending permission prompt (from the sidebar or a timeout). */
+function resolvePermission(permId, optionId) {
+    const pending = pendingPermissions.get(permId);
+    if (!pending)
+        return;
+    clearTimeout(pending.timer);
+    pendingPermissions.delete(permId);
+    pending.resolve(optionId);
+}
+/**
+ * Ask the user to approve a sensitive tool call. Blocks until the sidebar
+ * answers or the prompt times out (auto-cancel). Returns the ACP outcome.
+ */
+function requestPermissionFromUser(request) {
+    const permId = request.toolCall.toolCallId;
+    const knownOptions = new Set(request.options.map((o) => o.optionId));
+    const timer = setTimeout(() => {
+        // Timed out: treat as cancelled so the host surfaces a denial.
+        resolvePermission(permId, "cancelled");
+    }, PERMISSION_PROMPT_TIMEOUT_MS);
+    const answer = new Promise((resolve) => {
+        pendingPermissions.set(permId, { resolve, timer });
+    });
+    pushPermissionRequest(request);
+    return answer.then((optionId) => {
+        if (optionId === "cancelled" || !knownOptions.has(optionId)) {
+            return { outcome: { outcome: "cancelled" } };
+        }
+        return {
+            outcome: { outcome: "selected", optionId },
+        };
+    });
+}
 function pushState() {
     const state = {
         status: hostStatus,
@@ -166,6 +209,7 @@ const client = new AcpClient({
     onMcpConnect: (params) => mcpServer.handleConnect(params),
     onMcpMessage: (params) => mcpServer.handleMessage(params),
     onMcpDisconnect: (params) => mcpServer.handleDisconnect(params),
+    onRequestPermission: (params) => requestPermissionFromUser(params),
     onStatus(status) {
         hostStatus = status;
         pushState();
@@ -248,6 +292,13 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (typeof message !== "object" || message === null)
         return;
     const msg = message;
+    if (msg.type === "pi/permission_response") {
+        const permId = String(msg.permId ?? "");
+        const optionId = String(msg.optionId ?? "cancelled");
+        resolvePermission(permId, optionId);
+        sendResponse({ ok: true });
+        return;
+    }
     if (msg.type !== "pi/action")
         return;
     void handleAction(msg.action ?? "", (msg.payload ?? {}))

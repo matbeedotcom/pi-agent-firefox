@@ -25,6 +25,14 @@ import {
 } from "../src/errors.js";
 import { PI_BROWSER, PI_BROWSER_META, X_PI_BROWSER } from "../src/integration.js";
 import { isJsonRpcNotification, isJsonRpcRequest, isJsonRpcResponse } from "../src/jsonrpc.js";
+import {
+  buildPermissionRequest,
+  PERMISSION_ALLOW_ALWAYS,
+  PERMISSION_ALLOW_ONCE,
+  PERMISSION_REJECT,
+  permissionAllowed,
+  REQUEST_PERMISSION_METHOD,
+} from "../src/permission.js";
 
 test("browser tool registry: names are unique and well-formed", () => {
   const names = BROWSER_TOOLS.map((t) => t.name);
@@ -114,4 +122,30 @@ test("jsonrpc guards discriminate messages", () => {
   assert.ok(isJsonRpcNotification({ jsonrpc: "2.0", method: "session/update", params: {} }));
   assert.ok(!isJsonRpcRequest({ jsonrpc: "2.0", id: 1, result: {} }));
   assert.ok(!isJsonRpcResponse({ jsonrpc: "2.0", id: 1, method: "x" }));
+});
+
+test("permission helpers: request shape + outcome classification", () => {
+  assert.equal(REQUEST_PERMISSION_METHOD, "session/request_permission");
+  const req = buildPermissionRequest({
+    sessionId: "sess-1",
+    toolCallId: "tc-1",
+    toolName: "browser_screenshot",
+  });
+  assert.equal(req.sessionId, "sess-1");
+  assert.equal(req.toolCall.toolCallId, "tc-1");
+  assert.equal(req.toolCall.status, "pending");
+  // All three canonical options are offered.
+  const kinds = req.options.map((o) => o.kind).sort();
+  assert.deepEqual(kinds, ["allow_always", "allow_once", "reject_once"]);
+  const ids = req.options.map((o) => o.optionId).sort();
+  assert.deepEqual(ids.sort(), [PERMISSION_ALLOW_ALWAYS, PERMISSION_ALLOW_ONCE, PERMISSION_REJECT].sort());
+  // The tool name is carried in _meta for the client UI.
+  assert.equal((req._meta as { piBrowser?: { tool?: string } }).piBrowser?.tool, "browser_screenshot");
+
+  // Outcome classification.
+  assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } }), true);
+  assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ALWAYS } }), true);
+  assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_REJECT } }), false);
+  assert.equal(permissionAllowed({ outcome: { outcome: "cancelled" } }), false);
+  assert.equal(permissionAllowed(undefined), false);
 });

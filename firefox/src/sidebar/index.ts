@@ -454,15 +454,77 @@ function fragmentFromInline(line: string): DocumentFragment {
 
 browser.runtime.onMessage.addListener((message: unknown) => {
   if (typeof message !== "object" || message === null) return;
-  const msg = message as { type?: string; state?: UiState; sessionId?: string; update?: SessionUpdate };
+  const msg = message as {
+    type?: string;
+    state?: UiState;
+    sessionId?: string;
+    update?: SessionUpdate;
+    request?: PermissionRequestUi;
+  };
   if (msg.type === "pi/state" && msg.state) {
     uiState = msg.state;
     activeSessionId = msg.state.activeSessionId;
     renderAll();
   } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update as SessionNotification["update"]);
+  } else if (msg.type === "pi/permission_request" && msg.request) {
+    showPermissionPrompt(msg.request);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Permission prompt (sensitive tools, §43)
+// ---------------------------------------------------------------------------
+
+interface PermissionOptionUi {
+  optionId: string;
+  name: string;
+  kind: string;
+}
+interface PermissionRequestUi {
+  sessionId: string;
+  toolCall: { toolCallId: string; title?: string };
+  options: PermissionOptionUi[];
+  _meta?: { piBrowser?: { tool?: string } };
+}
+
+function showPermissionPrompt(request: PermissionRequestUi): void {
+  const overlay = $("#perm-overlay") as HTMLElement;
+  const desc = $("#perm-desc") as HTMLParagraphElement;
+  const optionsWrap = $("#perm-options") as HTMLDivElement;
+  const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
+  const permId = request.toolCall.toolCallId;
+
+  // Friendly per-tool description.
+  desc.textContent =
+    tool === "browser_screenshot"
+      ? "Pi wants to take a screenshot of the bound tab. Approving brings the tab to the front and captures what is visible."
+      : `Pi wants to run: ${tool}.`;
+
+  optionsWrap.textContent = "";
+  // Order: Allow once (primary), Always allow, Deny.
+  const order = ["allow_once", "allow_always", "reject_once"];
+  const sorted = [...request.options].sort(
+    (a, b) => order.indexOf(a.kind) - order.indexOf(b.kind),
+  );
+  for (const opt of sorted) {
+    const btn = document.createElement("button");
+    btn.textContent = opt.name;
+    if (opt.kind === "allow_once") btn.className = "perm-primary";
+    else if (opt.kind === "reject_once") btn.className = "perm-reject";
+    else btn.className = "perm-always";
+    btn.addEventListener("click", () => {
+      browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId: opt.optionId }).catch(() => {});
+      hidePermissionPrompt();
+    });
+    optionsWrap.append(btn);
+  }
+  overlay.classList.remove("hidden");
+}
+
+function hidePermissionPrompt(): void {
+  (($("#perm-overlay") as HTMLElement) || document.createElement("div")).classList.add("hidden");
+}
 
 $<HTMLButtonElement>("new-session").addEventListener("click", () => {
   $<HTMLDivElement>("new-panel").classList.toggle("hidden");

@@ -348,3 +348,65 @@ button:disabled {
   text-align: center;
   color: var(--muted);
 }
+
+/* ---- Permission prompt (sensitive tools, §43) ---- */
+#perm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 9, 14, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(2px);
+}
+#perm-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  width: min(320px, 90%);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+#perm-badge {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 2px 7px;
+  margin-bottom: 10px;
+}
+#perm-card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+#perm-desc {
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+#perm-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#perm-options button {
+  width: 100%;
+  text-align: left;
+}
+#perm-options .perm-primary {
+  background: var(--accent);
+  color: #fff;
+}
+#perm-options .perm-reject {
+  background: var(--bg-3);
+  color: var(--text);
+}
+#perm-options .perm-always {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border);
+}

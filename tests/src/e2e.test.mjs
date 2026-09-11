@@ -373,6 +373,16 @@ function makeFakeFirefox(tabs, control) {
     host.on("mcp/connect", async (params) => await mcpServer.handleConnect(params));
     host.on("mcp/message", async (params) => await mcpServer.handleMessage(params));
     host.on("mcp/disconnect", async (params) => await mcpServer.handleDisconnect(params));
+    // Sensitive tools (browser_screenshot) require user approval. The fake
+    // "user" auto-approves unless a test overrides the behavior. Record each
+    // request so tests can assert the permission flow fired.
+    host.on("session/request_permission", (params) => {
+      const behavior = tabs.permissionBehavior ?? "allow_once";
+      tabs.permissionLog = tabs.permissionLog ?? [];
+      tabs.permissionLog.push(params);
+      if (behavior === "cancel") return { outcome: { outcome: "cancelled" } };
+      return { outcome: { outcome: "selected", optionId: behavior } };
+    });
   };
   return { mcpServer, attach };
 }
@@ -707,6 +717,72 @@ test("browser tools (legacy transport): agent-driven calls, A/B isolation, stale
     assert.equal(typeCall.sessionId, b.sessionId, "type targeted session B's tab");
     assert.equal(typeCall.arguments.ref, "el-2", "type targeted the referenced element");
     assert.equal(typeCall.arguments.text, "hello world", "typed text delivered");
+  } finally {
+    await shutdown(host);
+  }
+});
+
+test("browser_screenshot requires user permission (approve runs, deny blocks)", async () => {
+  const tabs = new FakeTabs();
+  const fakeFirefox = makeFakeFirefox(tabs);
+
+  const script = writeScript([
+    { match: "shot", toolCalls: [{ toolName: "browser_screenshot", args: { format: "png" } }] },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+    const tab = tabs.addTab("http://perm.test/page", "Perm Page");
+    const res = await host.request(AGENT_METHODS.session_new, { cwd: "/work/perm" });
+    const sessionId = res.sessionId;
+    tabs.bind(sessionId, tab);
+
+    // 1) User APPROVES: the screenshot runs and returns an image, and a
+    //    session/request_permission was emitted for browser_screenshot.
+    tabs.permissionBehavior = "allow_once";
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId, prompt: [{ type: "text", text: "shot please" }] },
+      60_000,
+    );
+    assert.ok(tabs.permissionLog.length >= 1, "a permission request was emitted");
+    const permReq = tabs.permissionLog[tabs.permissionLog.length - 1];
+    assert.equal(permReq.sessionId, sessionId, "permission carried the session id");
+    assert.ok(
+      JSON.stringify(permReq._meta ?? {}).includes("browser_screenshot"),
+      "permission identified the sensitive tool",
+    );
+    assert.ok(
+      Array.isArray(permReq.options) && permReq.options.some((o) => o.kind === "allow_once"),
+      "permission offered an allow option",
+    );
+    const endOk = host
+      .sessionUpdates(sessionId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .at(-1);
+    assert.equal(endOk.params.update.status, "completed", "approved screenshot completed");
+
+    // 2) User DENIES: the tool is blocked with a structured permission error
+    //    and never reaches the dispatcher.
+    const callsBefore = tabs.calls.filter((c) => c.tool === "browser_screenshot").length;
+    tabs.permissionBehavior = "cancel";
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId, prompt: [{ type: "text", text: "shot again please" }] },
+      60_000,
+    );
+    const endDenied = host
+      .sessionUpdates(sessionId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .at(-1);
+    assert.equal(endDenied.params.update.status, "failed", "denied screenshot failed");
+    assert.ok(
+      JSON.stringify(endDenied.params.update).toLowerCase().includes("permission"),
+      "failure surfaced the permission denial",
+    );
+    const callsAfter = tabs.calls.filter((c) => c.tool === "browser_screenshot").length;
+    assert.equal(callsAfter, callsBefore, "denied screenshot never reached the dispatcher");
   } finally {
     await shutdown(host);
   }

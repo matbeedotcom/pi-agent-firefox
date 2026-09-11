@@ -141,6 +141,9 @@ export class AcpClient {
             else if (method === CLIENT_METHODS.mcp_disconnect) {
                 result = await this.handlers.onMcpDisconnect(params);
             }
+            else if (method === CLIENT_METHODS.session_request_permission) {
+                result = await this.handlers.onRequestPermission(params);
+            }
             else {
                 this.send({ jsonrpc: "2.0", id, error: { code: -32601, message: `unknown method: ${method}` } });
                 return;

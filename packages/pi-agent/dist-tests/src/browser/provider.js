@@ -12,7 +12,7 @@
  * Tool names, arguments, and results are identical across transports —
  * migrating changes only the transport.
  */
-import { BROWSER_SCREENSHOT_TIMEOUT_MS, BROWSER_TOOL_TIMEOUT_MS, codeFromErrorObject, isStructuredErrorObject, PI_BROWSER_ERROR, PiBrowserProtocolError, X_PI_BROWSER, } from "@pi-browser/protocol";
+import { BROWSER_SCREENSHOT_TIMEOUT_MS, BROWSER_TOOL_TIMEOUT_MS, codeFromErrorObject, isStructuredErrorObject, PI_BROWSER_ERROR, PiBrowserProtocolError, X_PI_BROWSER, buildPermissionRequest, permissionAllowed, REQUEST_PERMISSION_METHOD, } from "@pi-browser/protocol";
 import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS } from "./schemas.js";
 import { McpAcpClient } from "./mcp-acp-client.js";
 export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
@@ -132,6 +132,16 @@ export function translateTransportError(err, tool) {
     return new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, err instanceof Error ? err.message : String(err), { tool });
 }
 /**
+ * Tools that require explicit user approval before running. Sensitive tools
+ * (pixel capture) need a live user gesture: the host sends ACP
+ * `session/request_permission` to the client, the user approves in the
+ * browser UI, and only then does the tool execute. This is what makes the
+ * `activeTab` host access that capture needs actually available.
+ */
+const SENSITIVE_TOOLS = new Set(["browser_screenshot"]);
+/** How long to wait for the user to answer a permission prompt. */
+const PERMISSION_TIMEOUT_MS = 120_000;
+/**
  * Registers browser tools on Pi sessions and routes their execution through
  * the per-session BrowserToolTransport.
  */
@@ -139,6 +149,8 @@ export class BrowserToolProvider {
     transport;
     log;
     sessions = new Map();
+    /** Tools the user has approved with "Always allow" (per host lifetime). */
+    alwaysAllowed = new Set();
     constructor(transport, log) {
         this.transport = transport;
         this.log = log;
@@ -169,6 +181,12 @@ export class BrowserToolProvider {
                 if (!sessionId) {
                     throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser tool invoked before session id assigned");
                 }
+                // Sensitive tools require explicit user approval first. The user's
+                // approval is a live gesture that makes the capture's host access
+                // (activeTab) available at execution time.
+                if (SENSITIVE_TOOLS.has(entry.name)) {
+                    await this.requestPermission(sessionId, toolCallId, entry.name);
+                }
                 const state = this.ensureState(sessionId, mode, mcpServerId);
                 const transport = state.mode === "mcp-acp"
                     ? state.mcp
@@ -186,6 +204,41 @@ export class BrowserToolProvider {
                 return { content: result.content, details: { piBrowser: true, tool: entry.name } };
             },
         }));
+    }
+    /**
+     * Ask the client for permission to run a sensitive tool. Blocks until the
+     * user responds (or the prompt times out). "Always allow" is remembered for
+     * the rest of the host lifetime. A denial/timeout surfaces a structured
+     * BROWSER_PERMISSION_DENIED error so the agent can react.
+     */
+    async requestPermission(sessionId, toolCallId, toolName) {
+        if (this.alwaysAllowed.has(toolName)) {
+            this.log.debug(`${toolName}: already always-allowed; skipping permission prompt`);
+            return;
+        }
+        const request = buildPermissionRequest({ sessionId, toolCallId, toolName });
+        this.log.info(`${toolName}: requesting user permission (toolCall=${toolCallId})`);
+        let response;
+        try {
+            response = await this.transport.request(REQUEST_PERMISSION_METHOD, request, PERMISSION_TIMEOUT_MS);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, `permission request for ${toolName} failed or timed out: ${message}`, { tool: toolName });
+        }
+        if (permissionAllowed(response)) {
+            const allowedAlways = response.outcome.outcome === "selected" && response.outcome.optionId === "allow_always";
+            if (allowedAlways) {
+                this.alwaysAllowed.add(toolName);
+                this.log.info(`${toolName}: user chose Always allow`);
+            }
+            else {
+                this.log.info(`${toolName}: user chose Allow once`);
+            }
+            return;
+        }
+        this.log.warn(`${toolName}: user denied permission`);
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, `user denied permission to run ${toolName}`, { tool: toolName });
     }
     /** Ensure per-session transport state exists (called at tool execution). */
     ensureState(sessionId, mode, mcpServerId) {

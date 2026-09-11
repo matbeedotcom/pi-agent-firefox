@@ -25,6 +25,8 @@ import {
   type MessageMcpRequest,
   type MessageMcpResponse,
   type PiBrowserMeta,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
   type SessionNotification,
 } from "@pi-browser/protocol";
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
@@ -42,6 +44,8 @@ export interface AcpClientHandlers {
   onMcpMessage(params: MessageMcpRequest): Promise<MessageMcpResponse>;
   onMcpDisconnect(params: DisconnectMcpRequest): Promise<void>;
   onStatus(status: HostStatus): void;
+  /** Ask the user to approve/deny a sensitive tool call. Returns their choice. */
+  onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse>;
 }
 
 interface Pending {
@@ -182,6 +186,8 @@ export class AcpClient {
         result = await this.handlers.onMcpMessage(params as MessageMcpRequest);
       } else if (method === CLIENT_METHODS.mcp_disconnect) {
         result = await this.handlers.onMcpDisconnect(params as DisconnectMcpRequest);
+      } else if (method === CLIENT_METHODS.session_request_permission) {
+        result = await this.handlers.onRequestPermission(params as RequestPermissionRequest);
       } else {
         this.send({ jsonrpc: "2.0", id, error: { code: -32601, message: `unknown method: ${method}` } });
         return;

@@ -73,6 +73,8 @@ export declare class BrowserToolProvider {
     private readonly transport;
     private readonly log;
     private readonly sessions;
+    /** Tools the user has approved with "Always allow" (per host lifetime). */
+    private readonly alwaysAllowed;
     constructor(transport: AcpTransportLike, log: Logger);
     /** Choose the transport for a session from the MCP servers the client declared. */
     selectMode(mcpServers?: unknown[]): BrowserMode;
@@ -87,6 +89,13 @@ export declare class BrowserToolProvider {
     createTools(idRef: {
         id?: string;
     }, mode: BrowserMode, mcpServerId?: string): ToolSpec[];
+    /**
+     * Ask the client for permission to run a sensitive tool. Blocks until the
+     * user responds (or the prompt times out). "Always allow" is remembered for
+     * the rest of the host lifetime. A denial/timeout surfaces a structured
+     * BROWSER_PERMISSION_DENIED error so the agent can react.
+     */
+    private requestPermission;
     /** Ensure per-session transport state exists (called at tool execution). */
     ensureState(sessionId: string, mode: BrowserMode, mcpServerId?: string): SessionBrowserState;
     private legacy;

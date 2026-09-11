@@ -16,8 +16,10 @@ import { McpServer } from "../src/background/mcp-server.js";
 
 interface StubTabs {
   get: (tabId: number) => Promise<any>;
-  captureVisibleTab: (windowId: number, opts?: unknown) => Promise<string>;
+  captureTab: (tabId: number, opts?: unknown) => Promise<string>;
+  captureVisibleTab: (windowIdOrOpts: number | { format?: string }, maybeOpts?: unknown) => Promise<string>;
   reload: (tabId: number) => Promise<void>;
+  update: (tabId: number, props: { active?: boolean }) => Promise<any>;
   sendMessage: (tabId: number, message: { type: string }) => Promise<unknown>;
 }
 
@@ -39,10 +41,31 @@ const stub: {
     async get(tabId: number) {
       throw new Error(`no tab ${tabId}`);
     },
-    async captureVisibleTab() {
+    // captureTab(tabId, opts) — the dispatcher's PREFERRED path (no OS focus
+    // needed). Shares the same fail counter as captureVisibleTab so tests can
+    // model "direct capture fails, focused capture works" or "everything fails".
+    async captureTab(_tabId: number, _opts?: unknown) {
+      const fail = (globalThis as { __captureFail?: number }).__captureFail;
+      if (fail && fail > 0) {
+        (globalThis as { __captureFail?: number }).__captureFail = fail - 1;
+        throw new Error(`Cannot capture a tab that is not visible in its window`);
+      }
+      return "data:image/png;base64,QUJD";
+    },
+    // Two call forms: captureVisibleTab(windowId, opts) and
+    // captureVisibleTab(opts). Used as the fallback when captureTab fails.
+    async captureVisibleTab(_windowIdOrOpts: number | { format?: string }, _maybeOpts?: unknown) {
+      const fail = (globalThis as { __captureFail?: number }).__captureFail;
+      if (fail && fail > 0) {
+        (globalThis as { __captureFail?: number }).__captureFail = fail - 1;
+        throw new Error(`Cannot capture a tab that is not visible in its window`);
+      }
       return "data:image/png;base64,QUJD";
     },
     async reload() {},
+    async update() {
+      return {};
+    },
     async sendMessage(_tabId: number, _message: { type: string }) {
       // Mirrors real behavior: the content script always resolves with an
       // {ok, data|error} envelope; a missing content script rejects with the
@@ -206,6 +229,49 @@ test("ToolDispatcher: stale element ref surfaces BROWSER_ELEMENT_STALE", async (
     (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_ELEMENT_STALE,
   );
   delete (globalThis as { __contentReply?: unknown }).__contentReply;
+});
+
+test("ToolDispatcher: screenshot of a background tab activates it, retries, and succeeds", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  // First capture attempt fails with the real-world visibility error; the
+  // retry after activation succeeds. This mirrors the snap/GNOME setup where
+  // the bound tab is a background tab until the addon activates it.
+  // A few capture attempts fail with the real-world visibility error, then
+  // succeed once the (simulated) window-manager focus settles. This mirrors
+  // the snap/GNOME setup where focus is delivered asynchronously.
+  (globalThis as { __captureFail?: number }).__captureFail = 2;
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_screenshot",
+    arguments: {},
+  })) as { content: Array<{ type: string; data?: string; mimeType?: string }> };
+  assert.equal(result.content[0].type, "image", "succeeded after the focus-settle retry loop");
+  assert.equal(result.content[0].mimeType, "image/png");
+  // imageResult strips the data: prefix; data is raw base64.
+  assert.equal(result.content[0].data, "QUJD");
+  delete (globalThis as { __captureFail?: number }).__captureFail;
+});
+
+test("ToolDispatcher: screenshot that stays invisible raises structured BROWSER_PERMISSION_DENIED", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  // Every capture attempt fails across the whole retry loop: the tab
+  // genuinely cannot be made visible (e.g. occluded window). The agent gets
+  // a structured code. 999 exceeds the max number of attempts in the loop.
+  (globalThis as { __captureFail?: number }).__captureFail = 999;
+  const d = new ToolDispatcher(store);
+  await assert.rejects(
+    d.handleToolCall({ sessionId: "s1", tool: "browser_screenshot", arguments: {} }),
+    (err: unknown) =>
+      err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+  );
+  delete (globalThis as { __captureFail?: number }).__captureFail;
 });
 
 // ---------------------------------------------------------------------------

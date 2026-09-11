@@ -84,4 +84,13 @@ export type {
   DisconnectMcpRequest,
   MessageMcpRequest,
   MessageMcpResponse,
+
+  // permission / elicitation
+  RequestPermissionRequest,
+  RequestPermissionResponse,
+  RequestPermissionOutcome,
+  PermissionOption,
+  PermissionOptionId,
+  PermissionOptionKind,
+  ToolCall as AcpToolCall,
 } from "@agentclientprotocol/sdk";

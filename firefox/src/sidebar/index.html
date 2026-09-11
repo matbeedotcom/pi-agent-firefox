@@ -46,6 +46,18 @@
         <p class="muted">Create one with “+ New”, or pick an existing session above.</p>
       </div>
     </div>
+
+    <!-- Sensitive-tool permission prompt (PRODUCT.md §43). Shown when the agent
+         requests a tool that needs explicit user approval (e.g. screenshot). -->
+    <div id="perm-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="perm-title">
+      <div id="perm-card">
+        <div id="perm-badge">permission</div>
+        <h3 id="perm-title">Allow this action?</h3>
+        <p id="perm-desc" class="muted"></p>
+        <div id="perm-options" class="row perm-options"></div>
+      </div>
+    </div>
+
     <script src="sidebar.js"></script>
   </body>
 </html>

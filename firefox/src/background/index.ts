@@ -9,7 +9,12 @@ import {
   AGENT_METHODS,
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
+  PERMISSION_ALLOW_ALWAYS,
+  PERMISSION_ALLOW_ONCE,
+  PERMISSION_REJECT,
   X_PI_BROWSER,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
   type SessionInfo,
   type SessionNotification,
   type SessionUpdate,
@@ -69,6 +74,70 @@ let hostStatus: HostStatus = { state: "connecting" };
 let activeSessionId: string | undefined;
 let initialized = false;
 let bootstrapInFlight = false;
+
+// ---------------------------------------------------------------------------
+// Permission prompts (PRODUCT.md §43)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pending permission requests. Keyed by the tool call id. When the host asks
+ * for permission (session/request_permission), we push the prompt to the
+ * sidebar and block here until the user answers (or the timer auto-cancels).
+ * The user's click is the live gesture that makes the sensitive tool's host
+ * access (activeTab) available.
+ */
+interface PendingPermission {
+  resolve: (optionId: string | "cancelled") => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+const pendingPermissions = new Map<string, PendingPermission>();
+
+/** Match the host's PERMISSION_TIMEOUT_MS with a small buffer. */
+const PERMISSION_PROMPT_TIMEOUT_MS = 125_000;
+
+function pushPermissionRequest(request: RequestPermissionRequest): void {
+  browser.runtime
+    .sendMessage({ type: "pi/permission_request", request })
+    .catch(() => {
+      /* sidebar not open */
+    });
+}
+
+/** Resolve a pending permission prompt (from the sidebar or a timeout). */
+function resolvePermission(permId: string, optionId: string | "cancelled"): void {
+  const pending = pendingPermissions.get(permId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingPermissions.delete(permId);
+  pending.resolve(optionId);
+}
+
+/**
+ * Ask the user to approve a sensitive tool call. Blocks until the sidebar
+ * answers or the prompt times out (auto-cancel). Returns the ACP outcome.
+ */
+function requestPermissionFromUser(
+  request: RequestPermissionRequest,
+): Promise<RequestPermissionResponse> {
+  const permId = request.toolCall.toolCallId;
+  const knownOptions = new Set(request.options.map((o) => o.optionId));
+  const timer = setTimeout(() => {
+    // Timed out: treat as cancelled so the host surfaces a denial.
+    resolvePermission(permId, "cancelled");
+  }, PERMISSION_PROMPT_TIMEOUT_MS);
+  const answer = new Promise<string | "cancelled">((resolve) => {
+    pendingPermissions.set(permId, { resolve, timer });
+  });
+  pushPermissionRequest(request);
+  return answer.then((optionId) => {
+    if (optionId === "cancelled" || !knownOptions.has(optionId)) {
+      return { outcome: { outcome: "cancelled" as const } };
+    }
+    return {
+      outcome: { outcome: "selected" as const, optionId },
+    };
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Sidebar bridge
@@ -194,6 +263,7 @@ const client = new AcpClient({
   onMcpConnect: (params) => mcpServer.handleConnect(params),
   onMcpMessage: (params) => mcpServer.handleMessage(params),
   onMcpDisconnect: (params) => mcpServer.handleDisconnect(params),
+  onRequestPermission: (params) => requestPermissionFromUser(params),
   onStatus(status: HostStatus) {
     hostStatus = status;
     pushState();
@@ -275,6 +345,13 @@ browser.tabs.onActivated.addListener(async () => {
 browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   if (typeof message !== "object" || message === null) return;
   const msg = message as { type?: string; action?: string; payload?: Record<string, unknown> };
+  if (msg.type === "pi/permission_response") {
+    const permId = String((msg as { permId?: unknown }).permId ?? "");
+    const optionId = String((msg as { optionId?: unknown }).optionId ?? "cancelled");
+    resolvePermission(permId, optionId);
+    sendResponse({ ok: true });
+    return;
+  }
   if (msg.type !== "pi/action") return;
   void handleAction(msg.action ?? "", (msg.payload ?? {}) as never)
     .then((result) => sendResponse({ ok: true, ...(result !== undefined ? { result } : {}) }))

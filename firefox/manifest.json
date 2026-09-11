@@ -10,6 +10,9 @@
     "storage",
     "tabs"
   ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "scripts": ["background.js"]
   },
@@ -25,10 +28,13 @@
       "all_frames": false
     }
   ],
+  "action": {
+    "default_title": "Pi Screenshot"
+  },
   "browser_specific_settings": {
     "gecko": {
       "id": "pi-browser@pi.dev",
-      "strict_min_version": "115.0"
+      "strict_min_version": "126.0"
     }
   }
 }
