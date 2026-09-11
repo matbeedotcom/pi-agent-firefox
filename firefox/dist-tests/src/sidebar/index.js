@@ -134,10 +134,21 @@ function renderAll() {
 }
 // Onboarding screen ("no ACP server detected"). Dismissal is per sidebar
 // open — it reappears the next time the sidebar opens while not_installed.
+// Once not_installed has been seen in this page session, the screen stays
+// up through the connecting/disconnected reconnect flicker until a real
+// connection is established (or the user dismisses it).
 let onboardDismissed = false;
+let onboardSeen = false;
 function renderOnboarding() {
     const el = $("onboard-overlay");
-    const show = uiState.status.state === "not_installed" && !onboardDismissed;
+    const s = uiState.status.state;
+    if (s === "not_installed")
+        onboardSeen = true;
+    if (s === "connected")
+        onboardSeen = false;
+    const show = !onboardDismissed &&
+        onboardSeen &&
+        (s === "not_installed" || s === "connecting" || s === "disconnected");
     el.classList.toggle("hidden", !show);
 }
 function renderStatus() {

@@ -239,8 +239,14 @@ async function bootstrap() {
     }
     catch (err) {
         console.error("[pi-browser] initialize failed", err);
-        hostStatus = { state: "disconnected", detail: err instanceof Error ? err.message : String(err) };
-        pushState();
+        // Only downgrade to "disconnected" when the port is still alive (a real
+        // protocol failure). If the port is gone, onDisconnect has already set
+        // the precise state (not_installed vs disconnected) — overwriting it
+        // here used to mask "not_installed" and suppress the onboarding screen.
+        if (client.connected && hostStatus.state === "connecting") {
+            hostStatus = { state: "disconnected", detail: err instanceof Error ? err.message : String(err) };
+            pushState();
+        }
         return;
     }
     await refreshSessionList();
