@@ -477,13 +477,23 @@ void (async () => {
   client.start();
 })();
 
-// Keep the MV3 event page alive: Firefox unloads idle event pages, which
-// would silently drop the Native Messaging port (and with it the session).
-// A periodic liveness ping doubles as the x-pi-browser/ping probe.
+// Keep the MV3 event page alive and keep the link healthy: Firefox unloads
+// idle event pages, which would silently drop the Native Messaging port (and
+// with it the session). Two duties on one interval:
+//   - connected:  periodic liveness ping (doubles as the x-pi-browser/ping
+//     probe; the host refreshes the add-on heartbeat it uses for onboarding
+//     auto-detection in /pi-browser status|doctor)
+//   - NOT connected: ensureConnected() — auto-detects a host installed AFTER
+//     the add-on loaded (add-on-first onboarding), even if the event page was
+//     unloaded in the meantime and the 3s reconnect timer was lost. The
+//     pending interval itself is what keeps the event page alive in this
+//     state.
 setInterval(() => {
   if (client.connected && hostStatus.state === "connected") {
     client.request(X_PI_BROWSER.ping, {}, 5_000).catch(() => {
       /* the port's onDisconnect handler deals with dropped links */
     });
+  } else {
+    client.ensureConnected();
   }
-}, 25_000);
+}, 10_000);

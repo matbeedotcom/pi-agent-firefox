@@ -6,6 +6,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { BROWSER_TOOLS, CONTROL_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { AcpClient } from "../src/background/acp-client.js";
 import { SessionStore } from "../src/background/session-store.js";
 import { ToolDispatcher } from "../src/background/tool-dispatcher.js";
 import { McpServer } from "../src/background/mcp-server.js";
@@ -74,7 +75,29 @@ const stub: {
     },
   },
   scripting: { async executeScript() {} },
-  runtime: {},
+  runtime: {
+    // Controllable native-messaging stub for AcpClient tests.
+    connectNativeCalls: 0,
+    mode: "fail" as "fail" | "ok",
+    lastError: undefined as { message?: string } | undefined,
+    lastPort: undefined as any,
+    connectNative(_name: string) {
+      (stub.runtime as any).connectNativeCalls++;
+      if ((stub.runtime as any).mode === "fail") {
+        throw new Error("Could not connect to any native messaging host");
+      }
+      const listeners: { message: Array<(m: unknown) => void>; disconnect: Array<() => void> } = { message: [], disconnect: [] };
+      (stub.runtime as any).lastPort = {
+        listeners,
+        postMessage() {},
+        onMessage: { addListener: (fn: (m: unknown) => void) => listeners.message.push(fn) },
+        onDisconnect: { addListener: (fn: () => void) => listeners.disconnect.push(fn) },
+        disconnect() {},
+      };
+      return (stub.runtime as any).lastPort;
+    },
+    getManifest: () => ({ version: "0.1.0" }),
+  },
 };
 
 before(() => {
@@ -400,4 +423,64 @@ test("McpServer: control tools are rejected without a control handler", async ()
     }),
     (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
   );
+});
+
+// ---------------------------------------------------------------------------
+// AcpClient: auto-detection (add-on-first onboarding)
+// ---------------------------------------------------------------------------
+
+function makeClient(statuses: string[]): AcpClient {
+  return new AcpClient({
+    onSessionUpdate() {},
+    onToolCall: async () => ({}),
+    onMcpConnect: async () => ({ connectionId: "c" }) as never,
+    onMcpMessage: async () => ({} as never),
+    onMcpDisconnect: async () => {},
+    onStatus: (s) => statuses.push(s.state),
+    onRequestPermission: async () => ({ outcome: { outcome: "cancelled" } }) as never,
+  });
+}
+
+test("AcpClient: auto-detects a host installed after the add-on loaded", async () => {
+  const rt = stub.runtime as any;
+  const statuses: string[] = [];
+  rt.connectNativeCalls = 0;
+  rt.lastError = undefined;
+
+  // 1) Add-on loads while the host is NOT installed (add-on-first order).
+  rt.mode = "fail";
+  const client = makeClient(statuses);
+  client.start();
+  assert.equal(client.connected, false, "not connected while host missing");
+  assert.equal(rt.connectNativeCalls, 1, "one connect attempt");
+  assert.ok(statuses.includes("not_installed"), `status reflects not_installed: ${statuses}`);
+
+  // 2) Host still missing: ensureConnected() is safe (no double connect in
+  //    flight) and does not hang the page.
+  client.ensureConnected();
+  assert.equal(rt.connectNativeCalls, 2, "retry attempts the connect");
+  assert.equal(client.connected, false);
+
+  // 3) The host gets installed (plugin-first completes later). The next
+  //    keepalive ensureConnected() detects it — this is the auto-detection
+  //    that makes add-on-first onboarding work without a reload.
+  rt.mode = "ok";
+  client.ensureConnected();
+  assert.equal(client.connected, true, "auto-detected the newly installed host");
+  assert.equal(rt.connectNativeCalls, 3);
+
+  // 4) Idempotent: repeated ensureConnected() while connected opens no new port.
+  client.ensureConnected();
+  client.ensureConnected();
+  assert.equal(rt.connectNativeCalls, 3, "no duplicate ports while connected");
+
+  // 5) After a disconnect, the next ensureConnected() reconnects.
+  (rt.lastError = { message: "native port disconnected" });
+  rt.lastPort.listeners.disconnect.forEach((fn: () => void) => fn());
+  assert.equal(client.connected, false, "port dropped");
+  client.ensureConnected();
+  assert.equal(client.connected, true, "reconnected after drop");
+  assert.equal(rt.connectNativeCalls, 4);
+
+  client.stop(); // clear any pending reconnect timers
 });

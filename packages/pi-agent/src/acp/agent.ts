@@ -48,6 +48,7 @@ import type {
 import { buildConfigOptions, CONFIG_ID_MODEL, CONFIG_ID_THINKING } from "./config-options.js";
 import type { BrowserMode, BrowserToolProvider } from "../browser/provider.js";
 import type { ImageAttachment } from "./backend.js";
+import { touchClientHeartbeat } from "../client-heartbeat.js";
 
 export interface AcpAgentOptions {
   backend: PiBackend;
@@ -102,6 +103,8 @@ function toToolCallContent(result: unknown): { type: "content"; content: Content
 
 export class AcpAgent {
   private readonly sessions = new Map<string, SessionState>();
+  /** Name of the connected client (set on initialize) — for the add-on heartbeat. */
+  private clientIdentityName: string | undefined;
 
   constructor(private readonly opts: AcpAgentOptions) {
     opts.transport.onRequest = (method, params, id) => {
@@ -154,6 +157,9 @@ export class AcpAgent {
           return;
         case X_PI_BROWSER.ping: {
           const backendReady = await this.opts.backend.ready.then(() => true, () => false);
+          // Refresh the add-on heartbeat (no-op for non-add-on clients), so
+          // /pi-browser status|doctor can report add-on presence.
+          touchClientHeartbeat(this.clientIdentityName);
           this.transport().respond(id, { pong: true, meta: PI_BROWSER_META, backendReady });
           return;
         }
@@ -202,6 +208,9 @@ export class AcpAgent {
     this.opts.log.info(
       `initialize: client=${req.clientInfo?.name ?? "?"} v${req.clientInfo?.version ?? "?"} proto=${req.protocolVersion}`,
     );
+    // Record add-on presence (no-op for non-add-on clients like test harnesses).
+    this.clientIdentityName = req.clientInfo?.name;
+    touchClientHeartbeat(req.clientInfo?.name, req.clientInfo?.version);
     return {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: {

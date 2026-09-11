@@ -9,6 +9,7 @@
  */
 import { AGENT_METHODS, CLIENT_METHODS, PI_BROWSER_ERROR, PiBrowserProtocolError, PI_BROWSER_META, X_PI_BROWSER, JSONRPC_ERROR, PROTOCOL_VERSION, toErrorObject, } from "@pi-browser/protocol";
 import { buildConfigOptions, CONFIG_ID_MODEL, CONFIG_ID_THINKING } from "./config-options.js";
+import { touchClientHeartbeat } from "../client-heartbeat.js";
 function toolKindFor(toolName) {
     if (toolName.startsWith("browser_get") || toolName === "browser_wait_for" || toolName === "browser_screenshot") {
         return "fetch";
@@ -47,6 +48,8 @@ function toToolCallContent(result) {
 export class AcpAgent {
     opts;
     sessions = new Map();
+    /** Name of the connected client (set on initialize) — for the add-on heartbeat. */
+    clientIdentityName;
     constructor(opts) {
         this.opts = opts;
         opts.transport.onRequest = (method, params, id) => {
@@ -96,6 +99,9 @@ export class AcpAgent {
                     return;
                 case X_PI_BROWSER.ping: {
                     const backendReady = await this.opts.backend.ready.then(() => true, () => false);
+                    // Refresh the add-on heartbeat (no-op for non-add-on clients), so
+                    // /pi-browser status|doctor can report add-on presence.
+                    touchClientHeartbeat(this.clientIdentityName);
                     this.transport().respond(id, { pong: true, meta: PI_BROWSER_META, backendReady });
                     return;
                 }
@@ -136,6 +142,9 @@ export class AcpAgent {
             throw new PiBrowserProtocolError(PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH, `unsupported ACP protocol version: ${req.protocolVersion} (agent supports ${PROTOCOL_VERSION})`);
         }
         this.opts.log.info(`initialize: client=${req.clientInfo?.name ?? "?"} v${req.clientInfo?.version ?? "?"} proto=${req.protocolVersion}`);
+        // Record add-on presence (no-op for non-add-on clients like test harnesses).
+        this.clientIdentityName = req.clientInfo?.name;
+        touchClientHeartbeat(req.clientInfo?.name, req.clientInfo?.version);
         return {
             protocolVersion: PROTOCOL_VERSION,
             agentCapabilities: {

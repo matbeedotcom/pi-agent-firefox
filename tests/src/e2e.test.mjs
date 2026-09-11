@@ -22,7 +22,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -463,6 +463,42 @@ async function initialize(host) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+test("auto-detection: host writes the add-on heartbeat only for the add-on identity", async () => {
+  if (!tmpRoot) tmpRoot = mkdtempSync(path.join(tmpdir(), "pi-browser-e2e-"));
+  const hbFile = path.join(tmpRoot, `hb-${Math.random().toString(36).slice(2)}.json`);
+  const host = spawnHost({ PI_BROWSER_HEARTBEAT_FILE: hbFile });
+  try {
+    // A non-add-on client (this harness) must NOT create the heartbeat.
+    await host.request(AGENT_METHODS.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: "fake-firefox", version: "0.1.0" },
+    });
+    assert.equal(existsSync(hbFile), false, "no heartbeat for a non-add-on client");
+
+    // The add-on's identity (what the real add-on sends) creates it — this is
+    // the presence signal /pi-browser status|doctor uses for auto-detection.
+    await host.request(AGENT_METHODS.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: "pi-browser-firefox", version: "0.1.0" },
+    });
+    assert.ok(existsSync(hbFile), "heartbeat written for the add-on client");
+    const hb = JSON.parse(readFileSync(hbFile, "utf8"));
+    assert.equal(hb.client, "pi-browser-firefox");
+    assert.equal(hb.version, "0.1.0");
+    assert.ok(hb.ts <= Date.now());
+
+    // The keepalive ping refreshes it.
+    await sleep(25);
+    await host.request(X_PI_BROWSER.ping, {}, 5_000);
+    const hb2 = JSON.parse(readFileSync(hbFile, "utf8"));
+    assert.ok(hb2.ts >= hb.ts, "ping refreshed the heartbeat ts");
+  } finally {
+    await shutdown(host);
+  }
+});
 
 test("initialize: capabilities + piBrowser metadata; version mismatch is structured", async () => {
   const host = spawnHost();

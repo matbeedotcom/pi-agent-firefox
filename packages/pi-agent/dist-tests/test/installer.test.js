@@ -76,10 +76,10 @@ for (const platform of ["linux", "macos"]) {
             const { stat } = await import("node:fs/promises");
             const st = await stat(manifest.path);
             assert.ok(st.mode & 0o100, "launcher should be executable");
-            // 3. status after install
+            // 3. status after install (fresh temp home -> no add-on heartbeat yet)
             const after = await runCommand("status", ctx);
             assert.equal(after.ok, true);
-            assert.ok(after.lines.some((l) => l.includes("status: OK")));
+            assert.ok(after.lines.some((l) => l.includes("status: HOST OK — add-on not detected")), `host-ok + add-on detection line: ${JSON.stringify(after.lines)}`);
             // 4. package moved -> stale path detected
             const movedRoot = await makePkg(path.join(root, "moved"));
             const stale = await runCommand("status", { ...ctx, pkgRoot: movedRoot });
@@ -148,6 +148,35 @@ test("windows: registry-based install/status/uninstall (mocked reg)", async () =
         assert.ok(reg.calls.some((c) => c.args[0] === "delete"));
         const finalStatus = await runCommand("status", ctx);
         assert.equal(finalStatus.ok, false);
+    }
+    finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+test("status reports add-on auto-detection via heartbeat (missing / fresh / stale)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-install-addon-"));
+    try {
+        const pkgRoot = await makePkg(root);
+        const home = path.join(root, "home");
+        const ctx = { pkgRoot, platform: "linux", homeDir: home };
+        const install = await runCommand("install", ctx);
+        assert.ok(install.ok);
+        assert.ok(install.lines.some((l) => l.includes("auto-detects the host within ~10s")), `install hint mentions auto-detection: ${JSON.stringify(install.lines)}`);
+        // Host installed, add-on not yet seen.
+        let status = await runCommand("status", ctx);
+        assert.ok(status.lines.some((l) => l.includes("add-on: not detected")), `missing heartbeat -> not detected: ${JSON.stringify(status.lines)}`);
+        assert.ok(status.lines.some((l) => l.includes("HOST OK — add-on not detected")));
+        // A fresh add-on heartbeat flips status to connected.
+        const hbDir = path.join(home, ".pi-browser");
+        await mkdir(hbDir, { recursive: true });
+        await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now(), client: "pi-browser-firefox", version: "0.1.0", pid: 1 }));
+        status = await runCommand("status", ctx);
+        assert.ok(status.lines.some((l) => l.startsWith("add-on: detected")), `fresh heartbeat -> detected: ${JSON.stringify(status.lines)}`);
+        assert.ok(status.lines.some((l) => l.includes("OK (host + add-on connected)")));
+        // A stale heartbeat is reported as stale (add-on disconnected/reloading).
+        await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now() - 10 * 60_000, client: "pi-browser-firefox", pid: 1 }));
+        status = await runCommand("status", ctx);
+        assert.ok(status.lines.some((l) => l.includes("add-on: last heartbeat") && l.includes("stale")));
     }
     finally {
         await rm(root, { recursive: true, force: true });

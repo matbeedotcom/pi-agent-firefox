@@ -26,6 +26,8 @@ export interface AcpAgentOptions {
 export declare class AcpAgent {
     private readonly opts;
     private readonly sessions;
+    /** Name of the connected client (set on initialize) — for the add-on heartbeat. */
+    private clientIdentityName;
     constructor(opts: AcpAgentOptions);
     private transport;
     private handleRequest;

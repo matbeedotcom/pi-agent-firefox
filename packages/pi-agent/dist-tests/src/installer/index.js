@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PI_BROWSER, PI_BROWSER_META } from "@pi-browser/protocol";
+import { ADDON_HEARTBEAT_FRESH_MS, readClientHeartbeat } from "../client-heartbeat.js";
 import { detectTargets, defaultExec, installHost, statusHost, uninstallHost, } from "./platforms.js";
 export function normalizePlatform(p) {
     if (p === "macos")
@@ -34,6 +35,32 @@ export function buildEnv(ctx = {}) {
     const mainJs = ctx.mainJs ?? path.join(pkgRoot, "dist", "native-host", "main.js");
     return { env, targets, pkgRoot, mainJs };
 }
+/**
+ * Add-on side of onboarding (auto-detection). The host records a heartbeat
+ * when the add-on connects and on every keepalive ping; a fresh heartbeat
+ * means the add-on is loaded and connected.
+ */
+function addonLine(homeDir) {
+    const hb = readClientHeartbeat(homeDir);
+    if (!hb) {
+        return {
+            line: "add-on: not detected — load the Pi Browser add-on in Firefox " +
+                "(firefox/dist/manifest.json, id " + PI_BROWSER.extensionId + "); " +
+                "it auto-connects to the installed host within ~10s",
+            detected: false,
+            fresh: false,
+        };
+    }
+    const ageS = Math.round(hb.ageMs / 1000);
+    if (hb.ageMs <= ADDON_HEARTBEAT_FRESH_MS) {
+        return { line: `add-on: detected (heartbeat ${ageS}s ago)`, detected: true, fresh: true };
+    }
+    return {
+        line: `add-on: last heartbeat ${ageS}s ago (stale — the add-on may be disconnected or awaiting reload)`,
+        detected: true,
+        fresh: false,
+    };
+}
 export async function runCommand(command, ctx = {}) {
     const { env, targets, pkgRoot, mainJs } = buildEnv(ctx);
     const lines = [];
@@ -51,15 +78,22 @@ export async function runCommand(command, ctx = {}) {
             for (const l of report.lines)
                 note(l);
             note(`installed ${PI_BROWSER.nativeHost} (integration v${PI_BROWSER_META.version}, protocol v${PI_BROWSER_META.protocolVersion})`);
-            note("next: load the Firefox add-on (firefox/manifest.json, id " + PI_BROWSER.extensionId + ")");
+            note("next: load the Firefox add-on (firefox/dist/manifest.json, id " + PI_BROWSER.extensionId + ")");
+            note("if the add-on is already loaded, no reload is needed — it auto-detects the host within ~10s");
             return { ok: true, lines };
         }
         case "status": {
             const report = await statusHost(env, pkgRoot, targets);
             for (const l of report.lines)
                 note(l);
-            if (report.installed)
-                note("status: OK");
+            if (report.installed) {
+                const addon = addonLine(env.homeDir);
+                note(addon.line);
+                if (addon.fresh)
+                    note("status: OK (host + add-on connected)");
+                else
+                    note(addon.detected ? "status: HOST OK — add-on heartbeat stale (reload the add-on or check Firefox)" : "status: HOST OK — add-on not detected yet (load the add-on)");
+            }
             else {
                 for (const issue of report.issues)
                     note(`issue: ${issue}`);
@@ -84,7 +118,12 @@ export async function runCommand(command, ctx = {}) {
                 note("doctor: HOST PROBE FAILED");
                 return { ok: false, lines };
             }
-            note("doctor: OK");
+            const addon = addonLine(env.homeDir);
+            note(addon.line);
+            if (addon.fresh)
+                note("doctor: OK (host + add-on connected)");
+            else
+                note(addon.detected ? "doctor: HOST OK — add-on heartbeat stale (reload the add-on or check Firefox)" : "doctor: HOST OK — next: load the add-on (it auto-connects within ~10s)");
             return { ok: true, lines };
         }
         case "uninstall": {

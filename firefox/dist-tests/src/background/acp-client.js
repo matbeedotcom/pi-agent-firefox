@@ -18,12 +18,23 @@ export class AcpClient {
     pending = new Map();
     reconnectTimer;
     stopped = false;
+    connecting = false;
     status = { state: "connecting" };
     constructor(handlers) {
         this.handlers = handlers;
     }
     get connected() {
         return this.port !== undefined;
+    }
+    /**
+     * Idempotent connect: no-op when a port already exists or a connect is in
+     * flight; otherwise (re)connects now. The background keepalive calls this
+     * while disconnected so that a host installed AFTER the add-on loaded is
+     * auto-detected within one keepalive tick — even if the event page was
+     * unloaded and the 3s reconnect timer was lost (MV3 idle unload).
+     */
+    ensureConnected() {
+        this.connect();
     }
     get currentStatus() {
         return this.status;
@@ -42,16 +53,19 @@ export class AcpClient {
         this.port = undefined;
     }
     connect() {
-        if (this.stopped)
+        if (this.stopped || this.port || this.connecting)
             return;
+        this.connecting = true;
         let port;
         try {
             port = browser.runtime.connectNative(PI_BROWSER.nativeHost);
         }
         catch (err) {
+            this.connecting = false;
             this.failConnection("not_installed", err instanceof Error ? err.message : String(err));
             return;
         }
+        this.connecting = false;
         // Assign the port BEFORE emitting the "connecting" status: status
         // listeners may immediately issue requests (initialize) against it.
         this.port = port;

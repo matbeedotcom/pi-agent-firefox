@@ -194,12 +194,14 @@ function renderStatus(): void {
       break;
     case "not_installed":
       el.classList.add("err");
-      el.textContent = "native host not installed — run /pi-browser install";
-      el.title = s.detail ?? "";
+      el.textContent = "native host not detected — run /pi-browser install";
+      el.title =
+        "Auto-detecting: the add-on connects on its own as soon as the host " +
+        "is installed (no reload needed).\n\n" + (s.detail ?? "");
       break;
     default:
       el.classList.add("err");
-      el.textContent = "disconnected (reconnecting…)";
+      el.textContent = "disconnected — reconnecting…";
       el.title = s.detail ?? "";
   }
 }

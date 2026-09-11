@@ -1,0 +1,69 @@
+/**
+ * Client (add-on) heartbeat: the host-side presence signal for onboarding
+ * (PRODUCT.md §8, onboarding/auto-detection).
+ *
+ * The add-on holds the Native Messaging port, so the host cannot enumerate
+ * add-ons; instead the host records when the add-on connects (ACP
+ * initialize) and on every keepalive ping. The installer CLI
+ * (/pi-browser status|doctor) reads the file to report whether the add-on
+ * side of the onboarding is complete, in either install order:
+ *
+ *   - plugin first:  doctor shows "add-on: not detected" until it is loaded
+ *   - add-on first:  the add-on auto-detects the installed host; once it
+ *     connects, the heartbeat appears and status flips to "detected"
+ *
+ * The file is best-effort: a filesystem hiccup must never break the protocol
+ * path. Contents are non-sensitive (timestamp, client identity, pid).
+ */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+/** Client name the Firefox add-on sends in ACP initialize (acp-client.ts). */
+export const ADDON_CLIENT_NAME = "pi-browser-firefox";
+/** A heartbeat younger than this counts as "add-on connected" (3x the 10s ping). */
+export const ADDON_HEARTBEAT_FRESH_MS = 90_000;
+/** Heartbeat file location (env override for tests; default under $HOME). */
+export function heartbeatPathForHome(homeDir) {
+    return process.env.PI_BROWSER_HEARTBEAT_FILE || path.join(homeDir, ".pi-browser", "client.heartbeat");
+}
+export function heartbeatPath() {
+    return heartbeatPathForHome(os.homedir());
+}
+/**
+ * Record add-on presence. No-op for non-add-on clients (e.g. test harnesses).
+ * Best-effort: never throws.
+ */
+export function touchClientHeartbeat(clientName, clientVersion) {
+    try {
+        if (clientName !== ADDON_CLIENT_NAME)
+            return;
+        const file = heartbeatPath();
+        mkdirSync(path.dirname(file), { recursive: true });
+        const hb = {
+            ts: Date.now(),
+            client: clientName,
+            ...(clientVersion ? { version: clientVersion } : {}),
+            pid: process.pid,
+        };
+        writeFileSync(file, JSON.stringify(hb));
+    }
+    catch {
+        // best-effort only — the protocol path must never break on this
+    }
+}
+/** Read the latest add-on heartbeat, or undefined when absent/unreadable. */
+export function readClientHeartbeat(homeDir) {
+    try {
+        const file = heartbeatPathForHome(homeDir);
+        if (!existsSync(file))
+            return undefined;
+        const raw = JSON.parse(readFileSync(file, "utf8"));
+        if (typeof raw.ts !== "number" || raw.client !== ADDON_CLIENT_NAME)
+            return undefined;
+        return { ...raw, ageMs: Date.now() - raw.ts };
+    }
+    catch {
+        return undefined;
+    }
+}
+//# sourceMappingURL=client-heartbeat.js.map
