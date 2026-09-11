@@ -70,6 +70,8 @@ export interface BrowserNotifyParams {
     event: BrowserNotifyEvent;
     data?: Record<string, unknown>;
 }
+/** MCP protocol version spoken inside mcp/message (MCP-over-ACP). */
+export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
 /** Default per-tool deadline the host enforces when Firefox does not answer. */
 export declare const BROWSER_TOOL_TIMEOUT_MS = 30000;
 /** Long deadline for screenshot calls (capture can be slow on busy pages). */

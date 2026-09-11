@@ -5,9 +5,11 @@
   "type": "module",
   "description": "Cross-package integration tests for Pi Browser (fake-Firefox harness driving the real native host)",
   "scripts": {
-    "test": "node --test src/"
+    "test": "node --test src/*.test.mjs"
   },
   "dependencies": {
+    "@pi-browser/agent": "0.1.0",
+    "@pi-browser/firefox": "0.1.0",
     "@pi-browser/protocol": "0.1.0"
   },
   "devDependencies": {

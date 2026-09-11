@@ -14,6 +14,7 @@ import { PI_BROWSER_META } from "@pi-browser/protocol";
 import { createLogger } from "../logger.js";
 import { createStdioTransport } from "./transport.js";
 import { AcpAgent } from "../acp/agent.js";
+import { MockBackend } from "../acp/mock-backend.js";
 import { PiSdkBackend } from "../acp/sdk-backend.js";
 import { BrowserToolProvider } from "../browser/provider.js";
 const require = createRequire(import.meta.url);
@@ -32,10 +33,12 @@ async function main() {
         ...(process.env.PI_BROWSER_LOG_FILE ? { filePath: process.env.PI_BROWSER_LOG_FILE } : {}),
     });
     log.info(`host starting pid=${process.pid} node=${process.version}`);
-    const backend = new PiSdkBackend({
+    const backendKind = process.env.PI_BROWSER_BACKEND ?? "pi";
+    const backend = backendKind === "mock" ? new MockBackend(process.env.PI_BROWSER_MOCK_SCRIPT) : new PiSdkBackend({
         log,
         ...(process.env.PI_BROWSER_AGENT_DIR ? { agentDir: process.env.PI_BROWSER_AGENT_DIR } : {}),
     });
+    log.info(`backend: ${backendKind}`);
     const dispatcher = createStdioTransport(process.stdin, process.stdout, log);
     const provider = new BrowserToolProvider(dispatcher.transport, log);
     const agent = new AcpAgent({

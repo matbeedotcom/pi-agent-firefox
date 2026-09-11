@@ -15,6 +15,7 @@
 import { BROWSER_SCREENSHOT_TIMEOUT_MS, BROWSER_TOOL_TIMEOUT_MS, codeFromErrorObject, isStructuredErrorObject, PI_BROWSER_ERROR, PiBrowserProtocolError, X_PI_BROWSER, } from "@pi-browser/protocol";
 import { BROWSER_TOOL_SCHEMAS } from "./schemas.js";
 import { McpAcpClient } from "./mcp-acp-client.js";
+export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
 import { TransportClosedError, TransportTimeoutError } from "../native-host/transport.js";
 // ---------------------------------------------------------------------------
 // Normalization

@@ -25,6 +25,8 @@ import {
 } from "@pi-browser/protocol";
 import { BROWSER_TOOL_SCHEMAS } from "./schemas.js";
 import { McpAcpClient } from "./mcp-acp-client.js";
+
+export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
 import { TransportClosedError, TransportTimeoutError } from "../native-host/transport.js";
 import type { ToolSpec } from "../acp/backend.js";
 import type { Logger } from "../logger.js";

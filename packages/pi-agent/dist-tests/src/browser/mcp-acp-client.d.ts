@@ -6,9 +6,9 @@
  * mcp/connect, mcp/message, and mcp/disconnect, and speaks plain MCP
  * (initialize / tools/list / tools/call) inside mcp/message.
  */
-import { type AcpTransportLike } from "@pi-browser/protocol";
+import { MCP_PROTOCOL_VERSION, type AcpTransportLike } from "@pi-browser/protocol";
 import type { Logger } from "../logger.js";
-export declare const MCP_PROTOCOL_VERSION = "2025-06-18";
+export { MCP_PROTOCOL_VERSION };
 export interface McpToolInfo {
     name: string;
     description?: string;

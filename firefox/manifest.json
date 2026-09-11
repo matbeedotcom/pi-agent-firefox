@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Pi Browser",
+  "version": "0.1.0",
+  "description": "Pi Coding Agent sidebar: multi-session ACP client with browser tools over Firefox Native Messaging",
+  "permissions": [
+    "nativeMessaging",
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "sidebar_action": {
+    "default_title": "Pi",
+    "default_panel": "sidebar/index.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*", "file://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "pi-browser@pi.dev",
+      "strict_min_version": "115.0"
+    }
+  }
+}

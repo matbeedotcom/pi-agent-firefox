@@ -8,13 +8,14 @@
  */
 import {
   CLIENT_METHODS,
+  MCP_PROTOCOL_VERSION,
   PI_BROWSER,
   type AcpTransportLike,
   type ConnectMcpResponse,
 } from "@pi-browser/protocol";
 import type { Logger } from "../logger.js";
 
-export const MCP_PROTOCOL_VERSION = "2025-06-18";
+export { MCP_PROTOCOL_VERSION };
 
 export interface McpToolInfo {
   name: string;

@@ -6,8 +6,8 @@
  * mcp/connect, mcp/message, and mcp/disconnect, and speaks plain MCP
  * (initialize / tools/list / tools/call) inside mcp/message.
  */
-import { CLIENT_METHODS, PI_BROWSER, } from "@pi-browser/protocol";
-export const MCP_PROTOCOL_VERSION = "2025-06-18";
+import { CLIENT_METHODS, MCP_PROTOCOL_VERSION, PI_BROWSER, } from "@pi-browser/protocol";
+export { MCP_PROTOCOL_VERSION };
 export class McpAcpClient {
     opts;
     connectionId;

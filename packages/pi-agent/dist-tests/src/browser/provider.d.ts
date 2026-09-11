@@ -13,6 +13,7 @@
  * migrating changes only the transport.
  */
 import { PiBrowserProtocolError, type AcpTransportLike, type BrowserNotifyParams } from "@pi-browser/protocol";
+export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
 import type { ToolSpec } from "../acp/backend.js";
 import type { Logger } from "../logger.js";
 /** Normalized tool result: MCP tools/call shape. */
@@ -91,5 +92,4 @@ export declare class BrowserToolProvider {
     disposeSession(sessionId: string): Promise<void>;
     shutdown(): Promise<void>;
 }
-export {};
 //# sourceMappingURL=provider.d.ts.map

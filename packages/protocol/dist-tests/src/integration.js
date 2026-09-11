@@ -38,6 +38,8 @@ export const X_PI_BROWSER = {
     /** Firefox → host: browser-side notifications (tab closed/navigated, binding changed). */
     notify: "x-pi-browser/notify",
 };
+/** MCP protocol version spoken inside mcp/message (MCP-over-ACP). */
+export const MCP_PROTOCOL_VERSION = "2025-06-18";
 /** Default per-tool deadline the host enforces when Firefox does not answer. */
 export const BROWSER_TOOL_TIMEOUT_MS = 30_000;
 /** Long deadline for screenshot calls (capture can be slow on busy pages). */
