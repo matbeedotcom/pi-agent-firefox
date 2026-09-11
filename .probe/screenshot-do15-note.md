@@ -15,10 +15,10 @@ client (Firefox) for permission via the canonical ACP method
    Always allow / Deny** modal and blocks on `pi/permission_response`.
 4. The user's click is a **live user gesture**. The add-on responds with the
    chosen option.
-5. On allow, the host proceeds to capture (`browser.tabs.captureTab(tab.id)` —
-   the specific tab, no OS-focus dependency — with `captureVisibleTab` as
-   fallback). On deny/timeout, the tool returns a structured
-   `BROWSER_PERMISSION_DENIED` and **never reaches the dispatcher**.
+5. On allow, the host proceeds to capture
+   (`browser.tabs.captureVisibleTab(tab.windowId, {format, quality})`, with
+   activate+focus+settle retries). On deny/timeout, the tool returns a
+   structured `BROWSER_PERMISSION_DENIED` and **never reaches the dispatcher**.
 
 "Always allow" is remembered for the host lifetime.
 
@@ -40,19 +40,24 @@ permissible.
   - e2e (real host): approve → screenshot completes + a
     `session/request_permission` was emitted identifying `browser_screenshot`;
     deny → tool fails with a permission error and never reaches the dispatcher.
-- **Live verification pending**: requires the temp add-on reload so the agent's
-  `browser_screenshot` triggers the sidebar approval modal. Whether the capture
-  then succeeds on a *temp* add-on depends on Firefox honoring the gesture for
-  host access; if it still reports missing host permission, the definitive fix
-  is a **permanent (non-temp) install** on a non-signing-enforced build, where
-  `captureTab` + `<all_urls>` works directly (see load options discussed with
-  the user).
+- **Live-verified on desktop stable Firefox** (user): the approval modal
+  appears in the sidebar and the capture succeeds — `captureVisibleTab(windowId)`
+  works fine on a non-snap stable build.
+- **Snap Firefox caveat**: on the snap build (the E2E box), the same flow
+  intermittently reports the tab as not visible/focused — snap confinement
+  changes window/compositor focus semantics that `captureVisibleTab`'s
+  visibility check depends on. This is an environment artifact, not a code
+  defect; the desktop-stable result is authoritative.
 
 ## Capture path (tool-dispatcher.ts → screenshot)
 
-1. `browser.tabs.captureTab(tab.id, {format, quality})` — captures the specific
-   tab's rendered surface; no OS-focus dependency. (Needs `<all_urls>`.)
-2. Fallback: `browser.tabs.captureVisibleTab({…})` / `(windowId, {…})` with a
-   growing-settle retry loop (window focus is delivered async by the WM on
-   Linux).
-3. If all fail: structured `BROWSER_PERMISSION_DENIED`.
+1. `browser.tabs.captureVisibleTab(tab.windowId, { format, quality })` —
+   captures the window's selected (visible) tab. Before each attempt the
+   dispatcher makes the bound tab the selected tab and focuses its window;
+   the capture is retried with growing settle delays (300→3000ms) because
+   window focus is delivered asynchronously by the WM on Linux, and the
+   user's approval of the (permission-gated) screenshot is what makes the
+   tab's host access (activeTab) live at capture time.
+2. If all attempts fail: structured `BROWSER_PERMISSION_DENIED` with the
+   capture error message (so the agent can react, e.g. fall back to
+   `browser_get_page`/`browser_get_dom`).

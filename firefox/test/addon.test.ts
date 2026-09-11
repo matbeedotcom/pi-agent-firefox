@@ -16,7 +16,6 @@ import { McpServer } from "../src/background/mcp-server.js";
 
 interface StubTabs {
   get: (tabId: number) => Promise<any>;
-  captureTab: (tabId: number, opts?: unknown) => Promise<string>;
   captureVisibleTab: (windowIdOrOpts: number | { format?: string }, maybeOpts?: unknown) => Promise<string>;
   reload: (tabId: number) => Promise<void>;
   update: (tabId: number, props: { active?: boolean }) => Promise<any>;
@@ -41,19 +40,9 @@ const stub: {
     async get(tabId: number) {
       throw new Error(`no tab ${tabId}`);
     },
-    // captureTab(tabId, opts) — the dispatcher's PREFERRED path (no OS focus
-    // needed). Shares the same fail counter as captureVisibleTab so tests can
-    // model "direct capture fails, focused capture works" or "everything fails".
-    async captureTab(_tabId: number, _opts?: unknown) {
-      const fail = (globalThis as { __captureFail?: number }).__captureFail;
-      if (fail && fail > 0) {
-        (globalThis as { __captureFail?: number }).__captureFail = fail - 1;
-        throw new Error(`Cannot capture a tab that is not visible in its window`);
-      }
-      return "data:image/png;base64,QUJD";
-    },
-    // Two call forms: captureVisibleTab(windowId, opts) and
-    // captureVisibleTab(opts). Used as the fallback when captureTab fails.
+    // captureVisibleTab(windowId, opts) — the dispatcher's capture path.
+    // Shares the fail counter so tests can model "fails then succeeds after
+    // the focus-settle retries" or "everything fails".
     async captureVisibleTab(_windowIdOrOpts: number | { format?: string }, _maybeOpts?: unknown) {
       const fail = (globalThis as { __captureFail?: number }).__captureFail;
       if (fail && fail > 0) {

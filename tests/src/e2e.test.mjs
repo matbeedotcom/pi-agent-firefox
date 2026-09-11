@@ -60,10 +60,17 @@ class HostClient {
     this.alive = true;
 
     child.stdout.on("data", (chunk) => this.onData(chunk));
-    child.stderr.on("data", () => {}); // stderr is diagnostics only
-    child.on("exit", () => {
+    // stderr is diagnostics only; optionally mirror it to a file for debugging.
+    child.stderr.on("data", (chunk) => {
+      if (process.env.PI_BROWSER_E2E_STDERR) {
+        import("node:fs").then((fs) => fs.appendFileSync(process.env.PI_BROWSER_E2E_STDERR, chunk));
+      }
+    });
+    child.on("exit", (code, signal) => {
+      this.exitCode = code;
+      this.exitSignal = signal;
       this.alive = false;
-      for (const [, p] of this.pending) p.reject(new Error("host exited"));
+      for (const [, p] of this.pending) p.reject(new Error(`host exited (code=${code} signal=${signal})`));
       this.pending.clear();
     });
   }
@@ -131,11 +138,21 @@ class HostClient {
   }
 
   sendRaw(obj) {
+    // Safe against shutdown: a test's finally block may end the child's stdin
+    // (or the child may exit) while an async response write from dispatch()
+    // is still in the microtask queue. Writing a late frame to a closed stdin
+    // would throw an uncaught ERR_STREAM_WRITE_AFTER_END and fail the test.
+    const stdin = this.child.stdin;
+    if (!stdin || !stdin.writable) return;
     const json = Buffer.from(JSON.stringify(obj), "utf8");
     const frame = Buffer.alloc(4 + json.length);
     frame.writeUInt32LE(json.length, 0);
     json.copy(frame, 4);
-    this.child.stdin.write(frame);
+    try {
+      stdin.write(frame);
+    } catch {
+      /* stdin closed between the check and the write — harmless */
+    }
   }
 
   request(method, params, timeoutMs = 15_000) {
