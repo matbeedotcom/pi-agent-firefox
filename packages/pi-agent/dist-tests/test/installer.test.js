@@ -1,14 +1,25 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, mkdir, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runCommand } from "../src/installer/index.js";
+import { runCommand, expandAppTarget } from "../src/installer/index.js";
+import { manifestPathsForApps, distinctManifestLocations, legacyManifestPath, WINDOWS_REGISTRY_KEY } from "../src/installer/common.js";
 /**
- * Cross-platform installer tests. Linux and macOS run against real temp
- * directories; Windows uses a mocked `reg` exec capturing commands and a
- * simulated registry state.
+ * Cross-platform installer tests for the application-neutral dev.pi.agent
+ * host (plan §2, §23). Linux and macOS run against real temp directories;
+ * Windows uses a mocked `reg` exec capturing commands and a simulated
+ * registry state.
  */
+const EXPECTED_ALLOWED = ["pi-browser@pi.dev", "pi-firefox@pi.dev", "pi-thunderbird@pi.dev"];
+/** Mirror of installer normalizePlatform (buildEnv normalizes before use). */
+function norm(p) {
+    if (p === "macos")
+        return "darwin";
+    if (p === "windows")
+        return "win32";
+    return p;
+}
 async function makePkg(root) {
     const pkgRoot = path.join(root, "pkg");
     await mkdir(path.join(pkgRoot, "dist", "native-host"), { recursive: true });
@@ -48,61 +59,104 @@ function fakeReg() {
         },
     };
 }
+test("expandAppTarget: firefox | thunderbird | mozilla | default", () => {
+    assert.deepEqual(expandAppTarget("firefox"), ["firefox"]);
+    assert.deepEqual(expandAppTarget("thunderbird"), ["thunderbird"]);
+    assert.deepEqual(expandAppTarget("mozilla"), ["firefox", "thunderbird"]);
+    assert.deepEqual(expandAppTarget(undefined), ["firefox", "thunderbird"]);
+});
+test("manifest path table: shared on linux/windows, split on macOS (plan §23)", () => {
+    const home = "/home/u";
+    // Linux: one shared directory for both apps.
+    const linux = manifestPathsForApps(["firefox", "thunderbird"], home, "linux");
+    assert.equal(linux.firefox, `${home}/.mozilla/native-messaging-hosts/dev.pi.agent.json`);
+    assert.equal(linux.thunderbird, linux.firefox);
+    assert.equal(distinctManifestLocations(["firefox", "thunderbird"], home, "linux").length, 1);
+    // macOS: Firefox under Application Support, Thunderbird under Library/Mozilla.
+    const mac = manifestPathsForApps(["firefox", "thunderbird"], home, "darwin");
+    assert.equal(mac.firefox, `${home}/Library/Application Support/Mozilla/NativeMessagingHosts/dev.pi.agent.json`);
+    assert.equal(mac.thunderbird, `${home}/Library/Mozilla/NativeMessagingHosts/dev.pi.agent.json`);
+    assert.equal(distinctManifestLocations(["firefox", "thunderbird"], home, "darwin").length, 2);
+    // Legacy cleanup paths.
+    assert.equal(legacyManifestPath("firefox", home, "darwin"), `${home}/Library/Application Support/Mozilla/NativeMessagingHosts/dev.pi.browser.json`);
+    assert.equal(legacyManifestPath("thunderbird", home, "linux"), `${home}/.mozilla/native-messaging-hosts/dev.pi.browser.json`);
+    assert.equal(legacyManifestPath("thunderbird", home, "win32"), undefined);
+    // Windows registry key is shared by both apps.
+    assert.equal(WINDOWS_REGISTRY_KEY, `SOFTWARE\\Mozilla\\NativeMessagingHosts\\dev.pi.agent`);
+});
 for (const platform of ["linux", "macos"]) {
-    test(`${platform}: install -> status -> repair -> uninstall lifecycle`, async () => {
-        const root = await mkdtemp(path.join(tmpdir(), `pi-browser-${platform}-`));
+    test(`${platform}: install (mozilla) -> status -> repair -> uninstall lifecycle`, async () => {
+        const root = await mkdtemp(path.join(tmpdir(), `pi-agent-${platform}-`));
         try {
             const pkgRoot = await makePkg(root);
             const home = path.join(root, "home");
             const ctx = { pkgRoot, platform, homeDir: home };
-            // 1. status before install
+            // 1. status before install (default target = both apps)
             const before = await runCommand("status", ctx);
             assert.equal(before.ok, false);
-            // 2. install
+            assert.ok(before.lines.some((l) => l.includes("[firefox] NOT installed")));
+            assert.ok(before.lines.some((l) => l.includes("[thunderbird] NOT installed")));
+            // 2. install for both apps
             const install = await runCommand("install", ctx);
             assert.equal(install.ok, true);
-            const manifestPath = platform === "linux"
-                ? path.join(home, ".mozilla/native-messaging-hosts/dev.pi.browser.json")
-                : path.join(home, "Library/Application Support/Mozilla/NativeMessagingHosts/dev.pi.browser.json");
-            const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-            assert.equal(manifest.name, "dev.pi.browser");
-            assert.equal(manifest.type, "stdio");
-            assert.deepEqual(manifest.allowed_extensions, ["pi-browser@pi.dev"]);
-            assert.ok(manifest.path.endsWith("native/pi-browser-host"));
-            const launcher = await readFile(manifest.path, "utf8");
-            assert.ok(launcher.startsWith("#!/bin/sh"));
-            assert.ok(launcher.includes(path.join(pkgRoot, "dist", "native-host", "main.js")), `launcher should point at the built host:\n${launcher}`);
-            // launcher is executable
-            const { stat } = await import("node:fs/promises");
-            const st = await stat(manifest.path);
-            assert.ok(st.mode & 0o100, "launcher should be executable");
+            const paths = manifestPathsForApps(["firefox", "thunderbird"], home, norm(platform));
+            for (const app of ["firefox", "thunderbird"]) {
+                const manifest = JSON.parse(await readFile(paths[app], "utf8"));
+                assert.equal(manifest.name, "dev.pi.agent", `${app} manifest host name`);
+                assert.equal(manifest.type, "stdio");
+                assert.deepEqual(manifest.allowed_extensions, EXPECTED_ALLOWED);
+                assert.ok(manifest.path.endsWith("native/pi-agent-host"));
+                const launcher = await readFile(manifest.path, "utf8");
+                assert.ok(launcher.startsWith("#!/bin/sh"));
+                assert.ok(launcher.includes(path.join(pkgRoot, "dist", "native-host", "main.js")));
+                const st = await stat(manifest.path);
+                assert.ok(st.mode & 0o100, "launcher should be executable");
+            }
             // 3. status after install (fresh temp home -> no add-on heartbeat yet)
             const after = await runCommand("status", ctx);
             assert.equal(after.ok, true);
-            assert.ok(after.lines.some((l) => l.includes("status: HOST OK — add-on not detected")), `host-ok + add-on detection line: ${JSON.stringify(after.lines)}`);
-            // 4. package moved -> stale path detected
+            assert.ok(after.lines.some((l) => l.includes("[firefox] installed")));
+            assert.ok(after.lines.some((l) => l.includes("[thunderbird] installed")));
+            assert.ok(after.lines.some((l) => l.includes("status: HOST OK — add-on not detected")));
+            // 4. thunderbird-only status also reports just that app
+            const tbOnly = await runCommand("status", { ...ctx, apps: "thunderbird" });
+            assert.equal(tbOnly.ok, true);
+            assert.ok(tbOnly.lines.some((l) => l.includes("[thunderbird] installed")));
+            assert.ok(!tbOnly.lines.some((l) => l.startsWith("[firefox]")));
+            // 5. package moved -> stale path detected
             const movedRoot = await makePkg(path.join(root, "moved"));
             const stale = await runCommand("status", { ...ctx, pkgRoot: movedRoot });
             assert.equal(stale.ok, false);
             assert.ok(stale.lines.some((l) => l.includes("stale launcher path")));
-            // 5. repair (reinstall from the moved location)
+            // 6. repair (reinstall from the moved location)
             const repair = await runCommand("install", { ...ctx, pkgRoot: movedRoot });
             assert.equal(repair.ok, true);
-            const manifest2 = JSON.parse(await readFile(manifestPath, "utf8"));
+            const manifest2 = JSON.parse(await readFile(paths.firefox, "utf8"));
             assert.ok(manifest2.path.startsWith(movedRoot));
             const healed = await runCommand("status", { ...ctx, pkgRoot: movedRoot });
             assert.equal(healed.ok, true);
-            // 6. uninstall
+            // 7. uninstall removes the manifest(s) + legacy dev.pi.browser files
+            const legacyFire = legacyManifestPath("firefox", home, norm(platform));
+            await mkdir(path.dirname(legacyFire), { recursive: true });
+            await writeFile(legacyFire, JSON.stringify({ name: "dev.pi.browser" }));
             const uninstall = await runCommand("uninstall", { ...ctx, pkgRoot: movedRoot });
             assert.equal(uninstall.ok, true);
             let gone = true;
             try {
-                await stat2(manifestPath);
+                await stat(paths.firefox);
             }
             catch {
                 gone = true;
             }
             assert.ok(gone);
+            let legacyGone = true;
+            try {
+                await stat(legacyFire);
+            }
+            catch {
+                legacyGone = true;
+            }
+            assert.ok(legacyGone, "legacy dev.pi.browser manifest removed");
             const finalStatus = await runCommand("status", { ...ctx, pkgRoot: movedRoot });
             assert.equal(finalStatus.ok, false);
         }
@@ -111,12 +165,32 @@ for (const platform of ["linux", "macos"]) {
         }
     });
 }
-async function stat2(p) {
-    const { stat } = await import("node:fs/promises");
-    return stat(p);
-}
-test("windows: registry-based install/status/uninstall (mocked reg)", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "pi-browser-win-"));
+test("macos: firefox-only install writes only the Firefox manifest", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-agent-mac-fx-"));
+    try {
+        const pkgRoot = await makePkg(root);
+        const home = path.join(root, "home");
+        const install = await runCommand("install", { pkgRoot, platform: "macos", homeDir: home, apps: "firefox" });
+        assert.ok(install.ok);
+        const fxPath = `${home}/Library/Application Support/Mozilla/NativeMessagingHosts/dev.pi.agent.json`;
+        const tbPath = `${home}/Library/Mozilla/NativeMessagingHosts/dev.pi.agent.json`;
+        await stat(fxPath); // exists
+        let tbExists = false;
+        try {
+            await stat(tbPath);
+            tbExists = true;
+        }
+        catch {
+            // expected absent
+        }
+        assert.equal(tbExists, false, "thunderbird manifest must not be written for firefox target");
+    }
+    finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+test("windows: registry-based install/status/uninstall for both apps (mocked reg)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-agent-win-"));
     try {
         const pkgRoot = await makePkg(root);
         const reg = fakeReg();
@@ -130,19 +204,22 @@ test("windows: registry-based install/status/uninstall (mocked reg)", async () =
         assert.equal(before.ok, false);
         const install = await runCommand("install", ctx);
         assert.equal(install.ok, true);
-        // reg add called with the manifest path
+        // reg add called with the shared dev.pi.agent key
         const addCall = reg.calls.find((c) => c.args[0] === "add");
         assert.ok(addCall);
-        assert.ok(addCall.args.includes("HKCU\\SOFTWARE\\Mozilla\\NativeMessagingHosts\\dev.pi.browser"));
+        assert.ok(addCall.args.includes(`HKCU\\${WINDOWS_REGISTRY_KEY}`));
         // manifest file written inside the package
-        const manifestFile = path.join(pkgRoot, "native", "dev_pi_browser.json");
+        const manifestFile = path.join(pkgRoot, "native", "dev_pi_agent.json");
         const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
-        assert.ok(manifest.path.endsWith("pi-browser-host.cmd"));
+        assert.equal(manifest.name, "dev.pi.agent");
+        assert.ok(manifest.path.endsWith("pi-agent-host.cmd"));
+        assert.deepEqual(manifest.allowed_extensions, EXPECTED_ALLOWED);
         const launcher = await readFile(manifest.path, "utf8");
         assert.ok(launcher.startsWith("@echo off"));
-        assert.ok(manifest.allowed_extensions.includes("pi-browser@pi.dev"));
         const after = await runCommand("status", ctx);
         assert.equal(after.ok, true);
+        assert.ok(after.lines.some((l) => l.includes("[firefox] installed")));
+        assert.ok(after.lines.some((l) => l.includes("[thunderbird] installed")));
         const uninstall = await runCommand("uninstall", ctx);
         assert.equal(uninstall.ok, true);
         assert.ok(reg.calls.some((c) => c.args[0] === "delete"));
@@ -158,7 +235,7 @@ test("status reports add-on auto-detection via heartbeat (missing / fresh / stal
     try {
         const pkgRoot = await makePkg(root);
         const home = path.join(root, "home");
-        const ctx = { pkgRoot, platform: "linux", homeDir: home };
+        const ctx = { pkgRoot, platform: "linux", homeDir: home, apps: "firefox" };
         const install = await runCommand("install", ctx);
         assert.ok(install.ok);
         assert.ok(install.lines.some((l) => l.includes("auto-detects the host within ~10s")), `install hint mentions auto-detection: ${JSON.stringify(install.lines)}`);
@@ -169,14 +246,17 @@ test("status reports add-on auto-detection via heartbeat (missing / fresh / stal
         assert.ok(status.lines.some((l) => l.includes("HOST OK — add-on not detected")));
         assert.ok(status.lines.some((l) => l.includes("npm run build -w @pi-browser/firefox")), `step 1 build: ${JSON.stringify(status.lines)}`);
         assert.ok(status.lines.some((l) => l.includes("about:debugging") && l.includes("firefox/dist/manifest.json")), `step 2 load temp add-on: ${JSON.stringify(status.lines)}`);
-        assert.ok(status.lines.some((l) => l.includes("auto-connects") && l.includes("/pi-browser status")), `step 3 proceed: ${JSON.stringify(status.lines)}`);
-        // A fresh add-on heartbeat flips status to connected.
+        // A fresh Firefox add-on heartbeat flips status to connected.
         const hbDir = path.join(home, ".pi-browser");
         await mkdir(hbDir, { recursive: true });
         await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now(), client: "pi-browser-firefox", version: "0.1.0", pid: 1 }));
         status = await runCommand("status", ctx);
         assert.ok(status.lines.some((l) => l.startsWith("add-on: detected")), `fresh heartbeat -> detected: ${JSON.stringify(status.lines)}`);
         assert.ok(status.lines.some((l) => l.includes("OK (host + add-on connected)")));
+        // A Thunderbird heartbeat is also recognized (same host, second app).
+        await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now(), client: "pi-thunderbird", version: "0.1.0", pid: 2 }));
+        status = await runCommand("status", ctx);
+        assert.ok(status.lines.some((l) => l.startsWith("add-on: detected") && l.includes("pi-thunderbird")), `thunderbird heartbeat -> detected: ${JSON.stringify(status.lines)}`);
         // A stale heartbeat is reported as stale (add-on disconnected/reloading).
         await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now() - 10 * 60_000, client: "pi-browser-firefox", pid: 1 }));
         status = await runCommand("status", ctx);
@@ -187,7 +267,7 @@ test("status reports add-on auto-detection via heartbeat (missing / fresh / stal
     }
 });
 test("install fails clearly when the host build is missing", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "pi-browser-nobuild-"));
+    const root = await mkdtemp(path.join(tmpdir(), "pi-agent-nobuild-"));
     try {
         const pkgRoot = await makePkg(root);
         await rm(path.join(pkgRoot, "dist"), { recursive: true, force: true });

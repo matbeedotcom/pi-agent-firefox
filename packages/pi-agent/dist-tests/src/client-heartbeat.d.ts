@@ -1,5 +1,12 @@
-/** Client name the Firefox add-on sends in ACP initialize (acp-client.ts). */
+/**
+ * Client names the add-ons send in ACP `initialize` (acp-client.ts).
+ * The host records a heartbeat for any recognized client so the installer
+ * can report per-app add-on presence (plan §23: both apps share the host).
+ */
+export declare const ADDON_CLIENT_NAMES: readonly string[];
+/** Legacy single-client constant (kept for tests/references). */
 export declare const ADDON_CLIENT_NAME = "pi-browser-firefox";
+export declare function isKnownAddonClient(name: string | undefined): name is string;
 /** A heartbeat younger than this counts as "add-on connected" (3x the 10s ping). */
 export declare const ADDON_HEARTBEAT_FRESH_MS = 90000;
 export interface ClientHeartbeat {

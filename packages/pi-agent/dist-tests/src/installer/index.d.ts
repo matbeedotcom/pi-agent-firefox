@@ -1,7 +1,9 @@
 import { PI_BROWSER_META } from "@pi-browser/protocol";
-import type { ExecFn, InstallerEnv } from "./common.js";
+import { type AgentApp, type ExecFn, type InstallerEnv, type InstallAppTarget } from "./common.js";
 import { type InstallTargets } from "./platforms.js";
 export type InstallerCommand = "install" | "status" | "doctor" | "uninstall";
+/** Expand a CLI target (firefox | thunderbird | mozilla) to app list. */
+export declare function expandAppTarget(target: InstallAppTarget | undefined): AgentApp[];
 export type PlatformName = NodeJS.Platform | "linux" | "macos" | "windows";
 export declare function normalizePlatform(p: PlatformName): "linux" | "darwin" | "win32";
 export interface InstallerContext {
@@ -17,6 +19,8 @@ export interface InstallerContext {
     log?: (line: string) => void;
     /** Override the built host entrypoint (defaults to <pkgRoot>/dist/native-host/main.js). */
     mainJs?: string;
+    /** Applications to target: firefox | thunderbird | mozilla (both, default). */
+    apps?: InstallAppTarget;
 }
 export interface CommandResult {
     ok: boolean;

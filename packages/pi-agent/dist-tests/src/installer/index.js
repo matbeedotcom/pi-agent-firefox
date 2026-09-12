@@ -6,9 +6,16 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PI_BROWSER, PI_BROWSER_META } from "@pi-browser/protocol";
+import { PI_AGENT, PI_BROWSER_META } from "@pi-browser/protocol";
 import { ADDON_HEARTBEAT_FRESH_MS, readClientHeartbeat } from "../client-heartbeat.js";
+import { addonLoadHint } from "./common.js";
 import { detectTargets, defaultExec, installHost, statusHost, uninstallHost, } from "./platforms.js";
+/** Expand a CLI target (firefox | thunderbird | mozilla) to app list. */
+export function expandAppTarget(target) {
+    if (target === undefined || target === "mozilla")
+        return ["firefox", "thunderbird"];
+    return [target];
+}
 export function normalizePlatform(p) {
     if (p === "macos")
         return "darwin";
@@ -40,15 +47,19 @@ export function buildEnv(ctx = {}) {
  * when the add-on connects and on every keepalive ping; a fresh heartbeat
  * means the add-on is loaded and connected.
  */
-function addonLines(homeDir) {
+function addonLines(homeDir, apps) {
     const hb = readClientHeartbeat(homeDir);
+    const buildSteps = apps
+        .map((a) => (a === "firefox" ? "npm run build -w @pi-browser/firefox  →  firefox/dist/" : "npm run build -w @pi-browser/thunderbird  →  thunderbird/dist/"))
+        .join(";");
+    const loadSteps = apps.map((a, i) => `  ${i + 1}. ${a === "firefox" ? "Firefox" : "Thunderbird"}: ${a === "firefox" ? "about:debugging#aboutThisFirefoxBrowser" : "about:debugging#aboutThisThunderbird"} → “Load Temporary Add-on…” → pick ${a}/dist/manifest.json`).join("\n");
     if (!hb) {
         return {
             lines: [
                 "add-on: not detected — to finish setup:",
-                "  1. build the add-on (from source): npm run build -w @pi-browser/firefox  →  firefox/dist/",
-                "  2. Firefox → about:debugging#aboutThisFirefoxBrowser → “Load Temporary Add-on…” → pick firefox/dist/manifest.json (id " + PI_BROWSER.extensionId + ")",
-                "  3. wait ~10s — the add-on auto-connects (no reload needed); run /pi-browser status again",
+                `  1. build the add-on(s) (from source): ${buildSteps}`,
+                loadSteps,
+                "  3. wait ~10s — the add-on auto-connects (no reload needed); run /pi-agent status again",
             ],
             detected: false,
             fresh: false,
@@ -56,7 +67,7 @@ function addonLines(homeDir) {
     }
     const ageS = Math.round(hb.ageMs / 1000);
     if (hb.ageMs <= ADDON_HEARTBEAT_FRESH_MS) {
-        return { lines: [`add-on: detected (heartbeat ${ageS}s ago)`], detected: true, fresh: true };
+        return { lines: [`add-on: detected (${hb.client ?? "client"}, heartbeat ${ageS}s ago)`], detected: true, fresh: true };
     }
     return {
         lines: [`add-on: last heartbeat ${ageS}s ago (stale — the add-on may be disconnected or awaiting reload)`],
@@ -72,48 +83,50 @@ export async function runCommand(command, ctx = {}) {
         ctx.log?.(l);
     };
     note(`platform: ${env.platform} (targets: ${targets.id})`);
+    const apps = expandAppTarget(ctx.apps);
+    note(`apps: ${apps.join(", ")}`);
     switch (command) {
         case "install": {
             if (!existsSync(mainJs)) {
                 throw new Error(`host entrypoint missing: ${mainJs} (run the package build first)`);
             }
-            const report = await installHost({ env, pkgRoot, mainJs }, targets);
+            const report = await installHost({ env, pkgRoot, mainJs, apps }, targets);
             for (const l of report.lines)
                 note(l);
-            note(`installed ${PI_BROWSER.nativeHost} (integration v${PI_BROWSER_META.version}, protocol v${PI_BROWSER_META.protocolVersion})`);
-            note("next: load the Firefox add-on (firefox/dist/manifest.json, id " + PI_BROWSER.extensionId + ")");
-            note("  Firefox → about:debugging#aboutThisFirefoxBrowser → “Load Temporary Add-on…” → pick firefox/dist/manifest.json");
+            note(`installed ${PI_AGENT.nativeHost} (integration v${PI_BROWSER_META.version}, protocol v${PI_BROWSER_META.protocolVersion})`);
+            for (const app of apps)
+                note(`next: ${addonLoadHint(app)}`);
             note("if the add-on is already loaded, no reload is needed — it auto-detects the host within ~10s");
             return { ok: true, lines };
         }
         case "status": {
-            const report = await statusHost(env, pkgRoot, targets);
+            const report = await statusHost(env, pkgRoot, targets, apps);
             for (const l of report.lines)
                 note(l);
             if (report.installed) {
-                const addon = addonLines(env.homeDir);
+                const addon = addonLines(env.homeDir, apps);
                 for (const l of addon.lines)
                     note(l);
                 if (addon.fresh)
                     note("status: OK (host + add-on connected)");
                 else
-                    note(addon.detected ? "status: HOST OK — add-on heartbeat stale (reload the add-on or check Firefox)" : "status: HOST OK — add-on not detected yet (see steps above)");
+                    note(addon.detected ? "status: HOST OK — add-on heartbeat stale (reload the add-on or check the app)" : "status: HOST OK — add-on not detected yet (see steps above)");
             }
             else {
                 for (const issue of report.issues)
                     note(`issue: ${issue}`);
-                note("status: PROBLEMS FOUND (run /pi-browser install to repair)");
+                note(`status: PROBLEMS FOUND (run /pi-agent install ${apps.length === 2 ? "mozilla" : apps[0]} to repair)`);
             }
             return { ok: report.installed, lines };
         }
         case "doctor": {
-            const status = await statusHost(env, pkgRoot, targets);
+            const status = await statusHost(env, pkgRoot, targets, apps);
             for (const l of status.lines)
                 note(l);
             if (!status.installed) {
                 for (const issue of status.issues)
                     note(`issue: ${issue}`);
-                note("doctor: NOT INSTALLED — run /pi-browser install");
+                note(`doctor: NOT INSTALLED — run /pi-agent install ${apps.length === 2 ? "mozilla" : apps[0]}`);
                 return { ok: false, lines };
             }
             const probe = await probeHost(env, status);
@@ -123,20 +136,20 @@ export async function runCommand(command, ctx = {}) {
                 note("doctor: HOST PROBE FAILED");
                 return { ok: false, lines };
             }
-            const addon = addonLines(env.homeDir);
+            const addon = addonLines(env.homeDir, apps);
             for (const l of addon.lines)
                 note(l);
             if (addon.fresh)
                 note("doctor: OK (host + add-on connected)");
             else
-                note(addon.detected ? "doctor: HOST OK — add-on heartbeat stale (reload the add-on or check Firefox)" : "doctor: HOST OK — next: load the add-on (see steps above; it auto-connects within ~10s)");
+                note(addon.detected ? "doctor: HOST OK — add-on heartbeat stale (reload the add-on or check the app)" : "doctor: HOST OK — next: load the add-on (see steps above; it auto-connects within ~10s)");
             return { ok: true, lines };
         }
         case "uninstall": {
-            const removed = await uninstallHost(env, pkgRoot, targets);
+            const removed = await uninstallHost(env, pkgRoot, targets, apps);
             for (const l of removed)
                 note(l);
-            note(`uninstalled ${PI_BROWSER.nativeHost} (package files kept; pi remove to drop the package)`);
+            note(`uninstalled ${PI_AGENT.nativeHost} (package files kept; pi remove to drop the package)`);
             return { ok: true, lines };
         }
         default:

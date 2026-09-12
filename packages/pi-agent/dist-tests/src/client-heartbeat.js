@@ -18,8 +18,21 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-/** Client name the Firefox add-on sends in ACP initialize (acp-client.ts). */
+/**
+ * Client names the add-ons send in ACP `initialize` (acp-client.ts).
+ * The host records a heartbeat for any recognized client so the installer
+ * can report per-app add-on presence (plan §23: both apps share the host).
+ */
+export const ADDON_CLIENT_NAMES = [
+    "pi-browser-firefox",
+    "pi-firefox",
+    "pi-thunderbird",
+];
+/** Legacy single-client constant (kept for tests/references). */
 export const ADDON_CLIENT_NAME = "pi-browser-firefox";
+export function isKnownAddonClient(name) {
+    return typeof name === "string" && ADDON_CLIENT_NAMES.includes(name);
+}
 /** A heartbeat younger than this counts as "add-on connected" (3x the 10s ping). */
 export const ADDON_HEARTBEAT_FRESH_MS = 90_000;
 /** Heartbeat file location (env override for tests; default under $HOME). */
@@ -35,7 +48,7 @@ export function heartbeatPath() {
  */
 export function touchClientHeartbeat(clientName, clientVersion) {
     try {
-        if (clientName !== ADDON_CLIENT_NAME)
+        if (!isKnownAddonClient(clientName))
             return;
         const file = heartbeatPath();
         mkdirSync(path.dirname(file), { recursive: true });
@@ -58,7 +71,7 @@ export function readClientHeartbeat(homeDir) {
         if (!existsSync(file))
             return undefined;
         const raw = JSON.parse(readFileSync(file, "utf8"));
-        if (typeof raw.ts !== "number" || raw.client !== ADDON_CLIENT_NAME)
+        if (typeof raw.ts !== "number" || !isKnownAddonClient(raw.client))
             return undefined;
         return { ...raw, ageMs: Date.now() - raw.ts };
     }
