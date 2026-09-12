@@ -225,7 +225,9 @@ contentType}`; the dispatcher decodes base64 → bytes → a real `File` and cal
 `messages.update(id, {read})`; tags → additive by default (reads current tags via
 `messages.get`, unions, then `messages.update(id, {tags})`; `additive:false` replaces);
 archive → `messages.archive(ids)`; move → `messages.move(ids, folderId)`. Gated on the new
-`mailModify` capability; permissions `messagesUpdate` + `messagesMove` + `messagesTags`.
+`mailModify` capability; permissions `messagesUpdate` + `messagesMove` + `messagesTags` (create/update tags)
++ `messagesTagsList` (list/get tags — a distinct read permission; without it `browser.messages.tags.list`
+is undefined and tag set/search can't resolve names to keys).
 **No deletion:** `messages.delete` / `deleteAttachments` / `messagesModifyPermanent` are never
 called and never declared.
 
@@ -255,7 +257,7 @@ organization / org / company) and falls back to the raw `properties` when nothin
   registers 23 tools (11 mail + 6 compose + 4 mutation + 2 contacts) with **no delete tool**.
 - **Built xpi:** `/tmp/pi-thunderbird-t46.xpi` — manifest permissions are exactly
   `nativeMessaging storage accountsRead messagesRead compose messagesUpdate messagesMove
-  messagesTags addressBooks tabs`; grep confirms **zero** `compose.sendMessage`/`saveMessage`,
+  messagesTags messagesTagsList addressBooks tabs`; grep confirms **zero** `compose.sendMessage`/`saveMessage`,
   `messages.delete(`, `deleteAttachments`, `messagesModifyPermanent`, and **none of**
   `messagesDelete`/`messagesImport`/`sensitiveDataUpload`/`compose.send`/`compose.save` declared.
 - **Live verify (pending, user):** read a real attachment; “attach /tmp/x.pdf to the draft”;
@@ -290,12 +292,12 @@ initialize → capabilities + `mcpCapabilities.acp` → `session/new` → `sessi
 | **T2** 10 read-only mail tools; “Summarize this email” on a real selected message, no copy/paste | ✅ | `mail-dispatcher.test.ts` (19); live-confirmed (T2 section) |
 | **T3** compose tools; “Draft a reply saying Thursday works.” opens populated compose; user sends; no send anywhere | ✅ | `compose-dispatcher.test.ts` (incl. no-send guard); 3-layer no-send (tool/code/permission); live-confirmed (T3 section) |
 | **Draft attachments:** `compose_add_attachment` attaches a file; read-side `mail_list/get_attachment` | ✅ impl+unit · live pending | `compose-dispatcher.test.ts` (base64→`File`, `addAttachment`); read-side unit tests (T2) |
-| **T4** mail organization: mark read / tags (set + **list + search/filter + read-back**) / archive / move (selected only); **no deletion** | ✅ impl+unit · live pending | `mutation-dispatcher.test.ts` (8, incl. no-delete guard) + `mail-dispatcher.test.ts` tag tests; `mailModify` cap + `messagesUpdate`/`messagesMove`/`messagesTags` |
+| **T4** mail organization: mark read / tags (set + **list + search/filter + read-back**) / archive / move (selected only); **no deletion** | ✅ impl+unit · live pending | `mutation-dispatcher.test.ts` (8, incl. no-delete guard) + `mail-dispatcher.test.ts` tag tests; `mailModify` cap + `messagesUpdate`/`messagesMove`/`messagesTags`/`messagesTagsList` |
 | **T6** contacts: `contacts_search`/`contacts_get` (read-only, `addressBooks`) | ✅ impl+unit · live pending | `contacts-dispatcher.test.ts` (7, incl. no-mutation guard); defensive vCard normalization + raw fallback |
 | **T7** calendar — deferred (no stable WebExtension calendar API in 155) | ⏸ | plan §42: do not depend on an Experiment; revisit when a stable API exists |
 | Untrusted email = tool output only, never merged into the user prompt (§31–32) | ✅ | dispatcher returns normalized refs; body only via explicit `mail_get_message_body`; no prompt merging |
 | Durable id = `headerMessageId` (not numeric `messageId`) (§7) | ✅ | `MailMessageRef` dual-id; `mail-dispatcher.test.ts` durability rule |
-| Permissions: read (`nativeMessaging`,`accountsRead`,`messagesRead`,`compose`) + T4 (`messagesUpdate`,`messagesMove`,`messagesTags`) + T6 (`addressBooks`) — **no** `compose.send`/`messagesDelete`/`messagesImport`/`sensitiveDataUpload` | ✅ | `manifest.json` = exactly that set; built `background.js` has zero `sendMessage`/`saveMessage`/`messages.delete`/`deleteAttachments` |
+| Permissions: read (`nativeMessaging`,`accountsRead`,`messagesRead`,`compose`) + T4 (`messagesUpdate`,`messagesMove`,`messagesTags`,`messagesTagsList`) + T6 (`addressBooks`) — **no** `compose.send`/`messagesDelete`/`messagesImport`/`sensitiveDataUpload` | ✅ | `manifest.json` = exactly that set; built `background.js` has zero `sendMessage`/`saveMessage`/`messages.delete`/`deleteAttachments` |
 | **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 15 green in the 153/153 run |
 | `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **153/153** |
 

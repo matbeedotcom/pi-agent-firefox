@@ -15,6 +15,7 @@
     "messagesUpdate",
     "messagesMove",
     "messagesTags",
+    "messagesTagsList",
     "addressBooks",
     "tabs"
   ],
