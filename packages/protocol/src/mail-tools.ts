@@ -215,6 +215,8 @@ export interface MailMessageRef {
   date?: string;
   read?: boolean;
   flagged?: boolean;
+  /** Applied tag names (omitted when none). */
+  tags?: string[];
   size?: number;
   /** Human-friendly folder name. */
   folder?: string;

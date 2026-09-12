@@ -26,6 +26,7 @@ interface MsgHeader {
   date?: string | number;
   read?: boolean;
   flagged?: boolean;
+  tags?: string[];
   size?: number;
   folder?: { id?: string; name?: string };
 }
@@ -204,12 +205,14 @@ test("mail_get_selected_messages: no mail tab -> MAIL_NO_CONTEXT", async () => {
 // ---------------------------------------------------------------------------
 
 test("mail_get_message: returns normalized metadata", async () => {
-  store.headers[9] = { id: 9, headerMessageId: "<9@x>", subject: "S", author: "A <a@x>", date: 1700000000000, read: true };
+  store.headers[9] = { id: 9, headerMessageId: "<9@x>", subject: "S", author: "A <a@x>", date: 1700000000000, read: true, tags: ["finance", "work"] };
   const res = await call("mail_get_message", { messageId: 9 });
   assert.equal(res.messageId, 9);
   assert.equal(res.headerMessageId, "<9@x>");
   assert.equal(res.subject, "S");
   assert.equal(res.read, true);
+  // tags are exposed for read-back (T4 verification)
+  assert.deepEqual(res.tags, ["finance", "work"]);
   // numeric date normalized to ISO
   assert.match(String(res.date), /^\d{4}-\d{2}-\d{2}T/);
 });

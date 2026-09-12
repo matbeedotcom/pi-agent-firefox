@@ -101,6 +101,7 @@ function normalizeHeader(h: browser.mailTypes.MessageHeader): MailMessageRef {
   if (date) ref.date = date;
   if (typeof h.read === "boolean") ref.read = h.read;
   if (typeof h.flagged === "boolean") ref.flagged = h.flagged;
+  if (h.tags && h.tags.length) ref.tags = h.tags;
   if (typeof h.size === "number") ref.size = h.size;
   if (h.folder?.name) ref.folder = h.folder.name;
   if (h.folder?.id) ref.folderId = h.folder.id;
