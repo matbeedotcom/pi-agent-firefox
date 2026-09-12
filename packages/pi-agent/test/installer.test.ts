@@ -28,7 +28,7 @@ async function makePkg(root: string): Promise<string> {
   const pkgRoot = path.join(root, "pkg");
   await mkdir(path.join(pkgRoot, "dist", "native-host"), { recursive: true });
   await writeFile(path.join(pkgRoot, "dist", "native-host", "main.js"), "console.log('host');\n");
-  await writeFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "@pi-browser/agent", version: "0.1.0" }));
+  await writeFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "@pi-browser/agent", version: "0.1.1" }));
   return pkgRoot;
 }
 
@@ -284,13 +284,13 @@ test("status reports add-on auto-detection via heartbeat (missing / fresh / stal
     // A fresh Firefox add-on heartbeat flips status to connected.
     const hbDir = path.join(home, ".pi-browser");
     await mkdir(hbDir, { recursive: true });
-    await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now(), client: "pi-browser-firefox", version: "0.1.0", pid: 1 }));
+    await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now(), client: "pi-browser-firefox", version: "0.1.1", pid: 1 }));
     status = await runCommand("status", ctx);
     assert.ok(status.lines.some((l) => l.startsWith("add-on: detected")), `fresh heartbeat -> detected: ${JSON.stringify(status.lines)}`);
     assert.ok(status.lines.some((l) => l.includes("OK (host + add-on connected)")));
 
     // A Thunderbird heartbeat is also recognized (same host, second app).
-    await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now(), client: "pi-thunderbird", version: "0.1.0", pid: 2 }));
+    await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now(), client: "pi-thunderbird", version: "0.1.1", pid: 2 }));
     status = await runCommand("status", ctx);
     assert.ok(status.lines.some((l) => l.startsWith("add-on: detected") && l.includes("pi-thunderbird")), `thunderbird heartbeat -> detected: ${JSON.stringify(status.lines)}`);
 

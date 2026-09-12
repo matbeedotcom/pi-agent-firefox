@@ -458,11 +458,11 @@ async function initialize(host) {
   return host.request(AGENT_METHODS.initialize, {
     protocolVersion: 1,
     clientCapabilities: { loadSession: true },
-    clientInfo: { name: "pi-browser-firefox", version: "0.1.0" },
+    clientInfo: { name: "pi-browser-firefox", version: "0.1.1" },
     _meta: {
       piAgent: {
         type: "pi.agent.hello",
-        client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.0" },
+        client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.1" },
         capabilities: ["browser"],
       },
     },
@@ -482,7 +482,7 @@ test("auto-detection: host writes the add-on heartbeat only for the add-on ident
     await host.request(AGENT_METHODS.initialize, {
       protocolVersion: 1,
       clientCapabilities: {},
-      clientInfo: { name: "fake-firefox", version: "0.1.0" },
+      clientInfo: { name: "fake-firefox", version: "0.1.1" },
     });
     assert.equal(existsSync(hbFile), false, "no heartbeat for a non-add-on client");
 
@@ -491,12 +491,12 @@ test("auto-detection: host writes the add-on heartbeat only for the add-on ident
     await host.request(AGENT_METHODS.initialize, {
       protocolVersion: 1,
       clientCapabilities: {},
-      clientInfo: { name: "pi-browser-firefox", version: "0.1.0" },
+      clientInfo: { name: "pi-browser-firefox", version: "0.1.1" },
     });
     assert.ok(existsSync(hbFile), "heartbeat written for the add-on client");
     const hb = JSON.parse(readFileSync(hbFile, "utf8"));
     assert.equal(hb.client, "pi-browser-firefox");
-    assert.equal(hb.version, "0.1.0");
+    assert.equal(hb.version, "0.1.1");
     assert.ok(hb.ts <= Date.now());
 
     // The keepalive ping refreshes it.
@@ -1164,11 +1164,11 @@ async function initializeThunderbird(host) {
   return host.request(AGENT_METHODS.initialize, {
     protocolVersion: 1,
     clientCapabilities: { loadSession: true },
-    clientInfo: { name: "pi-thunderbird", version: "0.1.0" },
+    clientInfo: { name: "pi-thunderbird", version: "0.1.1" },
     _meta: {
       piAgent: {
         type: "pi.agent.hello",
-        client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.0" },
+        client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
         // T1: pure chat interface — no tools (plan §28: mail/compose arrive later).
         capabilities: [],
       },

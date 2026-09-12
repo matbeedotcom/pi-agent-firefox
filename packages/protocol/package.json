@@ -1,6 +1,6 @@
 {
   "name": "@pi-browser/protocol",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Shared protocol types for Pi Browser: ACP surface, integration metadata, browser tool schemas, structured errors",

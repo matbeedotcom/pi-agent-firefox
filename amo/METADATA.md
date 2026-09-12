@@ -1,13 +1,13 @@
 # AMO submission — metadata & review notes
 
-**Add-on:** Pi Browser · **ID:** `pi-agent-firefox@matbee.com` · **Version:** 0.1.0
-**Zip:** `amo/pi-browser-0.1.0.zip` (build: `sh amo/make-zip.sh`)
-**Source zip:** `amo/pi-browser-0.1.0-source.zip` (build: `git archive --format=zip --prefix=pi-agent-firefox/ -o amo/pi-browser-0.1.0-source.zip HEAD`) — pure TypeScript/shell source, no transpiled or machine-generated files. Build instructions: README "Building from source" + `build.sh`.
+**Add-on:** Pi Browser · **ID:** `pi-agent-firefox@matbee.com` · **Version:** 0.1.1
+**Zip:** `amo/pi-browser-0.1.1.zip` (build: `sh amo/make-zip.sh`)
+**Source zip:** `amo/pi-browser-0.1.1-source.zip` (build: `git archive --format=zip --prefix=pi-agent-firefox/ -o amo/pi-browser-0.1.1-source.zip HEAD`) — pure TypeScript/shell source, no transpiled or machine-generated files. Build instructions: README "Building from source" + `build.sh`.
 
 ## Form fields
 
 - **Name:** Pi Browser
-- **Version:** 0.1.0
+- **Version:** 0.1.1
 - **Summary (≤60 chars):** Pi Coding Agent sidebar for Firefox — chat, sessions, tab control
 - **Description (first paragraph, ~600 chars):**
   Pi Browser connects Firefox to the Pi coding agent through a local Native

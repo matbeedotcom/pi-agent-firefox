@@ -1,6 +1,6 @@
 {
   "name": "@pi-browser/thunderbird",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Pi Thunderbird add-on: Pi Space chat + mail tools over Native Messaging",
@@ -10,8 +10,8 @@
     "test": "echo \"thunderbird: no unit tests yet (e2e in tests/)\" && exit 0"
   },
   "dependencies": {
-    "@pi-browser/protocol": "0.1.0",
-    "@pi-browser/webext": "0.1.0"
+    "@pi-browser/protocol": "0.1.1",
+    "@pi-browser/webext": "0.1.1"
   },
   "devDependencies": {
     "@types/firefox-webext-browser": "^143.0.0",

@@ -178,9 +178,9 @@ test("agent identity: host name + authorized extensions", () => {
 test("agent hello: parseAgentHello accepts firefox and thunderbird clients", () => {
   const firefoxParams = {
     protocolVersion: 1,
-    clientInfo: { name: "pi-browser-firefox", version: "0.1.0" },
+    clientInfo: { name: "pi-browser-firefox", version: "0.1.1" },
     _meta: buildAgentHelloMeta({
-      client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.0" },
+      client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.1" },
       capabilities: ["browser"],
     }),
   };
@@ -193,7 +193,7 @@ test("agent hello: parseAgentHello accepts firefox and thunderbird clients", () 
   const tbParams = {
     protocolVersion: 1,
     _meta: buildAgentHelloMeta({
-      client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.0" },
+      client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
       capabilities: ["mail", "compose", "attachments", "bogus", "mail"] as unknown as AgentCapability[],
     }),
   };

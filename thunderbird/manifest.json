@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Pi Thunderbird",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pi Agent space for Thunderbird: multi-session ACP chat with mail tools over Native Messaging",
   "permissions": [
     "nativeMessaging",

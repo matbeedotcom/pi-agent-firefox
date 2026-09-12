@@ -105,7 +105,7 @@ const stub: {
       }
       return port;
     },
-    getManifest: () => ({ version: "0.1.0" }),
+    getManifest: () => ({ version: "0.1.1" }),
   },
 };
 

@@ -74,7 +74,7 @@ try {
   console.log("INIT capabilities:", JSON.stringify(init.result?.agentCapabilities));
   console.log("INIT _meta:", JSON.stringify(init.result?._meta));
   if (init.result?.agentCapabilities?.mcpCapabilities?.acp !== true) throw new Error("mcpCapabilities.acp missing");
-  if (init.result?._meta?.piBrowser?.version !== "0.1.0") throw new Error("piBrowser meta missing");
+  if (init.result?._meta?.piBrowser?.version !== "0.1.1") throw new Error("piBrowser meta missing");
 
   // Wrong protocol version must be rejected with a structured code.
   const bad = await request("initialize", { protocolVersion: 42 }).catch((e) => e);

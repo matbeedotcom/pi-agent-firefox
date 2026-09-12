@@ -41,11 +41,11 @@ test("touch writes a heartbeat for the add-on client only", () => {
     assert.equal(existsSync(file), false, "non-add-on client must not write");
     touchClientHeartbeat(undefined);
     assert.equal(existsSync(file), false, "unknown client must not write");
-    touchClientHeartbeat(ADDON_CLIENT_NAME, "0.1.0");
+    touchClientHeartbeat(ADDON_CLIENT_NAME, "0.1.1");
     assert.ok(existsSync(file), "add-on client writes the heartbeat");
     const raw = JSON.parse(readFileSync(file, "utf8")) as { ts: number; client: string; version?: string; pid: number };
     assert.equal(raw.client, ADDON_CLIENT_NAME);
-    assert.equal(raw.version, "0.1.0");
+    assert.equal(raw.version, "0.1.1");
     assert.ok(typeof raw.ts === "number" && raw.ts <= Date.now());
     assert.ok(raw.pid > 0);
   });
@@ -53,7 +53,7 @@ test("touch writes a heartbeat for the add-on client only", () => {
 
 test("read: fresh heartbeat has a small ageMs", () => {
   withHeartbeatPath(file, () => {
-    touchClientHeartbeat(ADDON_CLIENT_NAME, "0.1.0");
+    touchClientHeartbeat(ADDON_CLIENT_NAME, "0.1.1");
     const hb = readClientHeartbeat(os.homedir());
     assert.ok(hb, "reads the heartbeat written by touch");
     assert.equal(hb.client, ADDON_CLIENT_NAME);
@@ -88,6 +88,6 @@ test("touch never throws (best-effort, uncreatable target path)", () => {
   const blocker = path.join(tmp, "blocker");
   writeFileSync(blocker, "i am a file");
   withHeartbeatPath(path.join(blocker, "sub", "hb.json"), () => {
-    assert.doesNotThrow(() => touchClientHeartbeat(ADDON_CLIENT_NAME, "0.1.0"));
+    assert.doesNotThrow(() => touchClientHeartbeat(ADDON_CLIENT_NAME, "0.1.1"));
   });
 });

@@ -171,7 +171,7 @@ function setupMcpFirefox() {
           a.transport.respond(id, {
             protocolVersion: p.params?.protocolVersion,
             capabilities: { tools: {} },
-            serverInfo: { name: "pi-browser-firefox", version: "0.1.0" },
+            serverInfo: { name: "pi-browser-firefox", version: "0.1.1" },
           });
           return;
         case "notifications/initialized":
