@@ -10,6 +10,14 @@
     "storage",
     "tabs"
   ],
+  "data_collection_permissions": {
+    "data_types": [],
+    "data_types_identifiable": [],
+    "data_usage": [],
+    "third_party": [],
+    "third_party_sharing": [],
+    "third_party_sharing_identifiable": []
+  },
   "host_permissions": [
     "<all_urls>"
   ],

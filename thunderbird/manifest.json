@@ -7,6 +7,14 @@
     "nativeMessaging",
     "storage"
   ],
+  "data_collection_permissions": {
+    "data_types": [],
+    "data_types_identifiable": [],
+    "data_usage": [],
+    "third_party": [],
+    "third_party_sharing": [],
+    "third_party_sharing_identifiable": []
+  },
   "background": {
     "scripts": ["background.js"]
   },
