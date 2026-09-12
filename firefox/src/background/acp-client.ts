@@ -9,9 +9,11 @@
 import {
   AGENT_METHODS,
   CLIENT_METHODS,
+  PI_AGENT,
   PI_BROWSER,
   PROTOCOL_VERSION,
   X_PI_BROWSER,
+  buildAgentHelloMeta,
   codeFromErrorObject,
   toErrorObject,
   type BrowserNotifyParams,
@@ -111,7 +113,7 @@ export class AcpClient {
     this.connecting = true;
     let port: browser.runtime.Port;
     try {
-      port = browser.runtime.connectNative(PI_BROWSER.nativeHost);
+      port = browser.runtime.connectNative(PI_AGENT.nativeHost);
     } catch (err) {
       this.connecting = false;
       this.failConnection("not_installed", err instanceof Error ? err.message : String(err));
@@ -294,6 +296,20 @@ export class AcpClient {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {},
       clientInfo: { name: "pi-browser-firefox", version: browser.runtime.getManifest().version },
+      // pi.agent.hello: declare application + capabilities (THUNDERBIRD-PLAN.md §24).
+      _meta: buildAgentHelloMeta({
+        client: {
+          application: "firefox",
+          // runtime.id is the resolved add-on ID (temporary installs get a
+          // generated ID); fall back to the declared gecko.id.
+          extensionId:
+            browser.runtime.id ??
+            (browser.runtime.getManifest().browser_specific_settings?.gecko?.id as string | undefined) ??
+            PI_BROWSER.extensionId,
+          version: browser.runtime.getManifest().version,
+        },
+        capabilities: ["browser"],
+      }),
     }, INITIALIZE_TIMEOUT_MS);
     if (res.protocolVersion !== PROTOCOL_VERSION) {
       throw new PiBrowserProtocolError(

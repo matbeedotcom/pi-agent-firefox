@@ -453,10 +453,19 @@ function structuredCode(err) {
 }
 
 async function initialize(host) {
+  // Mirror the real Firefox add-on: declare the pi.agent.hello so the host
+  // registers browser tools via the capability handshake (plan §24).
   return host.request(AGENT_METHODS.initialize, {
     protocolVersion: 1,
     clientCapabilities: { loadSession: true },
-    clientInfo: { name: "fake-firefox", version: "0.1.0" },
+    clientInfo: { name: "pi-browser-firefox", version: "0.1.0" },
+    _meta: {
+      piAgent: {
+        type: "pi.agent.hello",
+        client: { application: "firefox", extensionId: "pi-browser@pi.dev", version: "0.1.0" },
+        capabilities: ["browser"],
+      },
+    },
   });
 }
 
@@ -510,6 +519,13 @@ test("initialize: capabilities + piBrowser metadata; version mismatch is structu
     assert.ok(meta, "piBrowser metadata present");
     assert.equal(meta.protocolVersion, PI_BROWSER_META.protocolVersion);
     assert.equal(meta.browserToolVersion, PI_BROWSER_META.browserToolVersion);
+
+    // The host echoes the pi.agent.hello it accepted (plan §24): the fake
+    // Firefox above declared application=firefox, capabilities=[browser].
+    const agentMeta = res._meta?.piAgent;
+    assert.ok(agentMeta, "piAgent metadata present");
+    assert.equal(agentMeta.application, "firefox");
+    assert.deepEqual(agentMeta.capabilities, ["browser"]);
 
     const bad = spawnHost();
     try {

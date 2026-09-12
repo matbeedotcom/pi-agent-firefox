@@ -6,7 +6,7 @@
  * outgoing requests, incoming session/update notifications, and incoming
  * host requests (x-pi-browser/tool, mcp/*) routed to registered handlers.
  */
-import { AGENT_METHODS, CLIENT_METHODS, PI_BROWSER, PROTOCOL_VERSION, X_PI_BROWSER, codeFromErrorObject, toErrorObject, } from "@pi-browser/protocol";
+import { AGENT_METHODS, CLIENT_METHODS, PI_AGENT, PI_BROWSER, PROTOCOL_VERSION, X_PI_BROWSER, buildAgentHelloMeta, codeFromErrorObject, toErrorObject, } from "@pi-browser/protocol";
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const INITIALIZE_TIMEOUT_MS = 20_000;
@@ -60,7 +60,7 @@ export class AcpClient {
         this.connecting = true;
         let port;
         try {
-            port = browser.runtime.connectNative(PI_BROWSER.nativeHost);
+            port = browser.runtime.connectNative(PI_AGENT.nativeHost);
         }
         catch (err) {
             this.connecting = false;
@@ -253,6 +253,19 @@ export class AcpClient {
             protocolVersion: PROTOCOL_VERSION,
             clientCapabilities: {},
             clientInfo: { name: "pi-browser-firefox", version: browser.runtime.getManifest().version },
+            // pi.agent.hello: declare application + capabilities (THUNDERBIRD-PLAN.md §24).
+            _meta: buildAgentHelloMeta({
+                client: {
+                    application: "firefox",
+                    // runtime.id is the resolved add-on ID (temporary installs get a
+                    // generated ID); fall back to the declared gecko.id.
+                    extensionId: browser.runtime.id ??
+                        browser.runtime.getManifest().browser_specific_settings?.gecko?.id ??
+                        PI_BROWSER.extensionId,
+                    version: browser.runtime.getManifest().version,
+                },
+                capabilities: ["browser"],
+            }),
         }, INITIALIZE_TIMEOUT_MS);
         if (res.protocolVersion !== PROTOCOL_VERSION) {
             throw new PiBrowserProtocolError(PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH, `agent speaks ACP ${res.protocolVersion}, add-on supports ${PROTOCOL_VERSION}`);
