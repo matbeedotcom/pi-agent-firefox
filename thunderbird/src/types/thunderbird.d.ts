@@ -214,6 +214,42 @@ declare namespace browser.messages {
   function continueList(messageListId: string): Promise<browser.mailTypes.MessageList>;
   /** Abort a paginated message list. */
   function abortList(messageListId: string): Promise<void>;
+  /** Mutable properties that can be set via update() (T4). */
+  interface MessageProperties {
+    read?: boolean;
+    flagged?: boolean;
+    /** Tag names to set on the message. */
+    tags?: string[];
+    [key: string]: unknown;
+  }
+  /** Update mutable properties of one message (messagesUpdate). */
+  function update(messageId: number, newProperties: MessageProperties): Promise<void>;
+  /** Move messages to a folder by id (messagesMove). */
+  function move(messageIds: number[], folderId: string, options?: Record<string, unknown>): Promise<void>;
+  /** Archive messages to the account's Archive folder (messagesMove). Reversible. */
+  function archive(messageIds: number[]): Promise<void>;
+}
+
+/** browser.contacts — address book (T6, addressBooks permission). Read-only here (no create/update/delete). */
+declare namespace browser.contacts {
+  interface Contact {
+    /** The durable contact id (cardKey). */
+    id: string;
+    cardKey?: string;
+    /** vCard-style flat properties (firstName, lastName, displayName, email/emailAddresses, organization, tel, ...). */
+    properties?: Record<string, unknown>;
+    vCard?: string;
+  }
+  interface QueryInfo {
+    searchString?: string;
+    includeLocal?: boolean;
+    includeRemote?: boolean;
+    [key: string]: unknown;
+  }
+  /** Search contacts across the address books. */
+  function query(queryInfo: QueryInfo): Promise<Contact[]>;
+  /** Get one contact by its id (cardKey). */
+  function get(contactId: string): Promise<Contact>;
 }
 
 /** browser.folders — mail folders (accountsRead). */
@@ -330,4 +366,17 @@ declare namespace browser.compose {
   ): Promise<ComposeTab>;
   function getComposeDetails(tabId: number): Promise<ComposeDetailsResult>;
   function setComposeDetails(tabId: number, details: ComposeDetails): Promise<ComposeTab>;
+  /** A new file attachment: a File (built in the background from base64) + display name. */
+  interface FileAttachment {
+    file?: File;
+    name?: string;
+  }
+  /** The attachment as stored on the compose window. */
+  interface ComposeAttachment {
+    id: number;
+    name?: string;
+    size?: number;
+  }
+  /** Add a file attachment to an open compose window (does not send). */
+  function addAttachment(tabId: number, attachment: FileAttachment): Promise<ComposeAttachment>;
 }

@@ -1,0 +1,120 @@
+/**
+ * Unit tests for the Thunderbird mail-organization (T4) dispatcher (plan §39).
+ *
+ * A fake `browser.messages` records every mutation call. These prove the contract:
+ * the right update/move/archive call with the right arguments, additive vs
+ * replace tagging, and — critically — NO delete / permanent-delete path exists.
+ */
+import { test, before, after, beforeEach } from "node:test";
+import assert from "node:assert/strict";
+
+import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { dispatchMutationTool } from "../src/background/mutation-dispatcher.js";
+
+interface Call {
+  fn: string;
+  args: unknown[];
+}
+
+interface Store {
+  calls: Call[];
+  tags: Record<number, string[]>;
+  read: Record<number, boolean>;
+}
+
+let store: Store;
+function freshStore(): Store {
+  return { calls: [], tags: {}, read: {} };
+}
+
+function installStub(): void {
+  const g = globalThis as { browser?: unknown };
+  g.browser = {
+    messages: {
+      async update(messageId: number, newProperties: Record<string, unknown>) {
+        store.calls.push({ fn: "update", args: [messageId, newProperties] });
+        if (newProperties.tags) store.tags[messageId] = newProperties.tags as string[];
+        if (typeof newProperties.read === "boolean") store.read[messageId] = newProperties.read;
+      },
+      async get(messageId: number) {
+        return { id: messageId, tags: store.tags[messageId] ?? [], read: store.read[messageId] ?? false };
+      },
+      async archive(messageIds: number[]) {
+        store.calls.push({ fn: "archive", args: [messageIds] });
+      },
+      async move(messageIds: number[], folderId: string) {
+        store.calls.push({ fn: "move", args: [messageIds, folderId] });
+      },
+    },
+  };
+}
+
+before(installStub);
+after(() => {
+  delete (globalThis as { browser?: unknown }).browser;
+});
+beforeEach(() => {
+  store = freshStore();
+});
+
+test("mail_mark_read updates each selected message", async () => {
+  const r = (await dispatchMutationTool("mail_mark_read", { messageIds: [1, 2, 3], read: false })) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(r.count, 3);
+  const updates = store.calls.filter((c) => c.fn === "update");
+  assert.equal(updates.length, 3);
+  assert.ok(updates.every((c) => (c.args[1] as Record<string, unknown>).read === false));
+});
+
+test("mail_set_tags is additive by default (merges with existing tags)", async () => {
+  store.tags[5] = ["Work"];
+  await dispatchMutationTool("mail_set_tags", { messageIds: [5], tags: ["Finance"] });
+  const upd = store.calls.find((c) => c.fn === "update");
+  assert.ok(upd);
+  const tags = (upd!.args[1] as { tags: string[] }).tags;
+  assert.deepEqual(new Set(tags), new Set(["Work", "Finance"]));
+});
+
+test("mail_set_tags with additive=false replaces tags", async () => {
+  store.tags[5] = ["Work", "Urgent"];
+  await dispatchMutationTool("mail_set_tags", { messageIds: [5], tags: ["Finance"], additive: false });
+  const upd = store.calls.find((c) => c.fn === "update");
+  assert.deepEqual((upd!.args[1] as { tags: string[] }).tags, ["Finance"]);
+});
+
+test("mail_archive calls messages.archive with the selected ids", async () => {
+  const r = (await dispatchMutationTool("mail_archive", { messageIds: [1, 2] })) as Record<string, unknown>;
+  assert.equal(r.count, 2);
+  const arch = store.calls.find((c) => c.fn === "archive");
+  assert.deepEqual(arch!.args[0], [1, 2]);
+  assert.match(String(r.note), /reversible/i);
+});
+
+test("mail_move calls messages.move with ids + folderId", async () => {
+  await dispatchMutationTool("mail_move", { messageIds: [7], folderId: "folder-xyz" });
+  const mv = store.calls.find((c) => c.fn === "move");
+  assert.deepEqual(mv!.args[0], [7]);
+  assert.equal(mv!.args[1], "folder-xyz");
+});
+
+test("messageIds must be a non-empty array of numbers", async () => {
+  await assert.rejects(
+    dispatchMutationTool("mail_archive", { messageIds: [] }),
+    (e: unknown) =>
+      e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.INTERNAL && /messageIds/.test(e.message),
+  );
+});
+
+test("no delete / permanent-delete path exists", async () => {
+  await dispatchMutationTool("mail_archive", { messageIds: [1] });
+  await dispatchMutationTool("mail_set_tags", { messageIds: [1], tags: ["x"] });
+  const fns = store.calls.map((c) => c.fn);
+  assert.ok(!fns.some((f) => /delete/i.test(f)), "no delete function was called");
+  // mail_delete is not a known mutation tool.
+  await assert.rejects(
+    dispatchMutationTool("mail_delete", { messageIds: [1] }),
+    (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+  );
+});

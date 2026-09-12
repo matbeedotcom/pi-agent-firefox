@@ -12,6 +12,10 @@
     "accountsRead",
     "messagesRead",
     "compose",
+    "messagesUpdate",
+    "messagesMove",
+    "messagesTags",
+    "addressBooks",
     "tabs"
   ],
 

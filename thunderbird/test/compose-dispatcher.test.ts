@@ -76,6 +76,11 @@ function installStub(): void {
         Object.assign(d, details);
         return { id: tabId };
       },
+      async addAttachment(tabId: number, attachment: { file: File; name?: string }) {
+        store.calls.push({ fn: "addAttachment", args: [tabId, attachment] });
+        if (!store.details[tabId]) throw new Error(`Compose window not found: ${tabId}`);
+        return { id: 77, name: attachment.name, size: attachment.file.size };
+      },
     },
   };
 }
@@ -216,6 +221,34 @@ test("getComposeDetails on a closed window surfaces a structured error", async (
     dispatchComposeTool("compose_get", { tabId: 99999 }),
     /not found|Compose window not found/i,
   );
+});
+
+test("compose_add_attachment builds a File from base64 and attaches it", async () => {
+  const prepared = (await dispatchComposeTool("compose_prepare_new", { to: "x@y.z", subject: "s" })) as {
+    composeTabId: number;
+  };
+  const b64 = Buffer.from("hi").toString("base64");
+  const r = (await dispatchComposeTool("compose_add_attachment", {
+    tabId: prepared.composeTabId,
+    name: "note.txt",
+    content: b64,
+    contentType: "text/plain",
+  })) as Record<string, unknown>;
+
+  const call = store.calls.find((c) => c.fn === "addAttachment");
+  assert.ok(call, "addAttachment was called");
+  assert.equal(call!.args[0], prepared.composeTabId);
+  const att = call!.args[1] as { file: File; name?: string };
+  assert.equal(att.name, "note.txt");
+  assert.ok(att.file instanceof File, "a real File object was passed");
+  assert.equal(att.file.name, "note.txt");
+  assert.equal(att.file.type, "text/plain");
+  // The File carries the decoded bytes.
+  const text = await att.file.text();
+  assert.equal(text, "hi");
+
+  assert.equal(typeof r.attachmentId, "number");
+  assert.match(String(r.note), /does not send/);
 });
 
 test("no send path exists: compose_send is not a known tool", async () => {

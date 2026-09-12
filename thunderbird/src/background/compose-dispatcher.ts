@@ -32,6 +32,22 @@ function reqInt(args: Record<string, unknown>, key: string): number {
   return v;
 }
 
+function reqStr(args: Record<string, unknown>, key: string): string {
+  const v = args[key];
+  if (typeof v !== "string" || v.length === 0) {
+    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${key} must be a non-empty string`);
+  }
+  return v;
+}
+
+/** base64 -> a real File object, because browser.compose.addAttachment takes a File. */
+function base64ToFile(b64: string, name: string, type: string): File {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], name, { type });
+}
+
 /** Build the `browser.compose` details object from the flat tool arguments. */
 function buildDetails(args: Record<string, unknown>): browser.compose.ComposeDetails {
   const details: browser.compose.ComposeDetails = {};
@@ -138,6 +154,21 @@ async function composeUpdate(args: Record<string, unknown>): Promise<ComposeTool
   };
 }
 
+async function composeAddAttachment(args: Record<string, unknown>): Promise<ComposeToolResult> {
+  const tabId = reqInt(args, "tabId");
+  const name = reqStr(args, "name");
+  const content = reqStr(args, "content");
+  const contentType = optStr(args, "contentType") ?? "application/octet-stream";
+  const file = base64ToFile(content, name, contentType);
+  const att = await browser.compose.addAttachment(tabId, { file, name });
+  return {
+    composeTabId: tabId,
+    attachmentId: att.id,
+    name: att.name ?? name,
+    note: "Attachment added to the compose window. Review it and press Send — this tool does not send.",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -157,6 +188,8 @@ export async function dispatchComposeTool(
       return composeGet(args);
     case "compose_update":
       return composeUpdate(args);
+    case "compose_add_attachment":
+      return composeAddAttachment(args);
     default:
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown compose tool: ${tool}`);
   }

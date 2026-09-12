@@ -199,25 +199,68 @@ The user reviews the window and presses Send manually.
 - **Schema sync:** the compose JSON schemas (protocol) and TypeBox schemas (agent) are
   byte-checked by `tool-schemas.test.ts` (the same strict contract as the mail/browser tools).
 - **Capability gate:** `acp-agent.test.ts` proves a `["mail","compose","attachments"]` hello
-  registers all 15 tools (10 mail + 5 compose), no browser tools, and **no `compose_send`**.
+  registers all 16 tools (10 mail + 6 compose), no browser tools, and **no `compose_send`**.
 - **Built xpi:** `/tmp/pi-thunderbird-t3.xpi` — manifest carries the `compose` permission; the
   background hello carries `["mail","attachments","compose"]`; grep confirms the five
   `begin*`/`get`/`set` calls and **zero** `compose.sendMessage`/`saveMessage`.
 - **Live verify — CONFIRMED (2026-09-12):** with `/tmp/pi-thunderbird-t3.xpi` loaded, “Draft a
-  reply saying Thursday works.” opens a populated Thunderbird reply compose window for review;
+  reply saying Thursday works." opens a populated Thunderbird reply compose window for review;
   nothing is sent. **T2 and T3 both live-confirmed functional.**
+
+## Phase T4 + T6 + draft attachments (2026-09-12)
+
+Completes the remaining Thunderbird capabilities (goal `mtymz4tm`): draft-side file
+attachments, T4 mail organization, and T6 contacts. The add-on now declares
+`capabilities: ["mail","attachments","compose","mailModify","contacts"]`. **T7 (calendar) is
+deferred** — the installed 155 has no stable calendar WebExtension API (plan §42 says not to
+depend on an Experiment).
+
+**Draft attachments** — `compose_add_attachment` takes `{tabId, name, content (base64),
+contentType}`; the dispatcher decodes base64 → bytes → a real `File` and calls
+`browser.compose.addAttachment(tabId, {file, name})`. Read-side attachment tools were T2
+(unit-tested); the read side still needs a live confirm.
+
+**T4 mail organization** (plan §39) — `mail_mark_read`, `mail_set_tags`, `mail_archive`,
+`mail_move`, each acting only on explicitly-selected message ids: mark read →
+`messages.update(id, {read})`; tags → additive by default (reads current tags via
+`messages.get`, unions, then `messages.update(id, {tags})`; `additive:false` replaces);
+archive → `messages.archive(ids)`; move → `messages.move(ids, folderId)`. Gated on the new
+`mailModify` capability; permissions `messagesUpdate` + `messagesMove` + `messagesTags`.
+**No deletion:** `messages.delete` / `deleteAttachments` / `messagesModifyPermanent` are never
+called and never declared.
+
+**T6 contacts** (plan §41) — `contacts_search` / `contacts_get` (read-only) via
+`browser.contacts.query({searchString})` / `get(id)`, permission `addressBooks`. Normalization
+is defensive over vCard key styles (displayName / firstName+lastName, email / emailAddresses,
+organization / org / company) and falls back to the raw `properties` when nothing resolves.
+
+**Verified:**
+- **Unit tests (15):** `mutation-dispatcher.test.ts` (7: additive vs replace tagging, archive/move
+  args, **no-delete guard**), `contacts-dispatcher.test.ts` (7: normalization across key styles,
+  raw-properties fallback, **no-mutation guard**), `compose-dispatcher.test.ts` +1
+  (`compose_add_attachment` builds a real `File` from base64).
+- **Schema sync:** the new JSON + TypeBox schemas are byte-checked by `tool-schemas.test.ts`.
+- **Capability gate:** `acp-agent.test.ts` proves a `[..., "mailModify", "contacts"]` hello
+  registers 22 tools (10 mail + 6 compose + 4 mutation + 2 contacts) with **no delete tool**.
+- **Built xpi:** `/tmp/pi-thunderbird-t46.xpi` — manifest permissions are exactly
+  `nativeMessaging storage accountsRead messagesRead compose messagesUpdate messagesMove
+  messagesTags addressBooks tabs`; grep confirms **zero** `compose.sendMessage`/`saveMessage`,
+  `messages.delete(`, `deleteAttachments`, `messagesModifyPermanent`, and **none of**
+  `messagesDelete`/`messagesImport`/`sensitiveDataUpload`/`compose.send`/`compose.save` declared.
+- **Live verify (pending, user):** read a real attachment; “attach /tmp/x.pdf to the draft”;
+  “Archive these three and tag the invoice thread Finance”; “Draft a message to Sarah from Acme.”
 
 ## Test suite map (§48)
 
-`npm test` (Node 22 required) → **131/131 green** as of 2026-09-12:
+`npm test` (Node 22 required) → **147/147 green** as of 2026-09-12:
 
 | Workspace | Tests | Covers |
 |-----------|-------|--------|
 | `@pi-browser/protocol` | 14 | framing helpers, JSON-RPC, structured errors, permission helpers, schema constants, **agent identity + `pi.agent.hello` (firefox + thunderbird) + capability normalization** |
-| `@pi-browser/agent` | 61 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
+| `@pi-browser/agent` | 62 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
 | `@pi-browser/webext` | — | shared `AcpClient` (injected identity + hello) + `SessionStore` (shared by both add-ons; exercised by the firefox tests + e2e) |
 | `@pi-browser/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) — now on the shared `@pi-browser/webext` |
-| `@pi-browser/thunderbird` | 28 | **mail tool dispatcher** (T2): routing, context/tab/folder/message normalization, the `headerMessageId` durability rule, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 9 tests)**: routing, `begin*`/`setComposeDetails` argument correctness, recipient normalization, and the **no-send-path guard** |
+| `@pi-browser/thunderbird` | 43 | **mail tool dispatcher** (T2, 19): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 7)**: mark read / additive+replace tags / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 7)**: query pass-through, normalization across vCard key styles, raw-properties fallback, **no-mutation guard** |
 | `pi-browser-tests` (e2e) | 14 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat, **and a fake-Thunderbird client proving the host contract for a `capabilities: []` Thunderbird session** |
 
 ## Live real-backend smoke test
@@ -234,12 +277,16 @@ initialize → capabilities + `mcpCapabilities.acp` → `session/new` → `sessi
 | **T0** host `dev.pi.agent` (both add-on IDs authorized) + `application`/`capabilities` hello + browser gate + installer (`firefox`/`thunderbird`/`mozilla`, macOS split, Windows per-app) + Firefox suite green | ✅ | `acp-agent.test.ts` (hello + capability normalization), `installer.test.ts` (targets + platform paths); Firefox 14 + e2e 14 green |
 | **T1** add-on connects via `runtime.connectNative("dev.pi.agent")`; Pi Space session list/new/resume/prompt/stream/cancel | ✅ | `space/` UI; live green dot “Pi · pi-coding-agent” (T1); chat round-trip live-confirmed |
 | **T2** 10 read-only mail tools; “Summarize this email” on a real selected message, no copy/paste | ✅ | `mail-dispatcher.test.ts` (19); live-confirmed (T2 section) |
-| **T3** compose tools; “Draft a reply saying Thursday works.” opens populated compose; user sends; no send anywhere | ✅ | `compose-dispatcher.test.ts` (9, incl. no-send guard); 3-layer no-send (tool/code/permission); live-confirmed (T3 section) |
+| **T3** compose tools; “Draft a reply saying Thursday works.” opens populated compose; user sends; no send anywhere | ✅ | `compose-dispatcher.test.ts` (incl. no-send guard); 3-layer no-send (tool/code/permission); live-confirmed (T3 section) |
+| **Draft attachments:** `compose_add_attachment` attaches a file; read-side `mail_list/get_attachment` | ✅ impl+unit · live pending | `compose-dispatcher.test.ts` (base64→`File`, `addAttachment`); read-side unit tests (T2) |
+| **T4** mail organization: mark read / tags / archive / move (selected only); **no deletion** | ✅ impl+unit · live pending | `mutation-dispatcher.test.ts` (7, incl. no-delete guard); `mailModify` cap + `messagesUpdate`/`messagesMove`/`messagesTags` |
+| **T6** contacts: `contacts_search`/`contacts_get` (read-only, `addressBooks`) | ✅ impl+unit · live pending | `contacts-dispatcher.test.ts` (7, incl. no-mutation guard); defensive vCard normalization + raw fallback |
+| **T7** calendar — deferred (no stable WebExtension calendar API in 155) | ⏸ | plan §42: do not depend on an Experiment; revisit when a stable API exists |
 | Untrusted email = tool output only, never merged into the user prompt (§31–32) | ✅ | dispatcher returns normalized refs; body only via explicit `mail_get_message_body`; no prompt merging |
 | Durable id = `headerMessageId` (not numeric `messageId`) (§7) | ✅ | `MailMessageRef` dual-id; `mail-dispatcher.test.ts` durability rule |
-| Permissions only `nativeMessaging`, `accountsRead`, `messagesRead`, `compose` — no `compose.send`/mutation | ✅ | `manifest.json`; installed-155 schema confirms `compose.send`/`compose.save` are **not** declared |
-| **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 14 green in the 131/131 run |
-| `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **131/131** |
+| Permissions: read (`nativeMessaging`,`accountsRead`,`messagesRead`,`compose`) + T4 (`messagesUpdate`,`messagesMove`,`messagesTags`) + T6 (`addressBooks`) — **no** `compose.send`/`messagesDelete`/`messagesImport`/`sensitiveDataUpload` | ✅ | `manifest.json` = exactly that set; built `background.js` has zero `sendMessage`/`saveMessage`/`messages.delete`/`deleteAttachments` |
+| **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 14 green in the 147/147 run |
+| `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **147/147** |
 
 > **Note on the `piPane` column:** the `browser.piPane` Experiment API (4th column) was built and
 > proven working in an earlier stage, but Experiment APIs are **out of scope** for this goal

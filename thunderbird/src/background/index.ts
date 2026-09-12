@@ -21,7 +21,9 @@
 import {
   AGENT_METHODS,
   isComposeTool,
+  isContactsTool,
   isMailTool,
+  isMailMutationTool,
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
   X_PI_BROWSER,
@@ -32,6 +34,8 @@ import {
 import { AcpClient, SessionStore, type HostStatus } from "@pi-browser/webext";
 import { dispatchMailTool } from "./mail-dispatcher.js";
 import { dispatchComposeTool } from "./compose-dispatcher.js";
+import { dispatchMutationTool } from "./mutation-dispatcher.js";
+import { dispatchContactsTool } from "./contacts-dispatcher.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -91,9 +95,10 @@ const client = new AcpClient(
   {
     clientName: "pi-thunderbird",
     application: "thunderbird",
-    // T2: read-only mail + attachments. T3 adds "compose" (draft-first, no send):
-    // plan §18, §28. No send / compose-send / messagesModify* permissions.
-    capabilities: ["mail", "attachments", "compose"],
+    // Capabilities: T2 read-only mail + attachments, T3 draft-first compose
+    // (no send), T4 mail organization (mailModify: mark read/tag/archive/move —
+    // no delete), T6 contacts (read-only). plan §18, §28, §39, §41.
+    capabilities: ["mail", "attachments", "compose", "mailModify", "contacts"],
   },
   {
     onSessionUpdate(params: SessionNotification) {
@@ -109,6 +114,14 @@ const client = new AcpClient(
       }
       if (isComposeTool(params.tool)) {
         const result = await dispatchComposeTool(params.tool, params.arguments);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+      }
+      if (isMailMutationTool(params.tool)) {
+        const result = await dispatchMutationTool(params.tool, params.arguments);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+      }
+      if (isContactsTool(params.tool)) {
+        const result = await dispatchContactsTool(params.tool, params.arguments);
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       }
       throw new PiBrowserProtocolError(
