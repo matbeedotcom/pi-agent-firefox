@@ -52,13 +52,13 @@ import type {
   ToolSpec,
 } from "./backend.js";
 import { buildConfigOptions, CONFIG_ID_MODEL, CONFIG_ID_THINKING } from "./config-options.js";
-import type { BrowserMode, BrowserToolProvider } from "../browser/provider.js";
+import type { BrowserMode, CapabilityToolProvider } from "../browser/provider.js";
 import type { ImageAttachment } from "./backend.js";
 import { touchClientHeartbeat } from "../client-heartbeat.js";
 
 export interface AcpAgentOptions {
   backend: PiBackend;
-  provider: BrowserToolProvider;
+  provider: CapabilityToolProvider;
   transport: AcpTransport;
   log: Logger;
   agentInfo: { name: string; version: string };
@@ -367,11 +367,10 @@ export class AcpAgent {
 
     // Tools bind to the session id at execute time (id assigned below).
     const idRef: { id?: string } = {};
-    // Browser tools are only registered for clients that declared the
-    // `browser` capability (legacy clients default to it, THUNDERBIRD-PLAN.md §24).
-    const tools = this.hasCapability("browser")
-      ? this.opts.provider.createTools(idRef, browserMode, mcpServerId)
-      : [];
+    // Register the tool surface the client advertised in its hello
+    // (plan §19): "browser" → browser tools, "mail"/"attachments" → the
+    // read-only mail tools. Legacy clients (no hello) default to browser.
+    const tools = this.opts.provider.createTools(idRef, browserMode, mcpServerId, this.clientCapabilities);
     const session = await open(tools);
     idRef.id = session.sessionId;
 

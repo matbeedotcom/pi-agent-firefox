@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 
 import { createLogger } from "../src/logger.js";
 import { createMemoryTransportPair, type Dispatcher } from "../src/native-host/transport.js";
-import { BrowserToolProvider, LegacyBrowserCallbackTransport, NativeMcpOverAcpTransport } from "../src/browser/provider.js";
+import { CapabilityToolProvider, LegacyBrowserCallbackTransport, NativeMcpOverAcpTransport } from "../src/browser/provider.js";
 import {
   BROWSER_TOOLS,
   CLIENT_METHODS,
+  MAIL_TOOLS,
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
   X_PI_BROWSER,
@@ -18,14 +19,14 @@ const quiet = createLogger({ level: "error", stderr: { write: () => true } });
 
 interface FakeFirefox {
   a: Dispatcher; // acts as Firefox
-  provider: BrowserToolProvider;
+  provider: CapabilityToolProvider;
   toolCalls: Array<{ sessionId: string; tool: string; args: unknown }>;
   respondTool: (id: number, result?: unknown, error?: JsonRpcErrorObject) => void;
 }
 
 function setupFakeFirefox(): FakeFirefox {
   const { a, b } = createMemoryTransportPair(quiet, quiet);
-  const provider = new BrowserToolProvider(b.transport, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet);
   const toolCalls: FakeFirefox["toolCalls"] = [];
   a.transport.onRequest = (method, params, id) => {
     if (method === X_PI_BROWSER.tool) {
@@ -67,6 +68,52 @@ test("createTools: 8 MCP-compatible browser tools", () => {
     assert.ok(def, `tool ${tool.name} missing from protocol registry`);
     assert.equal(tool.description, def.description);
   }
+});
+
+test("createTools: mail capability registers the read-only mail tools, no browser tools", () => {
+  const { provider } = setupFakeFirefox();
+  const tools = provider.createTools({ id: "s1" }, "legacy", undefined, ["mail", "attachments"]);
+  assert.equal(tools.length, MAIL_TOOLS.length);
+  for (const tool of tools) {
+    const def = MAIL_TOOLS.find((d) => d.name === tool.name);
+    assert.ok(def, `tool ${tool.name} missing from protocol mail registry`);
+    assert.equal(tool.description, def.description);
+  }
+  assert.ok(tools.every((t) => t.name.startsWith("mail_")), "mail client gets only mail tools");
+});
+
+test("createTools: browser capability registers only browser tools (no mail)", () => {
+  const { provider } = setupFakeFirefox();
+  const tools = provider.createTools({ id: "s1" }, "legacy", undefined, ["browser"]);
+  assert.equal(tools.length, BROWSER_TOOLS.length);
+  assert.ok(tools.every((t) => t.name.startsWith("browser_")), "browser client gets no mail tools");
+});
+
+test("createTools: empty capabilities register no tools", () => {
+  const { provider } = setupFakeFirefox();
+  assert.equal(provider.createTools({ id: "s1" }, "legacy", undefined, []).length, 0);
+});
+
+test("createTools: both capabilities register browser + mail tools", () => {
+  const { provider } = setupFakeFirefox();
+  const tools = provider.createTools({ id: "s1" }, "legacy", undefined, ["browser", "mail"]);
+  const names = tools.map((t) => t.name);
+  assert.equal(names.length, BROWSER_TOOLS.length + MAIL_TOOLS.length);
+  assert.ok(names.some((n) => n.startsWith("browser_")));
+  assert.ok(names.some((n) => n.startsWith("mail_")));
+});
+
+test("legacy transport: mail tool call round-trip over x-pi-browser/tool", async () => {
+  const ff = setupFakeFirefox();
+  const idRef = { id: "session-mail" };
+  const tools = ff.provider.createTools(idRef, "legacy", undefined, ["mail"]);
+  const ctx = tools.find((t) => t.name === "mail_get_context");
+  assert.ok(ctx);
+  const result = await ctx.execute("tc-mail", {}, undefined);
+  assert.equal(ff.toolCalls.length, 1);
+  assert.equal(ff.toolCalls[0].sessionId, "session-mail");
+  assert.equal(ff.toolCalls[0].tool, "mail_get_context");
+  assert.equal(result.content[0].type, "text");
 });
 
 test("legacy transport: tool call round-trip over x-pi-browser/tool", async () => {
@@ -141,7 +188,7 @@ test("legacy transport: real timeout over a non-responding peer", async () => {
 
 function setupMcpFirefox() {
   const { a, b } = createMemoryTransportPair(quiet, quiet);
-  const provider = new BrowserToolProvider(b.transport, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet);
   const mcpSeen: Array<{ method: string; params?: unknown }> = [];
   let connectionCounter = 0;
   const connections = new Map<string, { initialized: boolean }>();

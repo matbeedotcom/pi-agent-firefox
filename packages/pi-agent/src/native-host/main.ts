@@ -20,7 +20,7 @@ import { createStdioTransport } from "./transport.js";
 import { AcpAgent } from "../acp/agent.js";
 import { MockBackend } from "../acp/mock-backend.js";
 import { PiSdkBackend } from "../acp/sdk-backend.js";
-import { BrowserToolProvider } from "../browser/provider.js";
+import { CapabilityToolProvider } from "../browser/provider.js";
 
 const require = createRequire(import.meta.url);
 
@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   log.info(`backend: ${backendKind}`);
 
   const dispatcher = createStdioTransport(process.stdin, process.stdout, log);
-  const provider = new BrowserToolProvider(dispatcher.transport, log);
+  const provider = new CapabilityToolProvider(dispatcher.transport, log);
   const agent = new AcpAgent({
     backend,
     provider,

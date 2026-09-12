@@ -5,4 +5,6 @@ export * from "./integration.js";
 export * from "./errors.js";
 export * from "./browser-tools.js";
 export * from "./control-tools.js";
+export * from "./mail-tools.js";
+export * from "./compose-tools.js";
 export * from "./permission.js";

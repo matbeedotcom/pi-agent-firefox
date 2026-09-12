@@ -24,6 +24,12 @@ import {
   toErrorObject,
 } from "../src/errors.js";
 import {
+  MAIL_TOOLS,
+  MAIL_TOOL_NAMES,
+  getMailTool,
+  isMailTool,
+} from "../src/mail-tools.js";
+import {
   AGENT_CAPABILITIES,
   PI_AGENT,
   PI_AGENT_META,
@@ -58,6 +64,61 @@ test("browser tool registry: names are unique and well-formed", () => {
   assert.equal(isMutatingBrowserTool("browser_click"), true);
   assert.equal(isMutatingBrowserTool("browser_get_dom"), false);
 });
+
+test("mail tool registry: 10 read-only tools, unique names, disjoint from browser tools", () => {
+  const names = MAIL_TOOLS.map((t) => t.name);
+  assert.equal(new Set(names).size, names.length);
+  for (const name of names) {
+    assert.match(name, /^mail_[a-z_]+$/);
+  }
+  assert.deepEqual(
+    [...MAIL_TOOL_NAMES],
+    [
+      "mail_get_context",
+      "mail_get_selected_messages",
+      "mail_get_displayed_messages",
+      "mail_get_message",
+      "mail_get_message_body",
+      "mail_search",
+      "mail_list_attachments",
+      "mail_get_attachment",
+      "mail_list_accounts",
+      "mail_list_folders",
+    ],
+  );
+  // Every T2 mail tool is read-only; none may mutate state or send.
+  for (const t of MAIL_TOOLS) {
+    assert.equal(t.readOnly, true, `${t.name} must be read-only in T2`);
+  }
+  // No send/delete/move/compose tool may leak into the read-only surface.
+  for (const name of names) {
+    assert.ok(!isBrowserTool(name), `${name} collides with a browser tool`);
+    assert.doesNotMatch(name, /send|delete|move|compose/);
+  }
+  assert.ok(isMailTool("mail_get_context"));
+  assert.ok(!isMailTool("mail_nope"));
+  assert.equal(getMailTool("mail_get_message")?.readOnly, true);
+});
+
+test("mail tool input schemas are JSON Schema objects", () => {
+  for (const tool of MAIL_TOOLS) {
+    assert.equal(tool.inputSchema.type, "object");
+    assert.equal(tool.inputSchema.additionalProperties, false);
+    assert.ok(typeof tool.description === "string" && tool.description.length > 10);
+    const props = (tool.inputSchema.properties ?? {}) as Record<string, unknown>;
+    const required = (tool.inputSchema.required ?? []) as string[];
+    for (const r of required) assert.ok(props[r], `${tool.name}: required ${r} missing from properties`);
+  }
+  // The tools that operate on a single message all require its id.
+  for (const name of ["mail_get_message", "mail_get_message_body", "mail_list_attachments"]) {
+    assert.ok((getMailTool(name)!.inputSchema.required as string[]).includes("messageId"), `${name} requires messageId`);
+  }
+  // mail_get_attachment requires both the message and the part.
+  assert.deepEqual(
+    [...(getMailTool("mail_get_attachment")!.inputSchema.required as string[])].sort(),
+    ["messageId", "partName"],
+  );
+})
 
 test("control tool registry: names are unique, well-formed, and disjoint from browser tools", () => {
   const names = CONTROL_TOOLS.map((t) => t.name);

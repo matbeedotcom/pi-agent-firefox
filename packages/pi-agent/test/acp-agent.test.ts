@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createLogger } from "../src/logger.js";
 import { createMemoryTransportPair, type Dispatcher } from "../src/native-host/transport.js";
 import { AcpAgent } from "../src/acp/agent.js";
-import { BrowserToolProvider } from "../src/browser/provider.js";
+import { CapabilityToolProvider } from "../src/browser/provider.js";
 import { MockBackend, MockSession } from "./mock-backend.js";
 import {
   AGENT_METHODS,
@@ -25,7 +25,7 @@ const quiet = createLogger({ level: "error", stderr: { write: () => true } });
 interface Harness {
   backend: MockBackend;
   agent: AcpAgent;
-  provider: BrowserToolProvider;
+  provider: CapabilityToolProvider;
   a: Dispatcher; // fake Firefox
   b: Dispatcher; // host
   request: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
@@ -36,7 +36,7 @@ interface Harness {
 function setup(): Harness {
   const backend = new MockBackend();
   const { a, b } = createMemoryTransportPair(quiet, quiet);
-  const provider = new BrowserToolProvider(b.transport, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet);
   const agent = new AcpAgent({
     backend,
     provider,
@@ -101,7 +101,7 @@ test("initialize: unsupported protocol version -> PROTOCOL_VERSION_MISMATCH", as
   assert.equal(codeFromErrorObject(err), "PROTOCOL_VERSION_MISMATCH");
 });
 
-test("initialize: pi.agent.hello (thunderbird, mail only) -> no browser tools registered", async () => {
+test("initialize: pi.agent.hello (thunderbird, mail + compose) -> no browser tools registered", async () => {
   const h = setup();
   const res = (await h.request(AGENT_METHODS.initialize, {
     protocolVersion: PROTOCOL_VERSION,
@@ -113,9 +113,20 @@ test("initialize: pi.agent.hello (thunderbird, mail only) -> no browser tools re
   })) as { _meta: { piAgent: { application: string; capabilities: string[] } } };
   assert.equal(res._meta.piAgent.application, "thunderbird");
   assert.deepEqual(res._meta.piAgent.capabilities, ["mail", "compose", "attachments"]);
-  // A mail-only client must not receive browser tools on session creation.
+  // A mail+compose client receives the read-only mail tools AND the draft-first
+  // compose tools (10 + 5), and no browser tools.
   const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/m", mcpServers: [] })) as { sessionId: string };
-  assert.equal(h.lastCreateTools.length, 0);
+  assert.equal(h.lastCreateTools.length, 15);
+  assert.ok(
+    h.lastCreateTools.every((t) => /^(mail_|compose_)/.test((t as { name: string }).name)),
+    "mail+compose client gets only mail/compose tools",
+  );
+  assert.ok(
+    h.lastCreateTools.some((t) => (t as { name: string }).name === "compose_prepare_reply"),
+    "compose capability registers the compose tools",
+  );
+  assert.ok(h.lastCreateTools.every((t) => !(t as { name: string }).name.startsWith("browser_")), "mail client gets no browser tools");
+  assert.ok(h.lastCreateTools.every((t) => (t as { name: string }).name !== "compose_send"), "no send tool is exposed");
   await h.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
 });
 

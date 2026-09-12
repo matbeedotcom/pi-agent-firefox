@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { BROWSER_TOOLS, CONTROL_TOOLS } from "@pi-browser/protocol";
+import { BROWSER_TOOLS, CONTROL_TOOLS, MAIL_TOOLS, COMPOSE_TOOLS } from "@pi-browser/protocol";
 import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS } from "../src/browser/schemas.js";
+import { MAIL_TOOL_SCHEMAS } from "../src/mail/schemas.js";
+import { COMPOSE_TOOL_SCHEMAS } from "../src/compose/schemas.js";
 
 /**
  * The TypeBox schemas (used by Pi for validation + LLM tool definitions)
@@ -91,5 +93,7 @@ test("TypeBox schemas match the protocol JSON schemas", () => {
   const allDiffs: string[] = [];
   allDiffs.push(...checkSync(BROWSER_TOOLS, BROWSER_TOOL_SCHEMAS, "browser tools"));
   allDiffs.push(...checkSync(CONTROL_TOOLS, CONTROL_TOOL_SCHEMAS, "control tools"));
+  allDiffs.push(...checkSync(MAIL_TOOLS, MAIL_TOOL_SCHEMAS, "mail tools"));
+  allDiffs.push(...checkSync(COMPOSE_TOOLS, COMPOSE_TOOL_SCHEMAS, "compose tools"));
   assert.deepEqual(allDiffs, [], allDiffs.join("\n"));
 });

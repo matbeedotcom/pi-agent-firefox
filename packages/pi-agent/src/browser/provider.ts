@@ -15,6 +15,11 @@
 import {
   BROWSER_SCREENSHOT_TIMEOUT_MS,
   BROWSER_TOOL_TIMEOUT_MS,
+  isComposeTool,
+  isMailTool,
+  COMPOSE_TOOL_TIMEOUT_MS,
+  MAIL_ATTACHMENT_TIMEOUT_MS,
+  MAIL_TOOL_TIMEOUT_MS,
   codeFromErrorObject,
   isStructuredErrorObject,
   PI_BROWSER_ERROR,
@@ -27,7 +32,9 @@ import {
   type BrowserNotifyParams,
   type RequestPermissionResponse,
 } from "@pi-browser/protocol";
-import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS } from "./schemas.js";
+import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS, type BrowserToolSchema } from "./schemas.js";
+import { MAIL_TOOL_SCHEMAS, type MailToolSchema } from "../mail/schemas.js";
+import { COMPOSE_TOOL_SCHEMAS, type ComposeToolSchema } from "../compose/schemas.js";
 import { McpAcpClient } from "./mcp-acp-client.js";
 
 export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
@@ -69,7 +76,11 @@ export function normalizeToolResult(raw: unknown): NormalizedToolResult {
 }
 
 function timeoutFor(tool: string): number {
-  return tool === "browser_screenshot" ? BROWSER_SCREENSHOT_TIMEOUT_MS : BROWSER_TOOL_TIMEOUT_MS;
+  if (tool === "browser_screenshot") return BROWSER_SCREENSHOT_TIMEOUT_MS;
+  if (tool === "mail_get_attachment") return MAIL_ATTACHMENT_TIMEOUT_MS;
+  if (isMailTool(tool)) return MAIL_TOOL_TIMEOUT_MS;
+  if (isComposeTool(tool)) return COMPOSE_TOOL_TIMEOUT_MS;
+  return BROWSER_TOOL_TIMEOUT_MS;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,10 +225,12 @@ const SENSITIVE_TOOLS = new Set<string>(["browser_screenshot"]);
 const PERMISSION_TIMEOUT_MS = 120_000;
 
 /**
- * Registers browser tools on Pi sessions and routes their execution through
- * the per-session BrowserToolTransport.
+ * Registers capability tools on Pi sessions and routes their execution
+ * through the per-session tool transport. The tool surface is selected by
+ * the capabilities the client advertised in its hello (plan §19): "browser"
+ * → browser tools, "mail"/"attachments" → read-only mail tools.
  */
-export class BrowserToolProvider {
+export class CapabilityToolProvider {
   private readonly sessions = new Map<string, SessionBrowserState>();
   /** Tools the user has approved with "Always allow" (per host lifetime). */
   private readonly alwaysAllowed = new Set<string>();
@@ -243,10 +256,34 @@ export class BrowserToolProvider {
    * Control tools (pi_*) are only registered for the MCP-over-ACP mode:
    * they are served by the add-on's MCP server and have no equivalent on
    * the legacy x-pi-browser/tool callback path.
+   *
+   * `capabilities` selects the tool surface (plan §19): a client that
+   * advertises "browser" gets the browser tools, one that advertises
+   * "mail"/"attachments" gets the read-only mail tools. The default
+   * (["browser"]) preserves the pre-capability behaviour for callers that
+   * do not pass the client's declared capabilities.
    */
-  createTools(idRef: { id?: string }, mode: BrowserMode, mcpServerId?: string): ToolSpec[] {
-    const schemas =
-      mode === "mcp-acp" ? [...BROWSER_TOOL_SCHEMAS, ...CONTROL_TOOL_SCHEMAS] : BROWSER_TOOL_SCHEMAS;
+  createTools(
+    idRef: { id?: string },
+    mode: BrowserMode,
+    mcpServerId?: string,
+    capabilities: readonly string[] = ["browser"],
+  ): ToolSpec[] {
+    const caps = capabilities ?? [];
+    const hasBrowser = caps.includes("browser");
+    const hasMail = caps.includes("mail") || caps.includes("attachments");
+    const hasCompose = caps.includes("compose");
+    const schemas: Array<BrowserToolSchema | MailToolSchema | ComposeToolSchema> = [];
+    if (hasBrowser) {
+      schemas.push(...BROWSER_TOOL_SCHEMAS);
+      if (mode === "mcp-acp") schemas.push(...CONTROL_TOOL_SCHEMAS);
+    }
+    if (hasMail) {
+      schemas.push(...MAIL_TOOL_SCHEMAS);
+    }
+    if (hasCompose) {
+      schemas.push(...COMPOSE_TOOL_SCHEMAS);
+    }
     return schemas.map((entry) => ({
       name: entry.name,
       label: entry.name,
