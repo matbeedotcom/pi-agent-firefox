@@ -46,8 +46,9 @@
   channel to the local host (no hosts/URLs contacted by the add-on code).
 - **Inert without the host:** by design — the onboarding screen explains the
   missing host; there is no degraded data-collection mode.
-- Source code: private repository (not linkable); the zip contains the built
-  bundles without source maps.
+- Source code: public repository https://github.com/matbeedotcom/pi-agent-firefox
+  (build: `sh build.sh` per README "Building from source"); the add-on zip
+  contains the built bundles without source maps.
 
 ## Submission checklist
 
