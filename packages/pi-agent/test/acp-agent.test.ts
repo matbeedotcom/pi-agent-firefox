@@ -107,7 +107,7 @@ test("initialize: pi.agent.hello (thunderbird, mail only) -> no browser tools re
     protocolVersion: PROTOCOL_VERSION,
     clientInfo: { name: "pi-thunderbird", version: "0.1.0" },
     _meta: buildAgentHelloMeta({
-      client: { application: "thunderbird", extensionId: "pi-thunderbird@pi.dev", version: "0.1.0" },
+      client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.0" },
       capabilities: ["mail", "compose", "attachments"],
     }),
   })) as { _meta: { piAgent: { application: string; capabilities: string[] } } };
@@ -130,7 +130,7 @@ test("initialize: legacy client (no hello) keeps browser tools; firefox hello de
   const res = (await hFx.request(AGENT_METHODS.initialize, {
     protocolVersion: PROTOCOL_VERSION,
     _meta: buildAgentHelloMeta({
-      client: { application: "firefox", extensionId: "pi-browser@pi.dev", version: "0.1.0" },
+      client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.0" },
       capabilities: ["browser"],
     }),
   })) as { _meta: { piAgent: { application: string; capabilities: string[] } } };

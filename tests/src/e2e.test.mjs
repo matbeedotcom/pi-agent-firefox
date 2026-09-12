@@ -462,7 +462,7 @@ async function initialize(host) {
     _meta: {
       piAgent: {
         type: "pi.agent.hello",
-        client: { application: "firefox", extensionId: "pi-browser@pi.dev", version: "0.1.0" },
+        client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.0" },
         capabilities: ["browser"],
       },
     },
@@ -1168,7 +1168,7 @@ async function initializeThunderbird(host) {
     _meta: {
       piAgent: {
         type: "pi.agent.hello",
-        client: { application: "thunderbird", extensionId: "pi-thunderbird@pi.dev", version: "0.1.0" },
+        client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.0" },
         // T1: pure chat interface — no tools (plan §28: mail/compose arrive later).
         capabilities: [],
       },

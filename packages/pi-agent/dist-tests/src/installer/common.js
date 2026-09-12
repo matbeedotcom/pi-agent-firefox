@@ -88,6 +88,6 @@ export function cmdLauncherContent(nodePath, mainJs) {
 export function addonLoadHint(app) {
     return app === "firefox"
         ? "load the Firefox add-on (firefox/dist/manifest.json, id " + PI_BROWSER.extensionId + "): Firefox → about:debugging#aboutThisFirefoxBrowser → “Load Temporary Add-on…” → pick firefox/dist/manifest.json"
-        : "load the Thunderbird add-on (thunderbird/dist/manifest.json, id pi-thunderbird@pi.dev): Thunderbird → about:debugging#aboutThisThunderbird → “Load Temporary Add-on…” → pick thunderbird/dist/manifest.json";
+        : "load the Thunderbird add-on (thunderbird/dist/manifest.json, id pi-agent-thunderbird@matbee.com): Thunderbird → about:debugging#aboutThisThunderbird → “Load Temporary Add-on…” → pick thunderbird/dist/manifest.json";
 }
 //# sourceMappingURL=common.js.map

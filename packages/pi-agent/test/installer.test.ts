@@ -15,7 +15,7 @@ import type { ExecResult } from "../src/installer/common.js";
  * registry state.
  */
 
-const EXPECTED_ALLOWED = ["pi-browser@pi.dev", "pi-firefox@pi.dev", "pi-thunderbird@pi.dev"];
+const EXPECTED_ALLOWED = ["pi-agent-firefox@matbee.com", "pi-firefox@matbee.com", "pi-agent-thunderbird@matbee.com"];
 
 /** Mirror of installer normalizePlatform (buildEnv normalizes before use). */
 function norm(p: string): string {

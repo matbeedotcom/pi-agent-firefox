@@ -434,7 +434,7 @@ Manifest:
   "path": "/absolute/path/to/pi-browser-host",
   "type": "stdio",
   "allowed_extensions": [
-    "pi-browser@pi.dev"
+    "pi-agent-firefox@matbee.com"
   ]
 }
 ```
@@ -624,7 +624,7 @@ Initial permissions:
 
   "browser_specific_settings": {
     "gecko": {
-      "id": "pi-browser@pi.dev"
+      "id": "pi-agent-firefox@matbee.com"
     }
   }
 }

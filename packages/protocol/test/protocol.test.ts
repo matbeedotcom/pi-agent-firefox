@@ -120,7 +120,7 @@ test("error codes map to unique reserved JSON-RPC codes", () => {
 
 test("integration metadata is stable and complete", () => {
   assert.equal(PI_BROWSER.nativeHost, "dev.pi.browser");
-  assert.equal(PI_BROWSER.extensionId, "pi-browser@pi.dev");
+  assert.equal(PI_BROWSER.extensionId, "pi-agent-firefox@matbee.com");
   assert.equal(PI_BROWSER_META.protocolVersion, 1);
   assert.equal(PI_BROWSER_META.browserToolVersion, 1);
   assert.equal(X_PI_BROWSER.tool, "x-pi-browser/tool");
@@ -165,9 +165,9 @@ test("agent identity: host name + authorized extensions", () => {
   assert.equal(PI_AGENT.nativeHost, "dev.pi.agent");
   assert.equal(PI_AGENT.legacyNativeHost, "dev.pi.browser");
   assert.deepEqual(PI_AGENT.authorizedExtensions, [
-    "pi-browser@pi.dev",
-    "pi-firefox@pi.dev",
-    "pi-thunderbird@pi.dev",
+    "pi-agent-firefox@matbee.com",
+    "pi-firefox@matbee.com",
+    "pi-agent-thunderbird@matbee.com",
   ]);
   assert.equal(PI_AGENT.protocolVersion, 1);
   assert.equal(PI_AGENT_META.protocolVersion, PI_AGENT.protocolVersion);
@@ -180,20 +180,20 @@ test("agent hello: parseAgentHello accepts firefox and thunderbird clients", () 
     protocolVersion: 1,
     clientInfo: { name: "pi-browser-firefox", version: "0.1.0" },
     _meta: buildAgentHelloMeta({
-      client: { application: "firefox", extensionId: "pi-browser@pi.dev", version: "0.1.0" },
+      client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.0" },
       capabilities: ["browser"],
     }),
   };
   const fx = parseAgentHello(firefoxParams);
   assert.ok(fx);
   assert.equal(fx.client.application, "firefox");
-  assert.equal(fx.client.extensionId, "pi-browser@pi.dev");
+  assert.equal(fx.client.extensionId, "pi-agent-firefox@matbee.com");
   assert.deepEqual(fx.capabilities, ["browser"]);
 
   const tbParams = {
     protocolVersion: 1,
     _meta: buildAgentHelloMeta({
-      client: { application: "thunderbird", extensionId: "pi-thunderbird@pi.dev", version: "0.1.0" },
+      client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.0" },
       capabilities: ["mail", "compose", "attachments", "bogus", "mail"] as unknown as AgentCapability[],
     }),
   };

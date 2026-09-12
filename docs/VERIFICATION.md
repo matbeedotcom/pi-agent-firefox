@@ -5,6 +5,16 @@
 **Agent:** real Pi (in-process `createAgentSession` inside the native host)
 **Demo app:** `/home/acidhax/pi-browser-demo/` served at `http://127.0.0.1:8765/` (Counter page with note input; the note value is mirrored into `document.title` so tool results can verify page state)
 
+> **ID rename (2026-09-11, post-verification):** the add-on IDs moved from the
+> `@pi.dev` placeholders to a project-owned domain —
+> `pi-browser@pi.dev` → **`pi-agent-firefox@matbee.com`**,
+> `pi-thunderbird@pi.dev` → **`pi-agent-thunderbird@matbee.com`**
+> (`pi-firefox@matbee.com` stays authorized for compatibility). The evidence
+> citations below quote the IDs as they were at verification time; the rename
+> is an identity change only — behavior, transport, and security invariants are
+> unchanged. The native host name (`dev.pi.browser` legacy / `dev.pi.agent`)
+> is unaffected.
+
 All 19 items were verified **live** on this machine (real Firefox + real Pi), except where a
 test-only note is given explicitly. Evidence pointers resolve as of the date above:
 

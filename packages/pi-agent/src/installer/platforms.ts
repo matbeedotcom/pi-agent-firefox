@@ -156,11 +156,11 @@ async function checkManifest(manifest: NativeHostManifest, launcherPath: string,
   lines.push(`host name: ${manifest.name}`);
   lines.push(`allowed_extensions: ${manifest.allowed_extensions.join(", ")}`);
   if (manifest.name !== NATIVE_HOST_NAME) issues.push(`unexpected host name: ${manifest.name}`);
-  if (!manifest.allowed_extensions.includes("pi-browser@pi.dev")) {
-    issues.push("allowed_extensions does not include pi-browser@pi.dev (Firefox)");
+  if (!manifest.allowed_extensions.includes("pi-agent-firefox@matbee.com")) {
+    issues.push("allowed_extensions does not include pi-agent-firefox@matbee.com (Firefox)");
   }
-  if (!manifest.allowed_extensions.includes("pi-thunderbird@pi.dev")) {
-    issues.push("allowed_extensions does not include pi-thunderbird@pi.dev (Thunderbird)");
+  if (!manifest.allowed_extensions.includes("pi-agent-thunderbird@matbee.com")) {
+    issues.push("allowed_extensions does not include pi-agent-thunderbird@matbee.com (Thunderbird)");
   }
   if (manifest.type !== "stdio") issues.push(`unexpected manifest type: ${manifest.type}`);
 

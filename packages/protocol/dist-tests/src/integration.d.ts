@@ -22,7 +22,7 @@ export declare const PI_BROWSER: {
     /** Stable Firefox Native Messaging host name (manifest `name`). */
     readonly nativeHost: "dev.pi.browser";
     /** Stable Firefox add-on ID (gecko.id). Must match allowed_extensions. */
-    readonly extensionId: "pi-browser@pi.dev";
+    readonly extensionId: "pi-agent-firefox@matbee.com";
 };
 /** Mozilla applications that can attach as capability providers. */
 export type AgentApplication = "firefox" | "thunderbird";
@@ -37,11 +37,12 @@ export declare const PI_AGENT: {
     /** Legacy host name kept for already-registered Firefox installations. */
     readonly legacyNativeHost: "dev.pi.browser";
     /**
-     * Add-on IDs the native host manifest authorizes. `pi-browser@pi.dev` is
-     * the original Firefox ID and stays authorized so existing installations
-     * keep working after the host rename.
+     * Add-on IDs the native host manifest authorizes. `pi-agent-firefox@matbee.com`
+     * and `pi-agent-thunderbird@matbee.com` are the production add-on IDs (2026-09-11
+     * rename from the `@pi.dev` placeholders to a domain the project owns);
+     * `pi-firefox@matbee.com` remains authorized for compatibility.
      */
-    readonly authorizedExtensions: readonly ["pi-browser@pi.dev", "pi-firefox@pi.dev", "pi-thunderbird@pi.dev"];
+    readonly authorizedExtensions: readonly ["pi-agent-firefox@matbee.com", "pi-firefox@matbee.com", "pi-agent-thunderbird@matbee.com"];
     /** Agent integration protocol version (bump on breaking _meta.piAgent changes). */
     readonly protocolVersion: 1;
 };

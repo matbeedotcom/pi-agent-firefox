@@ -357,7 +357,7 @@ function makeClient(statuses) {
         clientName: "pi-browser-firefox",
         application: "firefox",
         capabilities: ["browser"],
-        extensionId: "pi-browser@pi.dev",
+        extensionId: "pi-agent-firefox@matbee.com",
     }, {
         onSessionUpdate() { },
         onToolCall: async () => ({}),
