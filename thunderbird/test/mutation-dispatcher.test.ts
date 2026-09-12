@@ -20,11 +20,12 @@ interface Store {
   calls: Call[];
   tags: Record<number, string[]>;
   read: Record<number, boolean>;
+  definedTags: Array<{ key: string; tag: string; color?: string }>;
 }
 
 let store: Store;
 function freshStore(): Store {
-  return { calls: [], tags: {}, read: {} };
+  return { calls: [], tags: {}, read: {}, definedTags: [] };
 }
 
 function installStub(): void {
@@ -44,6 +45,17 @@ function installStub(): void {
       },
       async move(messageIds: number[], folderId: string) {
         store.calls.push({ fn: "move", args: [messageIds, folderId] });
+      },
+      tags: {
+        async list() {
+          return store.definedTags;
+        },
+        async create(_key: string | null, tag: string) {
+          const key = tag.toLowerCase();
+          store.definedTags.push({ key, tag });
+          store.calls.push({ fn: "tags.create", args: [tag] });
+          return key;
+        },
       },
     },
   };
@@ -68,20 +80,41 @@ test("mail_mark_read updates each selected message", async () => {
   assert.ok(updates.every((c) => (c.args[1] as Record<string, unknown>).read === false));
 });
 
-test("mail_set_tags is additive by default (merges with existing tags)", async () => {
-  store.tags[5] = ["Work"];
-  await dispatchMutationTool("mail_set_tags", { messageIds: [5], tags: ["Finance"] });
+test("mail_set_tags is additive by default (resolves names to keys, merges)", async () => {
+  store.definedTags = [
+    { key: "work", tag: "Work" },
+    { key: "finance", tag: "Finance" },
+  ];
+  store.tags[5] = ["work"]; // existing tags on the message (keys)
+  const r = (await dispatchMutationTool("mail_set_tags", { messageIds: [5], tags: ["Finance"] })) as Record<string, unknown>;
   const upd = store.calls.find((c) => c.fn === "update");
   assert.ok(upd);
-  const tags = (upd!.args[1] as { tags: string[] }).tags;
-  assert.deepEqual(new Set(tags), new Set(["Work", "Finance"]));
+  // "Finance" resolved to key "finance"; additive union with existing "work".
+  assert.deepEqual(new Set((upd!.args[1] as { tags: string[] }).tags), new Set(["work", "finance"]));
+  assert.deepEqual(r.created, []);
 });
 
 test("mail_set_tags with additive=false replaces tags", async () => {
-  store.tags[5] = ["Work", "Urgent"];
+  store.definedTags = [
+    { key: "work", tag: "Work" },
+    { key: "urgent", tag: "Urgent" },
+    { key: "finance", tag: "Finance" },
+  ];
+  store.tags[5] = ["work", "urgent"];
   await dispatchMutationTool("mail_set_tags", { messageIds: [5], tags: ["Finance"], additive: false });
   const upd = store.calls.find((c) => c.fn === "update");
-  assert.deepEqual((upd!.args[1] as { tags: string[] }).tags, ["Finance"]);
+  assert.deepEqual((upd!.args[1] as { tags: string[] }).tags, ["finance"]);
+});
+
+test("mail_set_tags creates a tag that does not exist yet", async () => {
+  store.definedTags = [];
+  store.tags[5] = [];
+  const r = (await dispatchMutationTool("mail_set_tags", { messageIds: [5], tags: ["NewProj"] })) as Record<string, unknown>;
+  const upd = store.calls.find((c) => c.fn === "update");
+  // "NewProj" was created (key "newproj") and applied.
+  assert.deepEqual((upd!.args[1] as { tags: string[] }).tags, ["newproj"]);
+  assert.deepEqual(r.created, ["NewProj"]);
+  assert.ok(store.definedTags.some((t) => t.key === "newproj"));
 });
 
 test("mail_archive calls messages.archive with the selected ids", async () => {

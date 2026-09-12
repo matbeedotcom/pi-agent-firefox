@@ -19,6 +19,7 @@ import {
   type MailMessageRef,
   type ThunderbirdContext,
 } from "@pi-browser/protocol";
+import { listTags, resolveTagKeys } from "./tag-utils.js";
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -381,6 +382,22 @@ async function mailSearch(args: Record<string, unknown>): Promise<MailToolResult
   if (hasAttachments !== undefined) queryInfo.attachment = hasAttachments;
   const unread = boolOf(args.unread);
   if (unread !== undefined) queryInfo.unread = unread;
+  // Tag filter: resolve names/keys to keys, then build queryInfo.tags.
+  const requestedTags = Array.isArray(args.tags)
+    ? (args.tags as unknown[]).filter((x): x is string => typeof x === "string" && x.length > 0)
+    : [];
+  if (requestedTags.length > 0) {
+    const all = await listTags();
+    const { keys, unknown } = resolveTagKeys(all, requestedTags);
+    if (unknown.length > 0) {
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.PI_NOT_FOUND,
+        `unknown tag(s): ${unknown.join(", ")} (see mail_list_tags)`,
+      );
+    }
+    const mode = args.tagMode === "all" ? "all" : "any";
+    queryInfo.tags = { mode, tags: Object.fromEntries(keys.map((k) => [k, true])) };
+  }
 
   const list = await browser.messages.query(queryInfo);
   const messages = (list && Array.isArray(list.messages) ? list.messages : []).map(normalizeHeader);
@@ -484,6 +501,10 @@ async function mailListFolders(args: Record<string, unknown>): Promise<MailToolR
 // ---------------------------------------------------------------------------
 
 /** Dispatch one mail tool call to the matching implementation. */
+async function mailListTags(): Promise<unknown> {
+  return { tags: await listTags() };
+}
+
 export async function dispatchMailTool(tool: string, args: Record<string, unknown>): Promise<unknown> {
   switch (tool) {
     case "mail_get_context":
@@ -506,6 +527,8 @@ export async function dispatchMailTool(tool: string, args: Record<string, unknow
       return mailListAccounts();
     case "mail_list_folders":
       return mailListFolders(args);
+    case "mail_list_tags":
+      return mailListTags();
     default:
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown mail tool: ${tool}`);
   }

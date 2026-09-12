@@ -76,6 +76,16 @@ const SCHEMAS: Record<string, TSchema> = {
         Type.Boolean({ description: "Only messages with (true) or without (false) attachments." }),
       ),
       unread: Type.Optional(Type.Boolean({ description: "Only unread (true) or read (false) messages." })),
+      tags: Type.Optional(
+        Type.Array(Type.String(), {
+          description: "Only messages carrying the given tag(s) (tag names or keys). Combined per tagMode.",
+        }),
+      ),
+      tagMode: Type.Optional(
+        Type.Union([Type.Literal("all"), Type.Literal("any")], {
+          description: "How to combine multiple tags (default any: match at least one).",
+        }),
+      ),
       limit: Type.Optional(Type.Number({ description: "Maximum number of results per page (default 25, max 100)." })),
       cursor: Type.Optional(Type.String({ description: "Pagination cursor from a previous search result." })),
     },
@@ -97,6 +107,7 @@ const SCHEMAS: Record<string, TSchema> = {
   ),
 
   mail_list_accounts: empty(),
+  mail_list_tags: empty(),
 
   mail_list_folders: Type.Object(
     {

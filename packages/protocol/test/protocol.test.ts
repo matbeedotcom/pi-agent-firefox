@@ -65,7 +65,7 @@ test("browser tool registry: names are unique and well-formed", () => {
   assert.equal(isMutatingBrowserTool("browser_get_dom"), false);
 });
 
-test("mail tool registry: 10 read-only tools, unique names, disjoint from browser tools", () => {
+test("mail tool registry: 11 read-only tools, unique names, disjoint from browser tools", () => {
   const names = MAIL_TOOLS.map((t) => t.name);
   assert.equal(new Set(names).size, names.length);
   for (const name of names) {
@@ -84,6 +84,7 @@ test("mail tool registry: 10 read-only tools, unique names, disjoint from browse
       "mail_get_attachment",
       "mail_list_accounts",
       "mail_list_folders",
+      "mail_list_tags",
     ],
   );
   // Every T2 mail tool is read-only; none may mutate state or send.

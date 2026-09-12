@@ -124,6 +124,19 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
         before: isoDate("sent before"),
         hasAttachments: { type: "boolean", description: "Only messages with (true) or without (false) attachments." },
         unread: { type: "boolean", description: "Only unread (true) or read (false) messages." },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Only messages carrying the given tag(s) (tag names or keys). Combined per tagMode.",
+        },
+        tagMode: {
+          anyOf: [
+            { type: "string", const: "all" },
+            { type: "string", const: "any" },
+          ],
+          description: "How to combine multiple tags (default any: match at least one).",
+        },
         limit: { type: "number", description: "Maximum number of results per page (default 25, max 100)." },
         cursor: { type: "string", description: "Pagination cursor from a previous search result." },
       },
@@ -171,6 +184,12 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
         accountId: { type: "string", description: "Limit to one account (default: all accounts)." },
       },
     },
+    readOnly: true,
+  },
+  {
+    name: "mail_list_tags",
+    description: "List the account's tags (name, key, color). Read-only.",
+    inputSchema: { ...OBJECT_SCHEMA_BASE, properties: {} },
     readOnly: true,
   },
 ];

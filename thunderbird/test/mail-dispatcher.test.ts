@@ -49,6 +49,8 @@ interface Store {
   files: Record<string, { name: string; type: string; bytes: Uint8Array }>;
   accounts: Array<{ id: string; name: string; type?: string; identities: Array<Record<string, unknown>> }>;
   folders: Array<{ id?: string; name?: string; path?: string; accountId?: string; isRoot?: boolean }>;
+  tags: Array<{ key: string; tag: string; color?: string }>;
+  lastQuery?: Record<string, unknown>;
   search: MsgHeader[];
   searchCursor?: string | null;
 }
@@ -61,6 +63,7 @@ function freshStore(): Store {
     files: {},
     accounts: [],
     folders: [],
+    tags: [],
     search: [],
   };
 }
@@ -111,12 +114,22 @@ function installStub(): void {
         // File accepts a byte view at runtime; cast to satisfy the DOM lib.
         return new File([f.bytes as unknown as BlobPart], f.name, { type: f.type });
       },
-      async query() {
+      async query(queryInfo?: Record<string, unknown>) {
+        store.lastQuery = queryInfo;
         return { id: "list-1", messages: store.search };
       },
       async continueList(listId: string) {
         assert.equal(listId, "list-1");
         return { id: null, messages: store.searchCursor ? [store.searchCursor as never] : [] };
+      },
+      tags: {
+        async list() {
+          return store.tags ?? [];
+        },
+        async create(_key: string | null, tag: string) {
+          // Mirror Thunderbird: return the (auto) key for the created tag.
+          return tag.toLowerCase();
+        },
       },
     },
     folders: {
@@ -298,6 +311,42 @@ test("mail_search: unknown tool is rejected; empty store yields empty page", asy
   const res = await call("mail_search", {});
   assert.deepEqual(res.messages, []);
   await assert.rejects(call("mail_definitely_not_a_tool"), (e: unknown) => e instanceof PiBrowserProtocolError);
+});
+
+test("mail_search: filters by tag, resolving names to keys (mode any by default)", async () => {
+  store.tags = [{ key: "finance", tag: "Finance", color: "#A00000" }];
+  store.search = [{ id: 10, subject: "invoice", tags: ["finance"] }];
+  const res = await call("mail_search", { tags: ["Finance"] });
+  assert.equal(res.messages.length, 1);
+  // The query is built with the KEY (not the name) and the default OR mode.
+  assert.deepEqual(store.lastQuery?.tags, { mode: "any", tags: { finance: true } });
+});
+
+test("mail_search: multiple tags with tagMode=all build an AND filter", async () => {
+  store.tags = [
+    { key: "finance", tag: "Finance" },
+    { key: "work", tag: "Work" },
+  ];
+  store.search = [];
+  await call("mail_search", { tags: ["finance", "work"], tagMode: "all" });
+  assert.deepEqual(store.lastQuery?.tags, { mode: "all", tags: { finance: true, work: true } });
+});
+
+test("mail_search: unknown tag name -> PI_NOT_FOUND", async () => {
+  store.tags = [{ key: "finance", tag: "Finance" }];
+  await assert.rejects(
+    call("mail_search", { tags: ["nonexistent"] }),
+    (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.PI_NOT_FOUND,
+  );
+});
+
+test("mail_list_tags: returns normalized { key, name, color }", async () => {
+  store.tags = [{ key: "finance", tag: "Finance", color: "#A00000" }, { key: "work", tag: "Work" }];
+  const { tags } = await call("mail_list_tags");
+  assert.deepEqual(tags, [
+    { key: "finance", name: "Finance", color: "#A00000" },
+    { key: "work", name: "Work" },
+  ]);
 });
 
 // ---------------------------------------------------------------------------

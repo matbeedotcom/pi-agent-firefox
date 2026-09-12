@@ -12,6 +12,7 @@
  *    so it does not clobber existing tags.
  */
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { listTags, resolveTagKeys } from "./tag-utils.js";
 
 export type MutationToolResult = Record<string, unknown>;
 
@@ -63,22 +64,40 @@ async function mailMarkRead(args: Record<string, unknown>): Promise<MutationTool
 
 async function mailSetTags(args: Record<string, unknown>): Promise<MutationToolResult> {
   const ids = reqIntArr(args, "messageIds");
-  const tags = reqStrArr(args, "tags");
+  const requested = reqStrArr(args, "tags");
   const additive = optBool(args, "additive") ?? true;
+
+  // Thunderbird applies tags by KEY, but the caller passes names/keys. Resolve
+  // each to an existing key; create any that don't exist so the tag the user
+  // asked for is present after this call.
+  const all = await listTags();
+  const { keys, unknown } = resolveTagKeys(all, requested);
+  const created: string[] = [];
+  for (const name of unknown) {
+    const key = await browser.messages.tags.create(null, name);
+    created.push(name);
+    if (!keys.includes(key)) keys.push(key);
+  }
+  if (keys.length === 0) {
+    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "no tags could be resolved");
+  }
+
   for (const id of ids) {
-    let next = tags;
+    let next = keys;
     if (additive) {
       const cur = await browser.messages.get(id);
       const existing = Array.isArray(cur.tags) ? cur.tags : [];
-      next = Array.from(new Set([...existing, ...tags]));
+      next = Array.from(new Set([...existing, ...keys]));
     }
     await browser.messages.update(id, { tags: next });
   }
   return {
     count: ids.length,
-    tags,
+    tags: requested,
+    keys,
+    created,
     additive,
-    note: `Tagged ${ids.length} message(s) with ${tags.join(", ")}${additive ? " (added to existing tags)" : " (replaced tags)"}.`,
+    note: `Tagged ${ids.length} message(s) with ${requested.join(", ")}${additive ? " (added to existing tags)" : " (replaced tags)"}${created.length ? `; created tag(s): ${created.join(", ")}` : ""}.`,
   };
 }
 

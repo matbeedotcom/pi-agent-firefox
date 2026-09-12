@@ -46,8 +46,15 @@ Space tool cards for per-tool results. A tool that isn’t registered fails with
    `mail_archive(messageIds)` on the three and `mail_set_tags(messageIds, ["Finance"])`
    on the invoice. In Thunderbird: the three leave the current folder (archive) and the
    invoice carries the **Finance** tag. Tags are additive (existing tags preserved).
-4. **If it fails:** confirm the selected ids are in the tool args. A missing folder/tag
-   id is a `MAIL_*` structured error on the tool card. Archive/move are reversible —
+   `mail_set_tags` resolves “Finance” to Thunderbird’s internal tag key and **creates the
+   tag if it doesn’t exist yet** (reported under `created`).
+4. **Verify the tag (read-back + filter):** in a fresh prompt ask
+   **“What tags are on the invoice email?”** → `mail_get_message` now returns `tags` (you
+   should see `finance`). Then **“Find all emails tagged Finance.”** → `mail_search({tags:
+   ["Finance"]})` resolves the name to its key and returns only the matching messages.
+5. **If it fails:** confirm the selected ids are in the tool args. A missing folder/tag
+   id is a `MAIL_*` structured error on the tool card; an unknown tag name in
+   `mail_search` is a `PI_NOT_FOUND` (see `mail_list_tags`). Archive/move are reversible —
    nothing is deleted.
 
 ## Check 4 — T6 contacts

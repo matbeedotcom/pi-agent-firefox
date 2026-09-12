@@ -114,9 +114,9 @@ test("initialize: pi.agent.hello (thunderbird, mail + compose) -> no browser too
   assert.equal(res._meta.piAgent.application, "thunderbird");
   assert.deepEqual(res._meta.piAgent.capabilities, ["mail", "compose", "attachments"]);
   // A mail+compose client receives the read-only mail tools AND the draft-first
-  // compose tools (10 + 6, incl. compose_add_attachment), and no browser tools.
+  // compose tools (11 + 6, incl. compose_add_attachment + mail_list_tags), and no browser tools.
   const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/m", mcpServers: [] })) as { sessionId: string };
-  assert.equal(h.lastCreateTools.length, 16);
+  assert.equal(h.lastCreateTools.length, 17);
   assert.ok(
     h.lastCreateTools.every((t) => /^(mail_|compose_)/.test((t as { name: string }).name)),
     "mail+compose client gets only mail/compose tools",
@@ -141,8 +141,8 @@ test("initialize: thunderbird mailModify + contacts capabilities register mutati
   });
   const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/mc", mcpServers: [] })) as { sessionId: string };
   const names = h.lastCreateTools.map((t) => (t as { name: string }).name);
-  // 10 mail + 6 compose + 4 mutation + 2 contacts = 22
-  assert.equal(names.length, 22);
+  // 11 mail + 6 compose + 4 mutation + 2 contacts = 23
+  assert.equal(names.length, 23);
   assert.ok(names.includes("mail_archive"), "mutation tool registered");
   assert.ok(names.includes("mail_set_tags"), "tag tool registered");
   assert.ok(names.includes("contacts_search"), "contacts tool registered");

@@ -230,6 +230,25 @@ declare namespace browser.messages {
   function archive(messageIds: number[]): Promise<void>;
 }
 
+/** browser.messages.tags — tag management (messagesTags permission). */
+declare namespace browser.messages.tags {
+  interface TagInfo {
+    /** Internal tag key (lowercase) — used in query filters and update(). */
+    key: string;
+    /** Human-readable tag name. */
+    tag: string;
+    /** 6-hex color (uppercased). */
+    color?: string;
+    ordinal?: number;
+  }
+  /** All tags (key + name + color). */
+  function list(): Promise<TagInfo[]>;
+  /** One tag by key. */
+  function get(key: string): Promise<TagInfo>;
+  /** Create a tag; returns the associated key. Pass a null key to auto-generate. */
+  function create(key: string | null, tag: string, color?: string): Promise<string>;
+}
+
 /** browser.contacts — address book (T6, addressBooks permission). Read-only here (no create/update/delete). */
 declare namespace browser.contacts {
   interface Contact {
