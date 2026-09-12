@@ -1367,3 +1367,99 @@ test("thunderbird mail client: hello accepted, mail tools registered, mail tool 
     await shutdown(host);
   }
 });
+
+// T4 + T6: Thunderbird mail-organization + contacts capability provider
+//
+// The real add-on now declares capabilities
+// ["mail","attachments","compose","mailModify","contacts"]. This drives the REAL
+// built host with that full hello: the host must register the mutation (mailModify)
+// and contacts tools and route a scripted call for each over the legacy transport.
+// ---------------------------------------------------------------------------
+
+/** Client-side stand-in for the add-on's mutation + contacts dispatchers. */
+class FakeT4T6 {
+  constructor() {
+    this.calls = [];
+  }
+  dispatch(params) {
+    this.calls.push(params.tool);
+    const { tool, arguments: args = {} } = params;
+    switch (tool) {
+      case "contacts_search":
+        return {
+          content: [{ type: "text", text: JSON.stringify({ count: 1, contacts: [{ id: "c1", name: "Sarah Doe", emails: ["sarah@acme.com"], organization: "Acme" }] }) }],
+        };
+      case "contacts_get":
+        return { content: [{ type: "text", text: JSON.stringify({ id: args.contactId, name: "Sarah Doe", emails: ["sarah@acme.com"] }) }] };
+      case "mail_mark_read":
+        return { content: [{ type: "text", text: JSON.stringify({ count: args.messageIds?.length ?? 0, read: args.read ?? true }) }] };
+      case "mail_set_tags":
+        return { content: [{ type: "text", text: JSON.stringify({ count: args.messageIds?.length ?? 0, tags: args.tags }) }] };
+      case "mail_archive":
+        return { content: [{ type: "text", text: JSON.stringify({ count: args.messageIds?.length ?? 0, note: "archived" }) }] };
+      case "mail_move":
+        return { content: [{ type: "text", text: JSON.stringify({ count: args.messageIds?.length ?? 0, folderId: args.folderId }) }] };
+      default:
+        throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool: ${tool}`);
+    }
+  }
+}
+
+test("thunderbird T4/T6 client: mailModify + contacts tools registered and round-trip", async () => {
+  const t46 = new FakeT4T6();
+  const script = writeScript([
+    {
+      match: "sarah",
+      events: [{ type: "text_delta", delta: "Found her." }],
+      toolCalls: [
+        { toolName: "contacts_search", args: { query: "Sarah Acme" } },
+        { toolName: "mail_archive", args: { messageIds: [1001] } },
+      ],
+    },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
+  try {
+    host.on(X_PI_BROWSER.tool, (params) => t46.dispatch(params));
+
+    const res = await host.request(AGENT_METHODS.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: { loadSession: true },
+      clientInfo: { name: "pi-thunderbird", version: "0.1.1" },
+      _meta: {
+        piAgent: {
+          type: "pi.agent.hello",
+          client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
+          capabilities: ["mail", "attachments", "compose", "mailModify", "contacts"],
+        },
+      },
+    });
+    const caps = res._meta?.piAgent?.capabilities ?? [];
+    assert.ok(caps.includes("mailModify"), "mailModify capability echoed");
+    assert.ok(caps.includes("contacts"), "contacts capability echoed");
+
+    const created = await host.request(AGENT_METHODS.session_new, { cwd: "/home/user" });
+    const mark = host.notifications.length;
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: created.sessionId, prompt: [{ type: "text", text: "draft a message to sarah and archive the invoice" }] },
+      60_000,
+    );
+    const updates = host.notifications
+      .slice(mark)
+      .filter((m) => m.method === "session/update" && m.params?.sessionId === created.sessionId);
+    const toolEnds = updates.filter((u) => u.params.update?.sessionUpdate === "tool_call_update");
+    const completed = toolEnds.filter((u) => u.params.update?.status === "completed");
+    const outs = completed.map((u) => JSON.stringify(u.params.update?.rawOutput ?? "")).join("\n");
+
+    // A successful round-trip proves the host REGISTERED each tool (an
+    // unregistered tool would fail the schema gate / route to an error).
+    assert.ok(t46.calls.includes("contacts_search"), "contacts_search routed to the client dispatcher");
+    assert.ok(t46.calls.includes("mail_archive"), "mail_archive routed to the client dispatcher");
+    assert.ok(outs.includes("Sarah Doe"), "contacts_search returned the fake contact");
+    assert.ok(outs.includes("archived"), "mail_archive returned a result");
+
+    assert.ok(host.alive);
+  } finally {
+    await shutdown(host);
+  }
+});
