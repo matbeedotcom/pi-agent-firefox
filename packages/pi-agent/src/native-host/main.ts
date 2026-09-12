@@ -1,8 +1,8 @@
 /**
  * Pi Agent native host entry point (PRODUCT.md §7, §42, §43;
- * THUNDERBIRD-PLAN.md §2 — application-neutral `dev.pi.agent`).
+ * THUNDERBIRD-PLAN.md §2 — application-neutral `com.matbee.agent`).
  *
- * Launched by Firefox or Thunderbird via connectNative("dev.pi.agent")
+ * Launched by Firefox or Thunderbird via connectNative("com.matbee.agent")
  * (legacy Firefox registrations still use "dev.pi.browser"). Which provider
  * capabilities (browser / mail / ...) are attached is negotiated by the
  * client's pi.agent.hello handshake at ACP initialize. Owns:

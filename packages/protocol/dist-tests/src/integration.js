@@ -14,9 +14,10 @@ export const PI_BROWSER = {
     version: "0.1.0",
     /**
      * Pi Browser integration protocol version (bump on breaking changes to
-     * x-pi-browser/* semantics or integration metadata).
+     * x-pi-browser/* semantics or integration metadata). v2 = 2026-09-11
+     * identity rename (add-on IDs to @matbee.com, host name to com.matbee.agent).
      */
-    protocolVersion: 1,
+    protocolVersion: 2,
     /** Browser tool schema version (bump when tool schemas change). */
     browserToolVersion: 1,
     /** Stable Firefox Native Messaging host name (manifest `name`). */
@@ -28,8 +29,12 @@ export const PI_BROWSER = {
 export const AGENT_CAPABILITIES = ["browser", "mail", "compose", "attachments", "contacts"];
 /** Agent-level integration identity (application-neutral). */
 export const PI_AGENT = {
-    /** Native Messaging host name (manifest `name`), shared by both applications. */
-    nativeHost: "dev.pi.agent",
+    /**
+     * Native Messaging host name (manifest `name`), shared by both
+     * applications. 2026-09-11: renamed from the `dev.pi.*` placeholders to a
+     * name under the project-owned matbee domain.
+     */
+    nativeHost: "com.matbee.agent",
     /** Legacy host name kept for already-registered Firefox installations. */
     legacyNativeHost: "dev.pi.browser",
     /**
@@ -39,8 +44,11 @@ export const PI_AGENT = {
      * `pi-firefox@matbee.com` remains authorized for compatibility.
      */
     authorizedExtensions: ["pi-agent-firefox@matbee.com", "pi-firefox@matbee.com", "pi-agent-thunderbird@matbee.com"],
-    /** Agent integration protocol version (bump on breaking _meta.piAgent changes). */
-    protocolVersion: 1,
+    /**
+     * Agent integration protocol version (bump on breaking _meta.piAgent
+     * changes). v2 = 2026-09-11 identity rename.
+     */
+    protocolVersion: 2,
 };
 export const PI_AGENT_META = {
     version: PI_BROWSER.version,

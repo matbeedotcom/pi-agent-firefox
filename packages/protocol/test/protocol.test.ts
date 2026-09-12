@@ -121,7 +121,7 @@ test("error codes map to unique reserved JSON-RPC codes", () => {
 test("integration metadata is stable and complete", () => {
   assert.equal(PI_BROWSER.nativeHost, "dev.pi.browser");
   assert.equal(PI_BROWSER.extensionId, "pi-agent-firefox@matbee.com");
-  assert.equal(PI_BROWSER_META.protocolVersion, 1);
+  assert.equal(PI_BROWSER_META.protocolVersion, 2);
   assert.equal(PI_BROWSER_META.browserToolVersion, 1);
   assert.equal(X_PI_BROWSER.tool, "x-pi-browser/tool");
 });
@@ -162,14 +162,14 @@ test("permission helpers: request shape + outcome classification", () => {
 });
 
 test("agent identity: host name + authorized extensions", () => {
-  assert.equal(PI_AGENT.nativeHost, "dev.pi.agent");
+  assert.equal(PI_AGENT.nativeHost, "com.matbee.agent");
   assert.equal(PI_AGENT.legacyNativeHost, "dev.pi.browser");
   assert.deepEqual(PI_AGENT.authorizedExtensions, [
     "pi-agent-firefox@matbee.com",
     "pi-firefox@matbee.com",
     "pi-agent-thunderbird@matbee.com",
   ]);
-  assert.equal(PI_AGENT.protocolVersion, 1);
+  assert.equal(PI_AGENT.protocolVersion, 2);
   assert.equal(PI_AGENT_META.protocolVersion, PI_AGENT.protocolVersion);
   assert.deepEqual(PI_AGENT_META.capabilities, []);
   assert.deepEqual(AGENT_CAPABILITIES, ["browser", "mail", "compose", "attachments", "contacts"]);

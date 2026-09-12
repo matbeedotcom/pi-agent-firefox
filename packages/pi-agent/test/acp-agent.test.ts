@@ -90,7 +90,7 @@ test("initialize: capabilities + piBrowser metadata", async () => {
   assert.ok(caps.sessionCapabilities.resume);
   assert.ok(caps.sessionCapabilities.close);
   assert.equal(caps.mcpCapabilities.acp, true);
-  assert.equal(res._meta.piBrowser.protocolVersion, 1);
+  assert.equal(res._meta.piBrowser.protocolVersion, 2);
   assert.equal(res._meta.piBrowser.browserToolVersion, 1);
   assert.equal(res.agentInfo.name, "test-agent");
 });
@@ -398,5 +398,5 @@ test("x-pi-browser/ping responds with integration metadata", async () => {
   const h = setup();
   const res = (await h.request(X_PI_BROWSER.ping, {})) as { pong: boolean; meta: { protocolVersion: number } };
   assert.equal(res.pong, true);
-  assert.equal(res.meta.protocolVersion, 1);
+  assert.equal(res.meta.protocolVersion, 2);
 });

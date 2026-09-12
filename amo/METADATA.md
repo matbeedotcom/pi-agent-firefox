@@ -23,7 +23,7 @@
 
 | Permission | Justification |
 |------------|---------------|
-| `nativeMessaging` | The add-on speaks only to the locally installed `dev.pi.agent` host (shipped with the separate Pi package, never downloaded by this add-on). Until that host is installed the add-on is inert and shows a setup screen. |
+| `nativeMessaging` | The add-on speaks only to the locally installed `com.matbee.agent` host (shipped with the separate Pi package, never downloaded by this add-on). Until that host is installed the add-on is inert and shows a setup screen. |
 | `<all_urls>` (host) | Required to operate the tab the user **explicitly binds** to an agent session: read page content/DOM, click/type into referenced elements, reload, permission-gated screenshot. The add-on never acts on a tab that has not been bound by the user. |
 | `activeTab` | Fallback for the screenshot capture path when the bound tab is the active tab. |
 | `tabs` | Tab binding (session ↔ tab) and locating the bound tab. |

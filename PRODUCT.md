@@ -422,14 +422,14 @@ The browser extension itself cannot provision the native manifest; Mozilla requi
 Use a stable native application name:
 
 ```text
-dev.pi.browser
+com.matbee.agent
 ```
 
 Manifest:
 
 ```json
 {
-  "name": "dev.pi.browser",
+  "name": "com.matbee.agent",
   "description": "Pi Coding Agent Browser Integration",
   "path": "/absolute/path/to/pi-browser-host",
   "type": "stdio",
@@ -452,7 +452,7 @@ Firefox only supports `"stdio"` for Native Messaging manifests.
 Install:
 
 ```text
-~/.mozilla/native-messaging-hosts/dev.pi.browser.json
+~/.mozilla/native-messaging-hosts/com.matbee.agent.json
 ```
 
 Manifest path must point to an absolute executable path.
@@ -478,7 +478,7 @@ Install:
 
 ```text
 ~/Library/Application Support/Mozilla/NativeMessagingHosts/
-    dev.pi.browser.json
+    com.matbee.agent.json
 ```
 
 The launcher again points to the bundled Node host.
@@ -492,7 +492,7 @@ Create the manifest somewhere owned by the Pi package installation.
 Then create:
 
 ```text
-HKCU\SOFTWARE\Mozilla\NativeMessagingHosts\dev.pi.browser
+HKCU\SOFTWARE\Mozilla\NativeMessagingHosts\com.matbee.agent
 ```
 
 whose default value is the path to that manifest.
@@ -640,7 +640,7 @@ The Firefox background process owns exactly one persistent Native Messaging port
 
 ```ts
 const port = browser.runtime.connectNative(
-  "dev.pi.browser"
+  "com.matbee.agent"
 );
 ```
 
@@ -1575,7 +1575,7 @@ Expected lifecycle:
 ```text
 Firefox sidebar/background starts
         ↓
-connectNative("dev.pi.browser")
+connectNative("com.matbee.agent")
         ↓
 Firefox launches native host
         ↓
@@ -2102,7 +2102,7 @@ The first release is complete when all of the following work:
 
 3. User installs the Firefox add-on.
 
-4. Firefox successfully calls connectNative("dev.pi.browser").
+4. Firefox successfully calls connectNative("com.matbee.agent").
 
 5. Firefox initializes Pi as an ACP agent.
 

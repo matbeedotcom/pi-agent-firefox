@@ -1,5 +1,5 @@
 /** Application-neutral host name (manifest `name`). */
-export declare const NATIVE_HOST_NAME: "dev.pi.agent";
+export declare const NATIVE_HOST_NAME: "com.matbee.agent";
 /** Legacy Firefox host name; removed on uninstall for cleanup. */
 export declare const LEGACY_NATIVE_HOST_NAME: "dev.pi.browser";
 /** All add-on IDs the host manifest authorizes (plan §2). */

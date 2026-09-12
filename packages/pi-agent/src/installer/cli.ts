@@ -1,7 +1,7 @@
 /**
  * Installer CLI: `node dist/installer/cli.js [install|status|doctor|uninstall] [firefox|thunderbird|mozilla]`
  *
- * The app target selects which Mozilla applications the shared `dev.pi.agent`
+ * The app target selects which Mozilla applications the shared `com.matbee.agent`
  * host is registered for (plan §23). Default: `mozilla` (both).
  *
  * This is a normal CLI process (not the native host), so stdout is free for

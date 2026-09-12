@@ -14,9 +14,10 @@ export declare const PI_BROWSER: {
     readonly version: "0.1.0";
     /**
      * Pi Browser integration protocol version (bump on breaking changes to
-     * x-pi-browser/* semantics or integration metadata).
+     * x-pi-browser/* semantics or integration metadata). v2 = 2026-09-11
+     * identity rename (add-on IDs to @matbee.com, host name to com.matbee.agent).
      */
-    readonly protocolVersion: 1;
+    readonly protocolVersion: 2;
     /** Browser tool schema version (bump when tool schemas change). */
     readonly browserToolVersion: 1;
     /** Stable Firefox Native Messaging host name (manifest `name`). */
@@ -32,8 +33,12 @@ export type AgentCapability = "browser" | "mail" | "compose" | "attachments" | "
 export declare const AGENT_CAPABILITIES: readonly AgentCapability[];
 /** Agent-level integration identity (application-neutral). */
 export declare const PI_AGENT: {
-    /** Native Messaging host name (manifest `name`), shared by both applications. */
-    readonly nativeHost: "dev.pi.agent";
+    /**
+     * Native Messaging host name (manifest `name`), shared by both
+     * applications. 2026-09-11: renamed from the `dev.pi.*` placeholders to a
+     * name under the project-owned matbee domain.
+     */
+    readonly nativeHost: "com.matbee.agent";
     /** Legacy host name kept for already-registered Firefox installations. */
     readonly legacyNativeHost: "dev.pi.browser";
     /**
@@ -43,8 +48,11 @@ export declare const PI_AGENT: {
      * `pi-firefox@matbee.com` remains authorized for compatibility.
      */
     readonly authorizedExtensions: readonly ["pi-agent-firefox@matbee.com", "pi-firefox@matbee.com", "pi-agent-thunderbird@matbee.com"];
-    /** Agent integration protocol version (bump on breaking _meta.piAgent changes). */
-    readonly protocolVersion: 1;
+    /**
+     * Agent integration protocol version (bump on breaking _meta.piAgent
+     * changes). v2 = 2026-09-11 identity rename.
+     */
+    readonly protocolVersion: 2;
 };
 /** Client identity declared in the integration hello. */
 export interface AgentClientIdentity {

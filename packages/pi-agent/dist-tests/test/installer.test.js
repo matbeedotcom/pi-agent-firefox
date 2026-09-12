@@ -6,7 +6,7 @@ import path from "node:path";
 import { runCommand, expandAppTarget } from "../src/installer/index.js";
 import { manifestPathsForApps, distinctManifestLocations, legacyManifestPath, WINDOWS_REGISTRY_KEY } from "../src/installer/common.js";
 /**
- * Cross-platform installer tests for the application-neutral dev.pi.agent
+ * Cross-platform installer tests for the application-neutral com.matbee.agent
  * host (plan §2, §23). Linux and macOS run against real temp directories;
  * Windows uses a mocked `reg` exec capturing commands and a simulated
  * registry state.
@@ -69,20 +69,20 @@ test("manifest path table: shared on linux/windows, split on macOS (plan §23)",
     const home = "/home/u";
     // Linux: one shared directory for both apps.
     const linux = manifestPathsForApps(["firefox", "thunderbird"], home, "linux");
-    assert.equal(linux.firefox, `${home}/.mozilla/native-messaging-hosts/dev.pi.agent.json`);
+    assert.equal(linux.firefox, `${home}/.mozilla/native-messaging-hosts/com.matbee.agent.json`);
     assert.equal(linux.thunderbird, linux.firefox);
     assert.equal(distinctManifestLocations(["firefox", "thunderbird"], home, "linux").length, 1);
     // macOS: Firefox under Application Support, Thunderbird under Library/Mozilla.
     const mac = manifestPathsForApps(["firefox", "thunderbird"], home, "darwin");
-    assert.equal(mac.firefox, `${home}/Library/Application Support/Mozilla/NativeMessagingHosts/dev.pi.agent.json`);
-    assert.equal(mac.thunderbird, `${home}/Library/Mozilla/NativeMessagingHosts/dev.pi.agent.json`);
+    assert.equal(mac.firefox, `${home}/Library/Application Support/Mozilla/NativeMessagingHosts/com.matbee.agent.json`);
+    assert.equal(mac.thunderbird, `${home}/Library/Mozilla/NativeMessagingHosts/com.matbee.agent.json`);
     assert.equal(distinctManifestLocations(["firefox", "thunderbird"], home, "darwin").length, 2);
     // Legacy cleanup paths.
     assert.equal(legacyManifestPath("firefox", home, "darwin"), `${home}/Library/Application Support/Mozilla/NativeMessagingHosts/dev.pi.browser.json`);
     assert.equal(legacyManifestPath("thunderbird", home, "linux"), `${home}/.mozilla/native-messaging-hosts/dev.pi.browser.json`);
     assert.equal(legacyManifestPath("thunderbird", home, "win32"), undefined);
     // Windows registry key is shared by both apps.
-    assert.equal(WINDOWS_REGISTRY_KEY, `SOFTWARE\\Mozilla\\NativeMessagingHosts\\dev.pi.agent`);
+    assert.equal(WINDOWS_REGISTRY_KEY, `SOFTWARE\\Mozilla\\NativeMessagingHosts\\com.matbee.agent`);
 });
 for (const platform of ["linux", "macos"]) {
     test(`${platform}: install (mozilla) -> status -> repair -> uninstall lifecycle`, async () => {
@@ -102,7 +102,7 @@ for (const platform of ["linux", "macos"]) {
             const paths = manifestPathsForApps(["firefox", "thunderbird"], home, norm(platform));
             for (const app of ["firefox", "thunderbird"]) {
                 const manifest = JSON.parse(await readFile(paths[app], "utf8"));
-                assert.equal(manifest.name, "dev.pi.agent", `${app} manifest host name`);
+                assert.equal(manifest.name, "com.matbee.agent", `${app} manifest host name`);
                 assert.equal(manifest.type, "stdio");
                 assert.deepEqual(manifest.allowed_extensions, EXPECTED_ALLOWED);
                 assert.ok(manifest.path.endsWith("native/pi-agent-host"));
@@ -172,8 +172,8 @@ test("macos: firefox-only install writes only the Firefox manifest", async () =>
         const home = path.join(root, "home");
         const install = await runCommand("install", { pkgRoot, platform: "macos", homeDir: home, apps: "firefox" });
         assert.ok(install.ok);
-        const fxPath = `${home}/Library/Application Support/Mozilla/NativeMessagingHosts/dev.pi.agent.json`;
-        const tbPath = `${home}/Library/Mozilla/NativeMessagingHosts/dev.pi.agent.json`;
+        const fxPath = `${home}/Library/Application Support/Mozilla/NativeMessagingHosts/com.matbee.agent.json`;
+        const tbPath = `${home}/Library/Mozilla/NativeMessagingHosts/com.matbee.agent.json`;
         await stat(fxPath); // exists
         let tbExists = false;
         try {
@@ -204,14 +204,14 @@ test("windows: registry-based install/status/uninstall for both apps (mocked reg
         assert.equal(before.ok, false);
         const install = await runCommand("install", ctx);
         assert.equal(install.ok, true);
-        // reg add called with the shared dev.pi.agent key
+        // reg add called with the shared com.matbee.agent key
         const addCall = reg.calls.find((c) => c.args[0] === "add");
         assert.ok(addCall);
         assert.ok(addCall.args.includes(`HKCU\\${WINDOWS_REGISTRY_KEY}`));
         // manifest file written inside the package
-        const manifestFile = path.join(pkgRoot, "native", "dev_pi_agent.json");
+        const manifestFile = path.join(pkgRoot, "native", "com_matbee_agent.json");
         const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
-        assert.equal(manifest.name, "dev.pi.agent");
+        assert.equal(manifest.name, "com.matbee.agent");
         assert.ok(manifest.path.endsWith("pi-agent-host.cmd"));
         assert.deepEqual(manifest.allowed_extensions, EXPECTED_ALLOWED);
         const launcher = await readFile(manifest.path, "utf8");

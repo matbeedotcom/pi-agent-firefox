@@ -2,7 +2,7 @@
  * Per-platform install targets. Each implements the same operations over
  * an injected environment so every platform is unit-testable.
  *
- * The host is application-neutral (dev.pi.agent). Manifest locations are
+ * The host is application-neutral (com.matbee.agent). Manifest locations are
  * per-app (plan §23); on Linux/Windows both apps share one location.
  */
 import { execFile } from "node:child_process";

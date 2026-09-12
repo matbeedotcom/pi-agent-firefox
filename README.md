@@ -1,7 +1,7 @@
 # Pi Browser Agent
 
 A Firefox MV3 add-on that is a **full ACP (Agent Client Protocol) client for [Pi](https://pi.dev)**,
-plus a Pi package (`@pi-browser/agent`) that provides the **`dev.pi.browser` Native Messaging host**.
+plus a Pi package (`@pi-browser/agent`) that provides the **`com.matbee.agent` Native Messaging host** (application-neutral: Firefox + Thunderbird).
 
 Pi can inspect and operate a tab bound to a session — read page content/DOM, click and type into
 referenced elements, reload the tab, and take permission-gated screenshots — while all browser
