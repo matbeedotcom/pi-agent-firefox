@@ -126,18 +126,99 @@ pre-installed as an unsigned xpi (`xpinstall.signatures.required=false`):
 (build first: `npm run build`). The Pi Space button then appears in the spaces toolbar.
 (Or a permanent install of a signed xpi of `thunderbird/dist`.)
 
+## Phase T2 — read-only mail tools (2026-09-12)
+
+T2 adds the read-only mail surface + the normalized context model (THUNDERBIRD-PLAN.md
+§9–14). The add-on declares `capabilities: ["mail","attachments"]`; the host registers the
+mail tools and dispatches them to `thunderbird/src/background/mail-dispatcher.ts` over the
+legacy `x-pi-browser/tool` transport (host-side `MailToolProvider` in `@pi-browser/agent`).
+**No mutation**: there is no send/move/delete/tag/flag tool; the user composes and presses
+Send manually (T3 stays draft-first).
+
+**Tools** (11): `mail_get_context`, `mail_search`, `mail_get_selected_messages`,
+`mail_get_displayed_messages`, `mail_list_messages`, `mail_get_message`, `mail_get_body`,
+`mail_list_attachments`, `mail_get_attachment`, `mail_list_accounts`, `mail_list_folders`.
+
+**Normalized context model** — `mail_get_context` answers “what am I looking at?” and is the
+seed for “summarize this email”: active mail tab + selected folders + selected messages +
+displayed messages, each normalized to a durable id (prefer `headerMessageId`, fall back to the
+transient numeric `id`), subject, author, recipients, date, folder. Untrusted email content
+(bodies/headers/attachments) is **tool output only** — never merged into the user prompt (§13).
+
+**Tab resolution** — `getCurrent()` resolves the WebExtension *active* tab. When the user chats
+from the full **Pi Space** (a separate tab), the active tab is not a mail tab, so the dispatcher
+falls back to `mailTabs.query()` → prefer an `.active` mail tab → the first one showing a
+displayed message → else the first. Mail tabs carry their id as **`tabId`** in MV3
+(`convertMailTab`), not `id`.
+
+**Verified:**
+- **Unit tests (19):** `thunderbird/test/mail-dispatcher.test.ts` — tool routing, context/tab/
+  folder/message normalization, the `headerMessageId` durability rule, HTML→text body fallback,
+  pagination, attachment truncation, structured not-found errors.
+- **Live API-shape conformance:** the dispatcher was checked field-by-field against the installed
+  Thunderbird 155.0.1 ESR schema (`ext-messages.js`, `messages.json`, `mailTabs.json`,
+  `folders.json`, `accounts.json`). Fixed during live testing: `messages.query` must **not** set
+  `returnMessageListId` (else it returns a bare list-id string, not `{id, messages}`);
+  `fromDate`/`toDate` are **`Date`** objects (the API calls `.getTime()`); `mailTabs.query`
+  has **no `type`** property.
+- **Live “Summarize this email.” — CONFIRMED (2026-09-12):** on a real selected/displayed message
+  in the installed Thunderbird, the search + context path resolves and Pi summarizes the email with
+  no copy/paste. **T2 closed.**
+
+## Phase T3 — draft-first compose tools (2026-09-12)
+
+T3 adds the draft-first compose surface (THUNDERBIRD-PLAN.md §15–17). The add-on now declares
+`capabilities: ["mail","attachments","compose"]` and the `compose` permission; the five compose
+tools are dispatched to `thunderbird/src/background/compose-dispatcher.ts` over the same
+`x-pi-browser/tool` transport, and the host registers them (gated on the `compose` capability)
+via `@pi-browser/agent` (`compose/schemas.ts` + `CapabilityToolProvider`).
+
+**Tools** (5): `compose_prepare_new`, `compose_prepare_reply`, `compose_prepare_forward`,
+`compose_get`, `compose_update`. Each `prepare_*` opens a populated compose window (returned as
+`composeTabId`); `compose_get`/`compose_update` read/edit an already-open window. Recipients are
+mailbox strings; the body is HTML.
+
+**Draft-first / no send (§15, §21)** — enforced at three layers:
+1. **Tool layer:** there is no `compose_send` tool exposed to the agent (protocol + dispatcher both
+   reject any non-compose tool name).
+2. **Code layer:** the dispatcher never calls `browser.compose.sendMessage` or `saveMessage` (grep
+   of the built `background.js` shows zero such calls).
+3. **Permission layer (Thunderbird-enforced):** the manifest declares only `compose`, **not**
+   `compose.send`/`compose.save`. The installed 155 schema gates `sendMessage` on `['compose.send']`
+   and `saveMessage` on `['compose.save']`, so even if the code called them, Thunderbird would
+   deny the call. `begin*`/`getComposeDetails`/`setComposeDetails` need only `compose`.
+
+The user reviews the window and presses Send manually.
+
+**Verified:**
+- **Unit tests (9):** `thunderbird/test/compose-dispatcher.test.ts` — routing, the right
+  `begin*`/`setComposeDetails` call with the right arguments, `composeTabId` surfaced, recipient
+  list normalization (object → “Name <email>”), update-only-provided-fields, structured
+  not-found / missing-`messageId` errors, and a guard proving **no send path exists**
+  (`compose_send` is rejected; `prepare*` never invokes a send/save function).
+- **Schema sync:** the compose JSON schemas (protocol) and TypeBox schemas (agent) are
+  byte-checked by `tool-schemas.test.ts` (the same strict contract as the mail/browser tools).
+- **Capability gate:** `acp-agent.test.ts` proves a `["mail","compose","attachments"]` hello
+  registers all 15 tools (10 mail + 5 compose), no browser tools, and **no `compose_send`**.
+- **Built xpi:** `/tmp/pi-thunderbird-t3.xpi` — manifest carries the `compose` permission; the
+  background hello carries `["mail","attachments","compose"]`; grep confirms the five
+  `begin*`/`get`/`set` calls and **zero** `compose.sendMessage`/`saveMessage`.
+- **Live verify — CONFIRMED (2026-09-12):** with `/tmp/pi-thunderbird-t3.xpi` loaded, “Draft a
+  reply saying Thursday works.” opens a populated Thunderbird reply compose window for review;
+  nothing is sent. **T2 and T3 both live-confirmed functional.**
+
 ## Test suite map (§48)
 
-`npm test` (Node 22 required) → **95/95 green** as of 2026-09-11:
+`npm test` (Node 22 required) → **131/131 green** as of 2026-09-12:
 
 | Workspace | Tests | Covers |
 |-----------|-------|--------|
-| `@pi-browser/protocol` | 12 | framing helpers, JSON-RPC, structured errors, permission helpers, schema constants, **agent identity + `pi.agent.hello` (firefox + thunderbird) + capability normalization** |
-| `@pi-browser/agent` | 56 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
+| `@pi-browser/protocol` | 14 | framing helpers, JSON-RPC, structured errors, permission helpers, schema constants, **agent identity + `pi.agent.hello` (firefox + thunderbird) + capability normalization** |
+| `@pi-browser/agent` | 61 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
 | `@pi-browser/webext` | — | shared `AcpClient` (injected identity + hello) + `SessionStore` (shared by both add-ons; exercised by the firefox tests + e2e) |
 | `@pi-browser/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) — now on the shared `@pi-browser/webext` |
-| `@pi-browser/thunderbird` | 0 | no unit tests yet (e2e below + live verification above) |
-| `pi-browser-tests` (e2e) | 13 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat, **and a fake-Thunderbird client proving the host contract for a `capabilities: []` Thunderbird session** |
+| `@pi-browser/thunderbird` | 28 | **mail tool dispatcher** (T2): routing, context/tab/folder/message normalization, the `headerMessageId` durability rule, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 9 tests)**: routing, `begin*`/`setComposeDetails` argument correctness, recipient normalization, and the **no-send-path guard** |
+| `pi-browser-tests` (e2e) | 14 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat, **and a fake-Thunderbird client proving the host contract for a `capabilities: []` Thunderbird session** |
 
 ## Live real-backend smoke test
 
@@ -145,6 +226,24 @@ pre-installed as an unsigned xpi (`xpinstall.signatures.required=false`):
 initialize → capabilities + `mcpCapabilities.acp` → `session/new` → `session/list` (real sessions) →
 `session/resume` from a real `~/.pi/agent/sessions/*.jsonl` → close. Run:
 `node .probe/smoke-host.mjs` (Node 22).
+
+## Per-DoD mapping (plan §35–38)
+
+| DoD / success criterion | Status | Evidence |
+|---|---|---|
+| **T0** host `dev.pi.agent` (both add-on IDs authorized) + `application`/`capabilities` hello + browser gate + installer (`firefox`/`thunderbird`/`mozilla`, macOS split, Windows per-app) + Firefox suite green | ✅ | `acp-agent.test.ts` (hello + capability normalization), `installer.test.ts` (targets + platform paths); Firefox 14 + e2e 14 green |
+| **T1** add-on connects via `runtime.connectNative("dev.pi.agent")`; Pi Space session list/new/resume/prompt/stream/cancel | ✅ | `space/` UI; live green dot “Pi · pi-coding-agent” (T1); chat round-trip live-confirmed |
+| **T2** 10 read-only mail tools; “Summarize this email” on a real selected message, no copy/paste | ✅ | `mail-dispatcher.test.ts` (19); live-confirmed (T2 section) |
+| **T3** compose tools; “Draft a reply saying Thursday works.” opens populated compose; user sends; no send anywhere | ✅ | `compose-dispatcher.test.ts` (9, incl. no-send guard); 3-layer no-send (tool/code/permission); live-confirmed (T3 section) |
+| Untrusted email = tool output only, never merged into the user prompt (§31–32) | ✅ | dispatcher returns normalized refs; body only via explicit `mail_get_message_body`; no prompt merging |
+| Durable id = `headerMessageId` (not numeric `messageId`) (§7) | ✅ | `MailMessageRef` dual-id; `mail-dispatcher.test.ts` durability rule |
+| Permissions only `nativeMessaging`, `accountsRead`, `messagesRead`, `compose` — no `compose.send`/mutation | ✅ | `manifest.json`; installed-155 schema confirms `compose.send`/`compose.save` are **not** declared |
+| **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 14 green in the 131/131 run |
+| `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **131/131** |
+
+> **Note on the `piPane` column:** the `browser.piPane` Experiment API (4th column) was built and
+> proven working in an earlier stage, but Experiment APIs are **out of scope** for this goal
+> (objective Boundaries). It is bonus work, not a success criterion; T0–T3 above are the DoD.
 
 ## Related commits (2026-09-11)
 

@@ -1,0 +1,313 @@
+/* Pi pane — compact, message-inline chat rendered beside the message pane by the
+ * piPane Experiment. Same visual language as the Pi Space (space/style.css), in a
+ * single narrow column: the pane is ~320px wide, so the Space's left rail becomes
+ * a top header + a session dropdown.
+ */
+:root {
+  --bg: #1c1b22;
+  --bg-2: #26242e;
+  --bg-3: #2f2d3a;
+  --text: #e8e6f0;
+  --muted: #9a96ab;
+  --accent: #7c6cf0;
+  --accent-2: #5a4fd0;
+  --ok: #4caf7d;
+  --warn: #d9a441;
+  --err: #e06060;
+  --border: #3a3747;
+  font-size: 13px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+button {
+  background: var(--accent);
+  color: white;
+  border: 1px solid var(--accent-2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+button:hover {
+  filter: brightness(1.1);
+}
+
+button.secondary {
+  background: var(--bg-3);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- Header: status + actions ---- */
+#header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+
+#status {
+  flex: 1;
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: none;
+}
+
+#status.ok::before {
+  background: var(--ok);
+}
+
+#status.err::before {
+  background: var(--err);
+}
+
+.rail-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* ---- New session panel ---- */
+#new-panel {
+  padding: 10px;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+}
+
+#new-panel label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+#cwd-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+/* ---- Session dropdown ---- */
+#session-row {
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+
+#sessions {
+  width: 100%;
+  background: var(--bg-3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  max-width: 100%;
+}
+
+#caps {
+  padding: 6px 10px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---- Main: conversation ---- */
+#main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#active-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+#meta-row {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#conversation {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.msg {
+  border-radius: 8px;
+  padding: 8px 12px;
+  line-height: 1.45;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  max-width: 100%;
+}
+
+.msg.user {
+  background: var(--bg-3);
+  align-self: flex-end;
+  max-width: 82%;
+}
+
+.msg.assistant {
+  background: var(--bg-2);
+  align-self: flex-start;
+  max-width: 95%;
+}
+
+.msg.thought {
+  background: transparent;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  align-self: flex-start;
+  max-width: 95%;
+}
+
+.msg.tool {
+  background: var(--bg-2);
+  border-left: 2px solid var(--accent-2);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  align-self: flex-start;
+  max-width: 95%;
+}
+
+.msg.tool .tool-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+}
+
+.msg.tool .tool-status {
+  color: var(--muted);
+}
+
+.msg.tool .tool-status.done {
+  color: var(--ok);
+}
+
+.msg.tool .tool-status.failed {
+  color: var(--err);
+}
+
+.msg .code {
+  font-family: ui-monospace, monospace;
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.msg pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  overflow-x: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  white-space: pre;
+}
+
+/* ---- Composer ---- */
+#composer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+#prompt {
+  width: 100%;
+  background: var(--bg-3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+#empty {
+  padding: 30px 16px;
+  text-align: center;
+  color: var(--muted);
+  margin: auto;
+}

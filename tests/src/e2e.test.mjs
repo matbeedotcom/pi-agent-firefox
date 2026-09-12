@@ -1240,3 +1240,130 @@ test("thunderbird client: hello accepted, no tools registered, chat streams + ca
     await shutdown(host);
   }
 });
+
+// ---------------------------------------------------------------------------
+// T2: Thunderbird mail capability provider
+//
+// The real Thunderbird add-on now declares capabilities ["mail","attachments"]
+// and serves the ten read-only mail tools over the legacy x-pi-browser/tool
+// transport. This drives the REAL built host exactly like that add-on does:
+// the hello is accepted and echoed, the host registers the mail tools (not the
+// browser tools), and a scripted agent mail-tool call round-trips over the
+// legacy transport to the client-side mail dispatcher.
+// ---------------------------------------------------------------------------
+
+/** Client-side stand-in for the add-on's mail-dispatcher (fake mailbox). */
+class FakeMail {
+  constructor() {
+    this.calls = [];
+    this.context = {
+      tab: { tabId: 1, type: "inbox" },
+      selectedFolders: [{ id: "f1", name: "Inbox" }],
+      selectedMessages: [
+        {
+          messageId: 1001,
+          headerMessageId: "<t2@x>",
+          subject: "T2 works",
+          author: "Tester <t@x>",
+          date: "2024-05-05T00:00:00Z",
+          read: false,
+          folder: "Inbox",
+          folderId: "f1",
+        },
+      ],
+      displayedMessages: [{ messageId: 1001, subject: "T2 works" }],
+    };
+  }
+  dispatch(params) {
+    this.calls.push(params.tool);
+    const { tool } = params;
+    let result;
+    switch (tool) {
+      case "mail_get_context":
+        result = { context: this.context };
+        break;
+      case "mail_get_message":
+        result = this.context.selectedMessages[0];
+        break;
+      case "mail_get_message_body":
+        result = { bodyText: "Body of T2 works.", truncated: false };
+        break;
+      case "mail_search":
+        result = { messages: this.context.selectedMessages, nextCursor: null };
+        break;
+      case "mail_list_attachments":
+        result = { attachments: [{ partName: "1", name: "t2.txt", contentType: "text/plain", size: 9 }] };
+        break;
+      case "mail_list_accounts":
+        result = { accounts: [{ id: "acc1", name: "Test", identities: [{ identityId: "id1", email: "t@x", isDefault: true }] }] };
+        break;
+      case "mail_list_folders":
+        result = { folders: this.context.selectedFolders };
+        break;
+      default:
+        throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown mail tool: ${tool}`);
+    }
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+}
+
+test("thunderbird mail client: hello accepted, mail tools registered, mail tool round-trips", async () => {
+  const mail = new FakeMail();
+  const script = writeScript([
+    {
+      match: "summarize this email",
+      events: [{ type: "text_delta", delta: "Done." }],
+      toolCalls: [{ toolName: "mail_get_context" }],
+    },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
+  try {
+    // Client-side mail dispatcher, as the add-on's onToolCall installs one.
+    host.on(X_PI_BROWSER.tool, (params) => mail.dispatch(params));
+
+    const res = await host.request(AGENT_METHODS.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: { loadSession: true },
+      clientInfo: { name: "pi-thunderbird", version: "0.1.1" },
+      _meta: {
+        piAgent: {
+          type: "pi.agent.hello",
+          client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
+          capabilities: ["mail", "attachments"],
+        },
+      },
+    });
+    // The host echoes the mail capabilities it accepted.
+    assert.deepEqual(res._meta?.piAgent?.capabilities, ["mail", "attachments"]);
+
+    // Session with no mcpServers (the add-on uses the legacy transport).
+    const created = await host.request(AGENT_METHODS.session_new, { cwd: "/home/user" });
+    assert.ok(created.sessionId, "session created");
+
+    const mark = host.notifications.length;
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: created.sessionId, prompt: [{ type: "text", text: "summarize this email" }] },
+      60_000,
+    );
+    const updates = host.notifications
+      .slice(mark)
+      .filter((m) => m.method === "session/update" && m.params?.sessionId === created.sessionId);
+    const text = updates
+      .map((u) => (u.params.update?.sessionUpdate === "agent_message_chunk" ? u.params.update.content?.text : ""))
+      .join("");
+    assert.ok(text.includes("Done."), "assistant text streamed");
+
+    // The scripted mail tool completed (not failed) and returned the mailbox.
+    const toolEnds = updates.filter((u) => u.params.update?.sessionUpdate === "tool_call_update");
+    const completed = toolEnds.find((u) => u.params.update?.status === "completed");
+    assert.ok(completed, "mail_get_context completed");
+    const out = JSON.stringify(completed.params.update?.rawOutput ?? "");
+    assert.ok(out.includes("T2 works"), "mail tool returned the fake mail context");
+    assert.ok(mail.calls.includes("mail_get_context"), "client-side mail dispatcher was invoked");
+
+    assert.ok(host.alive);
+  } finally {
+    await shutdown(host);
+  }
+});

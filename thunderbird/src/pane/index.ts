@@ -1,23 +1,24 @@
 /**
- * Pi Space view (THUNDERBIRD-PLAN.md §5, §36).
+ * Pi pane (THUNDERBIRD-PLAN.md §5).
  *
- * Plain DOM, no framework. The background is the single source of truth for
- * connection state and sessions; this page keeps the in-memory transcript and
- * renders ACP session/update streams. Same model as the Firefox sidebar, laid
- * out as a full Space tab (session rail + conversation pane).
+ * A compact, message-inline Pi chat rendered in a native 4th column beside the
+ * message pane — the piPane Experiment mounts this page in a real WebExtension
+ * <browser>, so it has the full `browser.*` API. It is the SAME chat as the Pi
+ * Space (same transcript model, same ACP session/update rendering) but:
+ *   - transported over a per-tab runtime Port ("pi-pane") instead of the Space's
+ *     broadcast runtime.sendMessage — ideal for streaming, and scoped to this tab, and
+ *   - laid out as a single narrow column (top status, a session dropdown, and the
+ *     conversation) since it sits beside the email at ~320px.
+ *
+ * The background is the single source of truth; this page keeps the in-memory
+ * transcript and renders ACP session/update streams pushed over the Port.
  */
-import type {
-  SessionConfigOption,
-  SessionConfigSelect,
-  SessionUpdate,
-  ToolCallUpdate,
-} from "@pi-browser/protocol";
+import type { SessionUpdate, ToolCallUpdate } from "@pi-browser/protocol";
 
 interface StatusInfo {
   state: string;
   detail?: string;
   agentInfo?: { name?: string; version?: string };
-  piBrowserMeta?: { version: string; protocolVersion: number; browserToolVersion: number };
 }
 
 interface SessionUi {
@@ -27,7 +28,6 @@ interface SessionUi {
   updatedAt?: string;
   streaming: boolean;
   loaded: boolean;
-  configOptions?: SessionConfigOption[];
 }
 
 interface UiState {
@@ -35,11 +35,10 @@ interface UiState {
   activeSessionId?: string;
   sessions: SessionUi[];
   lastSessionId?: string;
-  spaceId?: number;
 }
 
 // ---------------------------------------------------------------------------
-// Transcript model
+// Transcript model (same as the Space)
 // ---------------------------------------------------------------------------
 
 type Block =
@@ -64,21 +63,120 @@ function addBlock(sessionId: string, block: Block): void {
 }
 
 // ---------------------------------------------------------------------------
-// Background bridge
+// Background bridge (runtime Port, name "pi-pane")
 // ---------------------------------------------------------------------------
 
-function action<A>(name: string, payload?: Record<string, unknown>): Promise<A> {
+let port: browser.runtime.Port | null = null;
+let reqCounter = 0;
+const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+let reconnectAttempts = 0;
+
+function connect(): void {
+  try {
+    port = browser.runtime.connect({ name: "pi-pane" });
+  } catch (err) {
+    console.warn("[pi-pane] connect failed", err);
+    scheduleReconnect();
+    return;
+  }
+  const p = port;
+  const params = new URLSearchParams(location.search);
+  const rawTab = Number(params.get("tabId"));
+  const tabId = Number.isFinite(rawTab) && rawTab !== 0 ? rawTab : undefined;
+  try {
+    p.postMessage({ type: "pane.ready", tabId });
+  } catch (err) {
+    console.warn("[pi-pane] ready post failed", err);
+  }
+  p.onMessage.addListener(onPortMessage);
+  p.onDisconnect.addListener(() => {
+    if (port === p) port = null;
+    for (const { reject } of pending.values()) reject(new Error("disconnected from background"));
+    pending.clear();
+    scheduleReconnect();
+  });
+}
+
+function scheduleReconnect(): void {
+  // The background event page stays alive while a Port is open, so a drop usually
+  // means the background reloaded (or the tab reloaded). Retry with a short
+  // backoff; the pane re-delivers its full state via the next pane.ready.
+  reconnectAttempts += 1;
+  if (reconnectAttempts > 10) {
+    flash("disconnected from Pi background");
+    return;
+  }
+  const delay = Math.min(500 * reconnectAttempts, 4000);
+  setTimeout(() => {
+    if (port === null) connect();
+  }, delay);
+}
+
+function onPortMessage(raw: unknown): void {
+  if (typeof raw !== "object" || raw === null) return;
+  const msg = raw as {
+    type?: string;
+    state?: UiState;
+    sessionId?: string;
+    update?: SessionUpdate;
+    requestId?: number;
+    ok?: boolean;
+    result?: unknown;
+    error?: { message?: string };
+  };
+
+  if (msg.type === "pane/action_result") {
+    if (typeof msg.requestId === "number" && pending.has(msg.requestId)) {
+      const entry = pending.get(msg.requestId)!;
+      pending.delete(msg.requestId);
+      if (msg.ok) entry.resolve(msg.result);
+      else entry.reject(new Error(msg.error?.message ?? "action failed"));
+    }
+    return;
+  }
+
+  if (msg.type === "pi/state" && msg.state) {
+    reconnectAttempts = 0;
+    uiState = msg.state;
+    activeSessionId = msg.state.activeSessionId;
+    renderAll();
+  } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
+    applySessionUpdate(msg.sessionId, msg.update);
+  }
+}
+
+/**
+ * Send a command to the background over the Port and await its result.
+ * Quick control actions (get_state, new_session, select, cancel, refresh) resolve
+ * in well under a second; `prompt` only resolves when the whole turn finishes,
+ * so it gets a long timeout to avoid a spurious "timed out" on long turns (the
+ * streaming output still arrives via the separate session_update pushes).
+ */
+function action<A>(name: string, payload?: Record<string, unknown>, timeoutMs = 30_000): Promise<A> {
   return new Promise((resolve, reject) => {
-    browser.runtime
-      .sendMessage({ type: "pi/action", action: name, ...(payload !== undefined ? { payload } : {}) })
-      .then((resp) => {
-        if (resp && resp.ok === false) {
-          reject(new Error(resp.error?.message ?? "action failed"));
-        } else {
-          resolve((resp?.result ?? resp) as A);
-        }
-      })
-      .catch((err) => reject(err instanceof Error ? err : new Error(String(err))));
+    if (!port) {
+      reject(new Error("not connected to background"));
+      return;
+    }
+    const id = ++reqCounter;
+    pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+    try {
+      port.postMessage({
+        type: "pane/action",
+        action: name,
+        ...(payload !== undefined ? { payload } : {}),
+        requestId: id,
+      });
+    } catch (err) {
+      pending.delete(id);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
+    setTimeout(() => {
+      if (pending.has(id)) {
+        pending.delete(id);
+        reject(new Error("action timed out: " + name));
+      }
+    }, timeoutMs);
   });
 }
 
@@ -176,19 +274,6 @@ function renderAll(): void {
   renderCaps();
   renderActive();
   renderConversation();
-  renderOnboarding();
-}
-
-let onboardDismissed = false;
-let onboardSeen = false;
-
-function renderOnboarding(): void {
-  const el = $<HTMLDivElement>("onboard-overlay");
-  const s = uiState.status.state;
-  if (s === "not_installed") onboardSeen = true;
-  if (s === "connected") onboardSeen = false;
-  const show = !onboardDismissed && onboardSeen && (s === "not_installed" || s === "connecting" || s === "disconnected");
-  el.classList.toggle("hidden", !show);
 }
 
 function renderStatus(): void {
@@ -200,17 +285,17 @@ function renderStatus(): void {
       el.classList.add("ok");
       const agent = s.agentInfo ? `${s.agentInfo.name ?? "agent"} ${s.agentInfo.version ?? ""}`.trim() : "connected";
       el.textContent = `Pi · ${agent}`;
+      el.title = "Connected to the Pi native host.";
       break;
     }
     case "connecting":
       el.textContent = "connecting to native host…";
+      el.title = "";
       break;
     case "not_installed":
       el.classList.add("err");
       el.textContent = "native host not detected";
-      el.title =
-        "Auto-detecting: the space connects on its own as soon as the host is " +
-        "installed (no reload needed).\n\n" + (s.detail ?? "");
+      el.title = "No ACP server found. Install the Pi package and run /pi-browser install thunderbird; this pane reconnects automatically.";
       break;
     default:
       el.classList.add("err");
@@ -220,36 +305,26 @@ function renderStatus(): void {
 }
 
 function renderSessions(): void {
-  const ul = $<HTMLUListElement>("sessions");
-  ul.textContent = "";
-  for (const s of uiState.sessions) {
-    const li = document.createElement("li");
-    if (s.sessionId === activeSessionId) li.classList.add("active");
-    const title = document.createElement("span");
-    title.className = "title";
-    title.textContent = s.title || s.sessionId.slice(0, 8);
-    const cwd = document.createElement("span");
-    cwd.className = "cwd";
-    cwd.textContent = s.cwd;
-    li.append(title, cwd);
-    if (s.streaming) {
-      const dot = document.createElement("span");
-      dot.className = "streaming";
-      dot.textContent = "●";
-      li.append(dot);
-    }
-    li.addEventListener("click", () => {
-      void action("select_session", { sessionId: s.sessionId }).catch((err) => flash(`select failed: ${err.message}`));
-    });
-    ul.append(li);
+  const sel = $<HTMLSelectElement>("sessions");
+  const row = $<HTMLDivElement>("session-row");
+  sel.textContent = "";
+  if (uiState.sessions.length === 0) {
+    row.classList.add("hidden");
+    return;
   }
+  row.classList.remove("hidden");
+  for (const s of uiState.sessions) {
+    const opt = document.createElement("option");
+    opt.value = s.sessionId;
+    opt.textContent = (s.title || s.sessionId.slice(0, 12)) + (s.streaming ? " ●" : "");
+    if (s.sessionId === activeSessionId) opt.selected = true;
+    sel.append(opt);
+  }
+  if (!activeSessionId && uiState.sessions.length > 0) sel.value = uiState.sessions[0].sessionId;
 }
 
 function renderCaps(): void {
   const el = $<HTMLDivElement>("caps");
-  // T2: chat + read-only mail. Compose (draft-first, no send) arrives in T3.
-  // Select an email and ask "Summarize this email." — the agent uses the
-  // read-only mail tools against what you have selected/displayed.
   el.textContent = "capabilities: chat · read-only mail";
   el.title =
     "Pi can read the mail you select or view (context, messages, bodies, search, attachments, accounts, folders). " +
@@ -260,62 +335,25 @@ function renderActive(): void {
   const session = uiState.sessions.find((s) => s.sessionId === activeSessionId);
   const pane = $<HTMLDivElement>("active-pane");
   const empty = $<HTMLDivElement>("empty");
+  const composer = $<HTMLDivElement>("composer");
+  const connected = uiState.status.state === "connected";
+
   if (!session) {
     pane.classList.add("hidden");
+    composer.classList.add("hidden");
     empty.classList.remove("hidden");
+    empty.textContent = connected
+      ? "No session selected. Create one with “+ New”."
+      : "Waiting for Pi to connect…";
     return;
   }
+
   empty.classList.add("hidden");
   pane.classList.remove("hidden");
-
+  composer.classList.remove("hidden");
   const meta = $<HTMLDivElement>("meta-row");
   meta.textContent = `cwd: ${session.cwd}${session.updatedAt ? ` · ${new Date(session.updatedAt).toLocaleString()}` : ""}`;
-
-  renderConfigRow(session);
   updateComposerState(session);
-}
-
-function renderConfigRow(session: SessionUi): void {
-  const row = $<HTMLDivElement>("config-row");
-  row.textContent = "";
-  const options = session.configOptions ?? [];
-  if (options.length === 0) {
-    row.classList.add("hidden");
-    return;
-  }
-  row.classList.remove("hidden");
-  for (const opt of options) {
-    if (opt.type !== "select") continue;
-    const selectOpt = opt as SessionConfigSelect & { type: "select"; id: string; name: string };
-    const label = document.createElement("label");
-    label.textContent = `${selectOpt.name}: `;
-    const select = document.createElement("select");
-    const values = flattenOptions(selectOpt.options);
-    for (const v of values) {
-      const optEl = document.createElement("option");
-      optEl.value = v.value;
-      optEl.textContent = v.name;
-      select.append(optEl);
-    }
-    select.value = String(selectOpt.currentValue ?? "");
-    select.addEventListener("change", () => {
-      void action("set_config", { sessionId: session.sessionId, configId: selectOpt.id, value: select.value }).catch((err) =>
-        flash(`config change failed: ${err.message}`),
-      );
-    });
-    row.append(label, select);
-  }
-}
-
-function flattenOptions(
-  options: Array<{ value: string; name: string } | { name: string; options: Array<{ value: string; name: string }> }>,
-): Array<{ value: string; name: string }> {
-  const out: Array<{ value: string; name: string }> = [];
-  for (const o of options) {
-    if ("options" in o) out.push(...o.options);
-    else out.push(o);
-  }
-  return out;
 }
 
 function updateComposerState(session: SessionUi): void {
@@ -333,7 +371,7 @@ function flash(text: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Conversation rendering (markdown-lite)
+// Conversation rendering (markdown-lite, same as the Space)
 // ---------------------------------------------------------------------------
 
 function renderConversation(): void {
@@ -432,23 +470,13 @@ function fragmentFromInline(line: string): DocumentFragment {
 // Events
 // ---------------------------------------------------------------------------
 
-browser.runtime.onMessage.addListener((message: unknown) => {
-  if (typeof message !== "object" || message === null) return;
-  const msg = message as { type?: string; state?: UiState; sessionId?: string; update?: SessionUpdate };
-  if (msg.type === "pi/state" && msg.state) {
-    uiState = msg.state;
-    activeSessionId = msg.state.activeSessionId;
-    renderAll();
-  } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
-    applySessionUpdate(msg.sessionId, msg.update);
-  }
-});
-
 $<HTMLButtonElement>("new-session").addEventListener("click", () => {
-  $<HTMLDivElement>("new-panel").classList.toggle("hidden");
-  if (!$<HTMLDivElement>("new-panel").classList.contains("hidden")) {
+  const panel = $<HTMLDivElement>("new-panel");
+  panel.classList.toggle("hidden");
+  if (!panel.classList.contains("hidden")) {
     const input = $<HTMLInputElement>("cwd-input");
-    input.value = activeSessionId ? uiState.sessions.find((s) => s.sessionId === activeSessionId)?.cwd ?? "" : "";
+    const active = uiState.sessions.find((s) => s.sessionId === activeSessionId);
+    input.value = active?.cwd ?? "";
     input.focus();
   }
 });
@@ -467,36 +495,19 @@ function submitNewSession(): void {
 }
 
 $<HTMLButtonElement>("cwd-create").addEventListener("click", submitNewSession);
-$<HTMLButtonElement>("cwd-create").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") submitNewSession();
-});
 $<HTMLInputElement>("cwd-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") submitNewSession();
-  if (e.key === "Escape") $<HTMLButtonElement>("cwd-cancel").click();
+  if (e.key === "Escape") $<HTMLDivElement>("new-panel").classList.add("hidden");
 });
 
 $<HTMLButtonElement>("refresh").addEventListener("click", () => {
   void action("refresh_sessions").catch(() => {});
 });
 
-$<HTMLButtonElement>("onboard-check").addEventListener("click", () => {
-  browser.runtime
-    .sendMessage({ type: "pi/ensure_connected" })
-    .then((res: { connected?: boolean } | undefined) => {
-      if (res?.connected) {
-        void action<UiState>("get_state")
-          .then((s) => {
-            uiState = s;
-            renderAll();
-          })
-          .catch(() => {});
-      }
-    })
-    .catch(() => {});
-});
-$<HTMLButtonElement>("onboard-dismiss").addEventListener("click", () => {
-  onboardDismissed = true;
-  renderOnboarding();
+$<HTMLSelectElement>("sessions").addEventListener("change", () => {
+  const id = $<HTMLSelectElement>("sessions").value;
+  if (!id) return;
+  void action("select_session", { sessionId: id }).catch((err) => flash(`select failed: ${err.message}`));
 });
 
 $<HTMLButtonElement>("send").addEventListener("click", () => {
@@ -524,21 +535,12 @@ async function sendPrompt(): Promise<void> {
   input.value = "";
   addBlock(activeSessionId, { id: 0, kind: "user", text });
   renderConversation();
-  await action("prompt", { sessionId: activeSessionId, text }).catch((err) => flash(`send failed: ${err.message}`));
+  await action("prompt", { sessionId: activeSessionId, text }, 1_800_000).catch((err) => flash(`send failed: ${err.message}`));
 }
 
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
-void (async () => {
-  renderAll();
-  try {
-    const state = (await action<UiState>("get_state")) as UiState;
-    uiState = state;
-    activeSessionId = state.activeSessionId;
-    renderAll();
-  } catch {
-    // background not ready yet; state will arrive via push
-  }
-})();
+connect();
+renderAll();

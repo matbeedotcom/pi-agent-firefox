@@ -1,0 +1,69 @@
+[
+  {
+    "namespace": "piPane",
+    "description": "Native 4th-pane plumbing for the Pi side panel in Thunderbird's about:3pane. Manipulates only Thunderbird's native UI; all ACP/session/mail logic lives in the normal extension background.",
+    "functions": [
+      {
+        "name": "open",
+        "type": "function",
+        "async": true,
+        "description": "Install the Pi pane into the about:3pane of the given mail tab. No-op if already open. Rejects if the tab is not a mail 3-pane tab.",
+        "parameters": [
+          { "name": "tabId", "type": "integer", "description": "WebExtension tab id of the mail 3-pane tab." }
+        ]
+      },
+      {
+        "name": "close",
+        "type": "function",
+        "async": true,
+        "description": "Remove the Pi pane from the given mail tab. No-op if not open.",
+        "parameters": [
+          { "name": "tabId", "type": "integer" }
+        ]
+      },
+      {
+        "name": "toggle",
+        "type": "function",
+        "async": true,
+        "description": "Open the Pi pane if closed, close it if open.",
+        "parameters": [
+          { "name": "tabId", "type": "integer" }
+        ],
+        "returns": {
+          "type": "object",
+          "properties": {
+            "open": { "type": "boolean" },
+            "tabId": { "type": "integer" }
+          }
+        }
+      },
+      {
+        "name": "setWidth",
+        "type": "function",
+        "async": true,
+        "description": "Set the width of the Pi pane in CSS pixels for the given mail tab.",
+        "parameters": [
+          { "name": "tabId", "type": "integer" },
+          { "name": "width", "type": "integer", "description": "Width in px (clamped to a minimum of 180)." }
+        ]
+      },
+      {
+        "name": "getState",
+        "type": "function",
+        "async": true,
+        "description": "Return the open/width state of the Pi pane for the given mail tab.",
+        "parameters": [
+          { "name": "tabId", "type": "integer" }
+        ],
+        "returns": {
+          "type": "object",
+          "properties": {
+            "open": { "type": "boolean" },
+            "width": { "type": "integer", "optional": true },
+            "tabId": { "type": "integer" }
+          }
+        }
+      }
+    ]
+  }
+]

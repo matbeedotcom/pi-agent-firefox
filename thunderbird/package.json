@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "echo \"thunderbird: no unit tests yet (e2e in tests/)\" && exit 0"
+    "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
   },
   "dependencies": {
     "@pi-browser/protocol": "0.1.1",

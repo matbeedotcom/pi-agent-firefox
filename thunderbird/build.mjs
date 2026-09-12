@@ -60,4 +60,29 @@ await cp(path.join(root, "manifest.json"), path.join(dist, "manifest.json"));
 await cp(path.join(root, "src", "space", "index.html"), path.join(dist, "space", "index.html"));
 await cp(path.join(root, "src", "space", "style.css"), path.join(dist, "space", "style.css"));
 
+// The piPane pane page: a WebExtension page (TypeScript, like the Space) mounted
+// in a <browser> by the Experiment. It reaches the background over a runtime
+// Port (name "pi-pane") for per-tab, streaming chat — the compact, message-inline
+// view that sits beside the email (the full Space stays the expanded view).
+await mkdir(path.join(dist, "pane"), { recursive: true });
+await esbuild.build({
+  ...common,
+  entryPoints: [path.join(root, "src", "pane", "index.ts")],
+  outfile: path.join(dist, "pane", "pane.js"),
+});
+await cp(path.join(root, "src", "pane", "index.html"), path.join(dist, "pane", "index.html"));
+await cp(path.join(root, "src", "pane", "pane.css"), path.join(dist, "pane", "pane.css"));
+
+// The piPane Experiment is raw JS/JSON (loaded by the WebExtension module
+// system, not bundled by esbuild): copy the schema + implementation verbatim.
+await mkdir(path.join(dist, "experiments", "piPane"), { recursive: true });
+await cp(
+  path.join(root, "src", "experiments", "piPane", "schema.json"),
+  path.join(dist, "experiments", "piPane", "schema.json"),
+);
+await cp(
+  path.join(root, "src", "experiments", "piPane", "implementation.js"),
+  path.join(dist, "experiments", "piPane", "implementation.js"),
+);
+
 console.log("thunderbird add-on built to", dist);

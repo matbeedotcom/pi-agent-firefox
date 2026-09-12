@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pi</title>
+    <link rel="stylesheet" href="pane.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="header">
+        <div id="status" title="">connecting…</div>
+        <div class="rail-actions">
+          <button id="new-session" title="New session">+ New</button>
+          <button id="refresh" title="Refresh session list" class="secondary">⟳</button>
+        </div>
+      </header>
+
+      <div id="new-panel" class="hidden">
+        <label for="cwd-input">Working directory</label>
+        <input id="cwd-input" type="text" placeholder="/path/to/project" autocomplete="off" spellcheck="false" />
+        <div class="row">
+          <button id="cwd-create">Create</button>
+          <button id="cwd-cancel" class="secondary">Cancel</button>
+        </div>
+      </div>
+
+      <div id="session-row" class="hidden">
+        <select id="sessions" title="Active session"></select>
+      </div>
+
+      <div id="caps" class="muted" title="Capabilities this Thunderbird exposes to Pi"></div>
+
+      <div id="main">
+        <div id="active-pane" class="hidden">
+          <div id="meta-row"></div>
+          <div id="conversation"></div>
+        </div>
+
+        <div id="empty" class="hidden">
+          <p>No session selected.</p>
+          <p class="muted">Create one with “+ New”, or pick a session above.</p>
+        </div>
+      </div>
+
+      <div id="composer" class="hidden">
+        <textarea id="prompt" rows="3" placeholder="Ask Pi… (Enter to send, Shift+Enter for newline)"></textarea>
+        <div class="row">
+          <button id="send">Send</button>
+          <button id="stop" class="secondary hidden">Stop</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="pane.js"></script>
+  </body>
+</html>

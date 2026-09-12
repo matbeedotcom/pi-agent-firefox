@@ -87,3 +87,247 @@ declare namespace browser.spaces {
   /** Remove an extension-owned space. */
   function remove(spaceId: number): Promise<void>;
 }
+
+/** Shared mail shapes (used across messages/mailTabs/messageDisplay). */
+declare namespace browser.mailTypes {
+  /** RFC 5322 mailbox string, e.g. "Name <addr@example>". */
+  type MailboxString = string;
+
+  /** A date: RFC 3339 string (WebExtension `Date`). May be a number (epoch ms). */
+  type Date = string | number;
+
+  /** Basic information about a message (the `messages.MessageHeader`). */
+  interface MessageHeader {
+    /** Transient numeric id — valid only in the current session. */
+    id: number;
+    /** Durable Message-ID header. */
+    headerMessageId?: string;
+    subject?: string;
+    author?: MailboxString;
+    recipients?: MailboxString[];
+    ccList?: MailboxString[];
+    bccList?: MailboxString[];
+    date?: Date;
+    read?: boolean;
+    flagged?: boolean;
+    new?: boolean;
+    size?: number;
+    tags?: string[];
+    priority?: string;
+    junk?: boolean;
+    junkScore?: number;
+    headersOnly?: boolean;
+    external?: boolean;
+    folder?: browser.folders.MailFolder;
+  }
+
+  /** A (possibly paginated) list of messages. */
+  interface MessageList {
+    /** Id to pass to messages.continueList / abortList, or null. */
+    id: string | null;
+    messages: MessageHeader[];
+  }
+
+  /** A MIME part (the whole message when at the root). */
+  interface MessagePart {
+    contentType?: string;
+    partName?: string;
+    name?: string;
+    /** Decoded text content; present for text/* parts when decodeContent. */
+    body?: string;
+    parts?: MessagePart[];
+    decryptionStatus?: string;
+    size?: number;
+  }
+
+  /** An attachment in a message. */
+  interface MessageAttachment {
+    partName: string;
+    name: string;
+    contentType: string;
+    size: number;
+    contentDisposition?: string;
+    type?: "attachment" | "inline" | "cloudFile";
+    linkUrl?: string;
+  }
+}
+
+/** browser.mailTabs — the mail tabs (message + folder panes). */
+declare namespace browser.mailTabs {
+  interface MailTab {
+    /**
+     * The mail-tab id. In MV3 (this add-on) `convertMailTab` exposes this as
+     * `tabId` (== the browser tab id); in MV2 it was `id`. This is what the
+     * other mail APIs' `tabId` parameter refers to.
+     */
+    tabId: number;
+    windowId?: number;
+    active?: boolean;
+    displayedFolder?: browser.folders.MailFolder;
+  }
+  interface QueryInfo {
+    /** Whether the tabs are active in their windows. */
+    active?: boolean;
+    /** Whether the tabs are in the current window. */
+    currentWindow?: boolean;
+    /** Whether the tabs are in the last focused window. */
+    lastFocusedWindow?: boolean;
+    /** The parent window id (-2 = last focused, -1 = current, or a specific id). */
+    windowId?: number;
+  }
+  /** The currently focused mail tab (throws if there is none). */
+  function getCurrent(): Promise<MailTab>;
+  function get(tabId: number): Promise<MailTab>;
+  function query(queryInfo?: QueryInfo): Promise<MailTab[]>;
+  /** The folder(s) currently selected in a mail tab's folder pane. */
+  function getSelectedFolders(tabId?: number): Promise<browser.folders.MailFolder[]>;
+  /** The message(s) the user selected in a mail tab (paginated list). */
+  function getSelectedMessages(tabId?: number): Promise<browser.mailTypes.MessageList>;
+  /** The messages listed in a mail tab's message pane (paginated list). */
+  function getListedMessages(tabId?: number, options?: Record<string, unknown>): Promise<browser.mailTypes.MessageList>;
+}
+
+/** browser.messageDisplay — the message currently shown in the message pane. */
+declare namespace browser.messageDisplay {
+  /** The single message displayed (throws if none). */
+  function getDisplayedMessage(tabId?: number): Promise<browser.mailTypes.MessageHeader>;
+  /** The messages displayed in the pane (paginated list). */
+  function getDisplayedMessages(tabId?: number): Promise<browser.mailTypes.MessageList>;
+}
+
+/** browser.messages — read access to individual messages (messagesRead). */
+declare namespace browser.messages {
+  /** Normalized metadata for one message (no body). */
+  function get(messageId: number): Promise<browser.mailTypes.MessageHeader>;
+  /** The decoded MIME part tree for one message (bodies for text/* parts). */
+  function getFull(
+    messageId: number,
+    options?: { decrypt?: boolean; decodeHeaders?: boolean; decodeContent?: boolean },
+  ): Promise<browser.mailTypes.MessagePart>;
+  /** The attachments of one message (metadata only). */
+  function listAttachments(messageId: number): Promise<browser.mailTypes.MessageAttachment[]>;
+  /** The file for one attachment (a DOM File/Blob). */
+  function getAttachmentFile(messageId: number, partName: string): Promise<File>;
+  /** Search messages (paginated list). */
+  function query(queryInfo?: Record<string, unknown>): Promise<browser.mailTypes.MessageList>;
+  /** Continue a paginated message list (from a list id). */
+  function continueList(messageListId: string): Promise<browser.mailTypes.MessageList>;
+  /** Abort a paginated message list. */
+  function abortList(messageListId: string): Promise<void>;
+}
+
+/** browser.folders — mail folders (accountsRead). */
+declare namespace browser.folders {
+  interface MailFolder {
+    id?: string;
+    name?: string;
+    path?: string;
+    accountId?: string;
+    isRoot?: boolean;
+    isUnified?: boolean;
+    isVirtual?: boolean;
+    isTag?: boolean;
+    isFavorite?: boolean;
+    subFolders?: MailFolder[];
+  }
+  function query(queryInfo?: { accountId?: string; [k: string]: unknown }): Promise<MailFolder[]>;
+  function get(folderId: string, includeSubFolders?: boolean): Promise<MailFolder>;
+}
+
+/** browser.accounts — mail accounts + identities (accountsRead). */
+declare namespace browser.accounts {
+  interface MailIdentity {
+    id: string;
+    name?: string;
+    email?: string;
+    label?: string;
+    organization?: string;
+  }
+  interface MailAccount {
+    id: string;
+    name: string;
+    type?: string;
+    rootFolder?: browser.folders.MailFolder;
+    identities?: MailIdentity[];
+    folders?: browser.folders.MailFolder[] | null;
+  }
+  function list(includeSubFolders?: boolean): Promise<MailAccount[]>;
+  function get(accountId: string, includeSubFolders?: boolean): Promise<MailAccount | null>;
+  function getDefault(includeSubFolders?: boolean): Promise<MailAccount | null>;
+}
+
+/**
+ * browser.piPane — a custom Experiment API (manifest `experiment_apis`) that
+ * injects the Pi side panel as a native 4th column in about:3pane. Privileged
+ * (addon_parent); available to the background only. See experiments/piPane/.
+ */
+declare namespace browser.piPane {
+  interface PaneState {
+    /** True when the pane is installed in the tab's about:3pane. */
+    open: boolean;
+    /** Current width in px (defined when open). */
+    width?: number;
+    /** The tab this state was read for. */
+    tabId: number;
+  }
+  /** Install the pane into the given mail 3-pane tab (rejects if not one). */
+  function open(tabId: number): Promise<void>;
+  /** Remove the pane from the given mail 3-pane tab. */
+  function close(tabId: number): Promise<void>;
+  /** Toggle the pane; resolves the resulting state. */
+  function toggle(tabId: number): Promise<PaneState>;
+  /** Set the pane width in px. */
+  function setWidth(tabId: number, width: number): Promise<void>;
+  /** Read the pane's open/width state. */
+  function getState(tabId: number): Promise<PaneState>;
+}
+
+/**
+ * browser.compose — draft-first compose (compose permission). The prepare* functions
+ * open a populated compose window (returned as a tab); get/setComposeDetails read/edit
+ * an open window. `sendMessage`/`saveMessage` are deliberately NOT declared: the add-on
+ * never sends — the user reviews the window and presses Send.
+ */
+declare namespace browser.compose {
+  interface ComposeRecipient {
+    name?: string;
+    email?: string;
+  }
+  /** A recipient as a mailbox string ("Name <a@x>" / "a@x") or a {name,email} object. */
+  type Recipient = string | ComposeRecipient;
+  type RecipientList = Recipient | Recipient[];
+  interface ComposeDetails {
+    to?: RecipientList;
+    cc?: RecipientList;
+    bcc?: RecipientList;
+    subject?: string;
+    /** The HTML (or plain) body. */
+    body?: string;
+    contentType?: string;
+  }
+  /** The read subset returned by getComposeDetails. */
+  interface ComposeDetailsResult extends ComposeDetails {
+    /** new | reply | forward | draft | redirect. */
+    type?: string;
+    /** The numeric id of the message being replied/forwarded, if any. */
+    relatedMessageId?: number | null;
+  }
+  /** The compose window tab (its `id` is what the other compose functions take). */
+  interface ComposeTab {
+    id: number;
+    [key: string]: unknown;
+  }
+  function beginNew(messageId: number | null, details?: ComposeDetails): Promise<ComposeTab>;
+  function beginReply(
+    messageId: number,
+    replyType?: "replyToSender" | "replyToList" | "replyToAll",
+    details?: ComposeDetails,
+  ): Promise<ComposeTab>;
+  function beginForward(
+    messageId: number,
+    forwardType?: "forwardInline" | "forwardAsAttachment",
+    details?: ComposeDetails,
+  ): Promise<ComposeTab>;
+  function getComposeDetails(tabId: number): Promise<ComposeDetailsResult>;
+  function setComposeDetails(tabId: number, details: ComposeDetails): Promise<ComposeTab>;
+}

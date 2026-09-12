@@ -9,13 +9,19 @@
  *     which loads the space/ page that is the chat UI)
  *   - declaring the Thunderbird application identity + capabilities in the
  *     pi.agent.hello handshake
+ *   - dispatching read-only mail tools (T2) over the legacy x-pi-browser/tool
+ *     transport to the mail-dispatcher, which wraps Thunderbird's WebExtension
+ *     mail APIs.
  *
- * T1 exposes no tools (capabilities: []), so the add-on is a pure Pi chat
- * interface: session list, new/resume, prompt, streaming, cancel. Mail tools
- * (T2) and compose (T3) build on the same AcpClient + action bridge.
+ * The add-on is a Pi chat interface (session list, new/resume, prompt,
+ * streaming, cancel) plus the read-only mail surface: the user selects an
+ * email and asks "Summarize this email." Compose (T3) builds on the same
+ * action bridge.
  */
 import {
   AGENT_METHODS,
+  isComposeTool,
+  isMailTool,
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
   X_PI_BROWSER,
@@ -24,6 +30,8 @@ import {
   type SessionUpdate,
 } from "@pi-browser/protocol";
 import { AcpClient, SessionStore, type HostStatus } from "@pi-browser/webext";
+import { dispatchMailTool } from "./mail-dispatcher.js";
+import { dispatchComposeTool } from "./compose-dispatcher.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -83,30 +91,38 @@ const client = new AcpClient(
   {
     clientName: "pi-thunderbird",
     application: "thunderbird",
-    // T1: pure chat interface, no tools. Mail (T2) + compose (T3) add
-    // capabilities here incrementally (plan §28).
-    capabilities: [],
+    // T2: read-only mail + attachments. T3 adds "compose" (draft-first, no send):
+    // plan §18, §28. No send / compose-send / messagesModify* permissions.
+    capabilities: ["mail", "attachments", "compose"],
   },
   {
     onSessionUpdate(params: SessionNotification) {
       pushSessionUpdate(params.sessionId, params.update);
     },
-    // No tools are registered for a capabilities:[] client, so the host never
-    // calls x-pi-browser/tool. Surface a structured error if it ever does.
-    onToolCall: (params) =>
-      Promise.reject(
-        new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
-          `Thunderbird has no tools enabled (tool: ${params.tool})`,
-        ),
-      ),
+    // Read-only mail tools arrive over the legacy x-pi-browser/tool transport.
+    // Dispatch the known mail tools; reject anything else with a structured
+    // error (no browser or compose tools are served in T2).
+    onToolCall: async (params) => {
+      if (isMailTool(params.tool)) {
+        const result = await dispatchMailTool(params.tool, params.arguments);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+      }
+      if (isComposeTool(params.tool)) {
+        const result = await dispatchComposeTool(params.tool, params.arguments);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+      }
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+        `Thunderbird does not serve tool: ${params.tool}`,
+      );
+    },
     onMcpConnect: () =>
       Promise.reject(
-        new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, "Thunderbird declares no MCP server (T1)"),
+        new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, "Thunderbird declares no MCP server (mail tools use the legacy transport)"),
       ),
     onMcpMessage: () =>
       Promise.reject(
-        new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, "Thunderbird declares no MCP server (T1)"),
+        new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, "Thunderbird declares no MCP server (mail tools use the legacy transport)"),
       ),
     onMcpDisconnect: async () => {
       /* nothing to release */
@@ -143,19 +159,43 @@ interface UiState {
   spaceId?: number;
 }
 
-function pushState(): void {
-  const state: UiState = {
+/**
+ * Pi pane Ports — the piPane Experiment mounts a native 4th-column <browser>
+ * that hosts our pane/ page (a WebExtension view). That page opens a runtime
+ * Port named "pi-pane" and shares the SAME state/update/action protocol as the
+ * Space, but per-tab and streaming. The Experiment owns no Pi logic; it only
+ * owns the native pane, so Thunderbird-version breakage stays isolated there.
+ */
+const panePorts = new Map<number, browser.runtime.Port>();
+
+function postToPanes(message: Record<string, unknown>): void {
+  for (const port of panePorts.values()) {
+    try {
+      port.postMessage(message);
+    } catch {
+      /* port torn down */
+    }
+  }
+}
+
+function currentUiState(): UiState {
+  return {
     status: hostStatus,
     ...(activeSessionId ? { activeSessionId } : {}),
     sessions: store.snapshot().sessions,
     ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
     ...(spaceId !== undefined ? { spaceId } : {}),
   };
+}
+
+function pushState(): void {
+  const state = currentUiState();
   browser.runtime
     .sendMessage({ type: "pi/state", state })
     .catch(() => {
       /* space page not open */
     });
+  postToPanes({ type: "pi/state", state });
 }
 
 function pushSessionUpdate(sessionId: string, update: SessionUpdate): void {
@@ -164,6 +204,7 @@ function pushSessionUpdate(sessionId: string, update: SessionUpdate): void {
     .catch(() => {
       /* space page not open */
     });
+  postToPanes({ type: "pi/session_update", sessionId, update });
 }
 
 // ---------------------------------------------------------------------------
@@ -183,8 +224,9 @@ async function refreshSessionList(): Promise<void> {
 async function createSession(cwd: string): Promise<string> {
   const res = await client.request<{ sessionId: string; configOptions?: unknown }>(
     AGENT_METHODS.session_new,
-    // No mcpServers: T1 declares no MCP server (no tools). The host therefore
-    // uses the legacy transport and registers no tools for this session.
+    // No mcpServers: the add-on declares no MCP server. The host uses the
+    // legacy transport; the mail tools are still registered because the client
+    // advertises the "mail"/"attachments" capabilities in its hello.
     { cwd },
   );
   const sessionId = res.sessionId;
@@ -266,8 +308,11 @@ async function bootstrap(): Promise<void> {
 
 browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   if (typeof message !== "object" || message === null) return;
-  const msg = message as { type?: string; action?: string; payload?: Record<string, unknown> };
-
+  const msg = message as {
+    type?: string;
+    action?: string;
+    payload?: Record<string, unknown>;
+  };
   if (msg.type === "pi/ensure_connected") {
     // Onboarding: the space's "Check again now" button. Idempotent no-op when
     // already connected; otherwise attempts the connect immediately.
@@ -377,11 +422,126 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pi pane: runtime.connect ports (see §5). The pane/ page opens a Port named
+// "pi-pane"; we track it per tab and route its actions through handleAction,
+// reusing the exact same handlers as the Space. The pane is a compact,
+// message-inline chat; the full Space remains the expanded view.
+// ---------------------------------------------------------------------------
+
+browser.runtime.onConnect.addListener((port: browser.runtime.Port) => {
+  if (port.name !== "pi-pane") return;
+  let tabId: number | undefined;
+  try {
+    tabId = port.sender?.tab?.id;
+  } catch {
+    /* not from a tab */
+  }
+
+  port.onMessage.addListener((raw: unknown) => {
+    if (typeof raw !== "object" || raw === null) return;
+    const msg = raw as {
+      type?: string;
+      tabId?: number;
+      action?: string;
+      payload?: Record<string, unknown>;
+      requestId?: number;
+    };
+
+    if (msg.type === "pane.ready") {
+      // The pane reports its own tabId (from its URL query); prefer that.
+      tabId = typeof msg.tabId === "number" ? msg.tabId : tabId;
+      if (tabId !== undefined) panePorts.set(tabId, port);
+      try {
+        port.postMessage({ type: "pi/state", state: currentUiState() });
+      } catch {
+        /* port already gone */
+      }
+      return;
+    }
+
+    if (msg.type !== "pane/action") return;
+    const requestId = msg.requestId;
+    void handleAction(msg.action ?? "", (msg.payload ?? {}) as never)
+      .then((result) => {
+        try {
+          port.postMessage({
+            type: "pane/action_result",
+            requestId,
+            ok: true,
+            ...(result !== undefined ? { result } : {}),
+          });
+        } catch {
+          /* port closed */
+        }
+      })
+      .catch((err) => {
+        const data =
+          err instanceof PiBrowserProtocolError
+            ? { piBrowserError: err.code, message: err.message }
+            : { message: String(err) };
+        try {
+          port.postMessage({ type: "pane/action_result", requestId, ok: false, error: data });
+        } catch {
+          /* port closed */
+        }
+      });
+  });
+
+  port.onDisconnect.addListener(() => {
+    for (const [id, p] of panePorts) {
+      if (p === port) {
+        panePorts.delete(id);
+        break;
+      }
+    }
+  });
+});
+
 function processCwdLikeFallback(): string {
   // The add-on has no cwd of its own; the space supplies one. Only reached when
   // the user hits "create" with an empty field.
   return "/";
 }
+
+// ---------------------------------------------------------------------------
+// Pi side pane (Experiment API) — toolbar button toggles it beside the message
+// ---------------------------------------------------------------------------
+// The `browser.action` toolbar button toggles the native Pi pane on the active
+// mail tab. Unlike the Pi Space (which is a full view that hides the mail), the
+// pane sits beside the message so the user keeps the email in view. The pane
+// hosts the same shared space/ UI, so sessions and ACP state are unchanged.
+
+const piPaneAvailable = typeof browser.piPane !== "undefined";
+if (!piPaneAvailable) {
+  console.warn("[pi-thunderbird] browser.piPane unavailable (Experiment API not loaded — is the add-on privileged/temporary?)");
+}
+
+browser.action.onClicked.addListener(async () => {
+  if (!piPaneAvailable) {
+    console.warn("[pi-thunderbird] browser.piPane unavailable — Experiment API not loaded");
+    return;
+  }
+  // Find the active mail tab's WebExtension tab id (needs the `tabs` permission).
+  let tabId: number | undefined;
+  try {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    tabId = tab?.id;
+  } catch (err) {
+    console.warn("[pi-thunderbird] browser.tabs.query failed (missing 'tabs' permission?)", err);
+    return;
+  }
+  if (tabId === undefined) {
+    console.warn("[pi-thunderbird] no active tab");
+    return;
+  }
+  try {
+    const st = await browser.piPane.toggle(tabId);
+    console.info(`[pi-thunderbird] piPane.toggle(${tabId}) -> open=${st.open}`);
+  } catch (err) {
+    console.warn(`[pi-thunderbird] piPane.toggle(${tabId}) failed`, err);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Startup
