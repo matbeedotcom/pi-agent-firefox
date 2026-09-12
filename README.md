@@ -69,12 +69,47 @@ handlers the sidebar uses.
 | `/pi-browser doctor` | status + live framed host probe + add-on detection |
 | `/pi-browser uninstall` | remove the registration |
 
-## Development
+## Building from source (build instructions)
+
+### Environment requirements
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Operating system | Any (Linux, macOS, Windows) | Developed/tested on Linux (x86-64); the build is cross-platform Node.js |
+| Node.js | **>= 22** (tested on 22.22.3) | `https://nodejs.org` or your distro package manager. Node 21 crashes the Pi SDK import; the repo `engines` field enforces >= 22 |
+| npm | >= 10 (ships with Node 22) | Used only for dependency installation |
+| Network | npm registry at install time only | `npm ci` fetches pinned dependencies from `package-lock.json`; no other network access is needed |
+| Other | none | No compiler toolchain, no system libraries, no browser required to build |
+
+### Steps (exact)
 
 ```sh
-npm install
-npm run build      # protocol + host + add-on (firefox/dist is the loadable build)
-npm test           # 85 tests across 4 workspaces (Node 22)
+git clone https://github.com/matbeedotcom/pi-agent-firefox.git
+cd pi-agent-firefox
+sh build.sh          # 1) verifies node >= 22  2) npm ci  3) npm run build
+```
+
+`build.sh` runs the complete technical pipeline:
+
+1. Verifies the Node.js version (>= 22) and npm presence.
+2. `npm ci` — installs the exact dependency versions pinned in `package-lock.json`
+   (workspaces: `packages/protocol`, `packages/webext`, `packages/pi-agent`,
+   `firefox`, `thunderbird`, `tests`).
+3. `npm run build` — builds in dependency order: `@pi-browser/protocol` (tsc) →
+   `@pi-browser/webext` (tsc) → `@pi-browser/agent` (tsc, the native host) →
+   `firefox` and `thunderbird` (tsc `--noEmit` type-check gate, then esbuild 0.25.x
+   bundles each TypeScript source into the classic scripts shipped in the add-on;
+   see the add-on submission's tooling note for details).
+
+Output: `firefox/dist/` is the loadable Firefox add-on (the exact code in the
+AMO submission zip, rebuilt by `sh amo/make-zip.sh`), `thunderbird/dist/` the
+Thunderbird add-on.
+
+Optional verification:
+
+```sh
+npm test             # 95 tests across the workspaces (Node 22)
+sh amo/make-zip.sh   # rebuild the AMO submission zip from firefox/dist
 ```
 
 - **Tests** run the real built host over real Firefox 4-byte framing with a deterministic mock
