@@ -7,7 +7,7 @@
  * ACP session to one Pi backend session and streams `session/update`
  * notifications back to the client.
  */
-import { AGENT_METHODS, CLIENT_METHODS, PI_BROWSER_ERROR, PiBrowserProtocolError, PI_BROWSER_META, X_PI_BROWSER, JSONRPC_ERROR, PROTOCOL_VERSION, toErrorObject, } from "@pi-browser/protocol";
+import { AGENT_METHODS, CLIENT_METHODS, PI_AGENT_META, PI_BROWSER_ERROR, PiBrowserProtocolError, PI_BROWSER_META, X_PI_BROWSER, JSONRPC_ERROR, PROTOCOL_VERSION, toErrorObject, parseAgentHello, } from "@pi-browser/protocol";
 import { buildConfigOptions, CONFIG_ID_MODEL, CONFIG_ID_THINKING } from "./config-options.js";
 import { touchClientHeartbeat } from "../client-heartbeat.js";
 function toolKindFor(toolName) {
@@ -50,6 +50,16 @@ export class AcpAgent {
     sessions = new Map();
     /** Name of the connected client (set on initialize) — for the add-on heartbeat. */
     clientIdentityName;
+    /**
+     * Application + capabilities from the pi.agent.hello handshake (THUNDERBIRD-PLAN.md
+     * §24). Legacy clients that never send a hello default to a browser-only
+     * Firefox so existing installations keep working unchanged.
+     */
+    clientApplication = "firefox";
+    clientCapabilities = ["browser"];
+    hasCapability(cap) {
+        return this.clientCapabilities.includes(cap);
+    }
     constructor(opts) {
         this.opts = opts;
         opts.transport.onRequest = (method, params, id) => {
@@ -141,10 +151,20 @@ export class AcpAgent {
         if (req.protocolVersion !== PROTOCOL_VERSION) {
             throw new PiBrowserProtocolError(PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH, `unsupported ACP protocol version: ${req.protocolVersion} (agent supports ${PROTOCOL_VERSION})`);
         }
-        this.opts.log.info(`initialize: client=${req.clientInfo?.name ?? "?"} v${req.clientInfo?.version ?? "?"} proto=${req.protocolVersion}`);
+        const hello = parseAgentHello(req);
+        this.clientApplication = hello?.client.application ?? "firefox";
+        this.clientCapabilities = hello ? hello.capabilities : ["browser"];
+        this.opts.log.info(`initialize: client=${req.clientInfo?.name ?? "?"} v${req.clientInfo?.version ?? "?"} ` +
+            `application=${this.clientApplication} capabilities=[${this.clientCapabilities.join(",")}] ` +
+            `proto=${req.protocolVersion}`);
         // Record add-on presence (no-op for non-add-on clients like test harnesses).
         this.clientIdentityName = req.clientInfo?.name;
         touchClientHeartbeat(req.clientInfo?.name, req.clientInfo?.version);
+        const piAgentMeta = {
+            ...PI_AGENT_META,
+            application: this.clientApplication,
+            capabilities: this.clientCapabilities,
+        };
         return {
             protocolVersion: PROTOCOL_VERSION,
             agentCapabilities: {
@@ -154,7 +174,7 @@ export class AcpAgent {
                 mcpCapabilities: { acp: true },
             },
             agentInfo: this.opts.agentInfo,
-            _meta: { piBrowser: PI_BROWSER_META },
+            _meta: { piBrowser: PI_BROWSER_META, piAgent: piAgentMeta },
         };
     }
     async sessionNew(req) {
@@ -248,7 +268,11 @@ export class AcpAgent {
         const mcpServerId = mcpServer?.serverId;
         // Tools bind to the session id at execute time (id assigned below).
         const idRef = {};
-        const tools = this.opts.provider.createTools(idRef, browserMode, mcpServerId);
+        // Browser tools are only registered for clients that declared the
+        // `browser` capability (legacy clients default to it, THUNDERBIRD-PLAN.md §24).
+        const tools = this.hasCapability("browser")
+            ? this.opts.provider.createTools(idRef, browserMode, mcpServerId)
+            : [];
         const session = await open(tools);
         idRef.id = session.sessionId;
         if (this.sessions.has(session.sessionId)) {

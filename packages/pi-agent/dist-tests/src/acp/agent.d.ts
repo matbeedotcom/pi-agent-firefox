@@ -7,7 +7,7 @@
  * ACP session to one Pi backend session and streams `session/update`
  * notifications back to the client.
  */
-import { type ContentBlock } from "@pi-browser/protocol";
+import { type AgentCapability, type ContentBlock } from "@pi-browser/protocol";
 import type { AcpTransport } from "../native-host/transport.js";
 import type { Logger } from "../logger.js";
 import type { PiBackend } from "./backend.js";
@@ -28,6 +28,14 @@ export declare class AcpAgent {
     private readonly sessions;
     /** Name of the connected client (set on initialize) — for the add-on heartbeat. */
     private clientIdentityName;
+    /**
+     * Application + capabilities from the pi.agent.hello handshake (THUNDERBIRD-PLAN.md
+     * §24). Legacy clients that never send a hello default to a browser-only
+     * Firefox so existing installations keep working unchanged.
+     */
+    private clientApplication;
+    private clientCapabilities;
+    hasCapability(cap: AgentCapability): boolean;
     constructor(opts: AcpAgentOptions);
     private transport;
     private handleRequest;

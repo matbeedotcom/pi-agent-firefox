@@ -5,7 +5,7 @@ import { createMemoryTransportPair } from "../src/native-host/transport.js";
 import { AcpAgent } from "../src/acp/agent.js";
 import { BrowserToolProvider } from "../src/browser/provider.js";
 import { MockBackend } from "./mock-backend.js";
-import { AGENT_METHODS, CLIENT_METHODS, JSONRPC_ERROR, codeFromErrorObject, PROTOCOL_VERSION, X_PI_BROWSER, } from "@pi-browser/protocol";
+import { AGENT_METHODS, CLIENT_METHODS, JSONRPC_ERROR, codeFromErrorObject, PROTOCOL_VERSION, X_PI_BROWSER, buildAgentHelloMeta, } from "@pi-browser/protocol";
 const quiet = createLogger({ level: "error", stderr: { write: () => true } });
 function setup() {
     const backend = new MockBackend();
@@ -63,6 +63,43 @@ test("initialize: unsupported protocol version -> PROTOCOL_VERSION_MISMATCH", as
     const h = setup();
     const err = (await h.request(AGENT_METHODS.initialize, { protocolVersion: 99 }).catch((e) => e));
     assert.equal(codeFromErrorObject(err), "PROTOCOL_VERSION_MISMATCH");
+});
+test("initialize: pi.agent.hello (thunderbird, mail only) -> no browser tools registered", async () => {
+    const h = setup();
+    const res = (await h.request(AGENT_METHODS.initialize, {
+        protocolVersion: PROTOCOL_VERSION,
+        clientInfo: { name: "pi-thunderbird", version: "0.1.0" },
+        _meta: buildAgentHelloMeta({
+            client: { application: "thunderbird", extensionId: "pi-thunderbird@pi.dev", version: "0.1.0" },
+            capabilities: ["mail", "compose", "attachments"],
+        }),
+    }));
+    assert.equal(res._meta.piAgent.application, "thunderbird");
+    assert.deepEqual(res._meta.piAgent.capabilities, ["mail", "compose", "attachments"]);
+    // A mail-only client must not receive browser tools on session creation.
+    const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/m", mcpServers: [] }));
+    assert.equal(h.lastCreateTools.length, 0);
+    await h.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
+});
+test("initialize: legacy client (no hello) keeps browser tools; firefox hello declares browser", async () => {
+    const hLegacy = setup();
+    await hLegacy.request(AGENT_METHODS.initialize, { protocolVersion: PROTOCOL_VERSION });
+    const sLegacy = (await hLegacy.request(AGENT_METHODS.session_new, { cwd: "/proj/l", mcpServers: [] }));
+    assert.ok(hLegacy.lastCreateTools.length > 0, "legacy client still gets browser tools");
+    await hLegacy.request(AGENT_METHODS.session_close, { sessionId: sLegacy.sessionId });
+    const hFx = setup();
+    const res = (await hFx.request(AGENT_METHODS.initialize, {
+        protocolVersion: PROTOCOL_VERSION,
+        _meta: buildAgentHelloMeta({
+            client: { application: "firefox", extensionId: "pi-browser@pi.dev", version: "0.1.0" },
+            capabilities: ["browser"],
+        }),
+    }));
+    assert.equal(res._meta.piAgent.application, "firefox");
+    assert.deepEqual(res._meta.piAgent.capabilities, ["browser"]);
+    const sFx = (await hFx.request(AGENT_METHODS.session_new, { cwd: "/proj/f", mcpServers: [] }));
+    assert.ok(hFx.lastCreateTools.length > 0, "firefox hello gets browser tools");
+    await hFx.request(AGENT_METHODS.session_close, { sessionId: sFx.sessionId });
 });
 test("session/new: three independent sessions over one connection", async () => {
     const h = setup();

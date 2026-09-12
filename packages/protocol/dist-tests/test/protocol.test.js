@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { BROWSER_TOOLS, BROWSER_TOOL_NAMES, getBrowserTool, isBrowserTool, isMutatingBrowserTool, } from "../src/browser-tools.js";
 import { CONTROL_TOOLS, CONTROL_TOOL_NAMES, getControlTool, isControlTool, isMutatingControlTool, } from "../src/control-tools.js";
 import { codeFromErrorObject, isPiBrowserErrorCode, PI_BROWSER_ERROR, PI_BROWSER_ERROR_CODES, PiBrowserProtocolError, toErrorObject, } from "../src/errors.js";
-import { PI_BROWSER, PI_BROWSER_META, X_PI_BROWSER } from "../src/integration.js";
+import { AGENT_CAPABILITIES, PI_AGENT, PI_AGENT_META, PI_BROWSER, PI_BROWSER_META, X_PI_BROWSER, buildAgentHelloMeta, normalizeCapabilities, parseAgentHello, } from "../src/integration.js";
 import { isJsonRpcNotification, isJsonRpcRequest, isJsonRpcResponse } from "../src/jsonrpc.js";
 import { buildPermissionRequest, PERMISSION_ALLOW_ALWAYS, PERMISSION_ALLOW_ONCE, PERMISSION_REJECT, permissionAllowed, REQUEST_PERMISSION_METHOD, } from "../src/permission.js";
 test("browser tool registry: names are unique and well-formed", () => {
@@ -113,5 +113,58 @@ test("permission helpers: request shape + outcome classification", () => {
     assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_REJECT } }), false);
     assert.equal(permissionAllowed({ outcome: { outcome: "cancelled" } }), false);
     assert.equal(permissionAllowed(undefined), false);
+});
+test("agent identity: host name + authorized extensions", () => {
+    assert.equal(PI_AGENT.nativeHost, "dev.pi.agent");
+    assert.equal(PI_AGENT.legacyNativeHost, "dev.pi.browser");
+    assert.deepEqual(PI_AGENT.authorizedExtensions, [
+        "pi-browser@pi.dev",
+        "pi-firefox@pi.dev",
+        "pi-thunderbird@pi.dev",
+    ]);
+    assert.equal(PI_AGENT.protocolVersion, 1);
+    assert.equal(PI_AGENT_META.protocolVersion, PI_AGENT.protocolVersion);
+    assert.deepEqual(PI_AGENT_META.capabilities, []);
+    assert.deepEqual(AGENT_CAPABILITIES, ["browser", "mail", "compose", "attachments", "contacts"]);
+});
+test("agent hello: parseAgentHello accepts firefox and thunderbird clients", () => {
+    const firefoxParams = {
+        protocolVersion: 1,
+        clientInfo: { name: "pi-browser-firefox", version: "0.1.0" },
+        _meta: buildAgentHelloMeta({
+            client: { application: "firefox", extensionId: "pi-browser@pi.dev", version: "0.1.0" },
+            capabilities: ["browser"],
+        }),
+    };
+    const fx = parseAgentHello(firefoxParams);
+    assert.ok(fx);
+    assert.equal(fx.client.application, "firefox");
+    assert.equal(fx.client.extensionId, "pi-browser@pi.dev");
+    assert.deepEqual(fx.capabilities, ["browser"]);
+    const tbParams = {
+        protocolVersion: 1,
+        _meta: buildAgentHelloMeta({
+            client: { application: "thunderbird", extensionId: "pi-thunderbird@pi.dev", version: "0.1.0" },
+            capabilities: ["mail", "compose", "attachments", "bogus", "mail"],
+        }),
+    };
+    const tb = parseAgentHello(tbParams);
+    assert.ok(tb);
+    assert.equal(tb.client.application, "thunderbird");
+    // Unknown capabilities are dropped, duplicates removed, order preserved.
+    assert.deepEqual(tb.capabilities, ["mail", "compose", "attachments"]);
+});
+test("agent hello: absent or malformed hello parses to undefined (legacy fallback)", () => {
+    assert.equal(parseAgentHello({ protocolVersion: 1 }), undefined);
+    assert.equal(parseAgentHello(undefined), undefined);
+    assert.equal(parseAgentHello({ _meta: {} }), undefined);
+    assert.equal(parseAgentHello({ _meta: { piAgent: { client: { application: "opera" } } } }), undefined);
+    assert.equal(parseAgentHello({ _meta: { piAgent: { client: "nope" } } }), undefined);
+    assert.equal(parseAgentHello({ _meta: { piAgent: { capabilities: ["browser"] } } }), undefined);
+});
+test("normalizeCapabilities: non-array and unknown values are ignored", () => {
+    assert.deepEqual(normalizeCapabilities(undefined), []);
+    assert.deepEqual(normalizeCapabilities("browser"), []);
+    assert.deepEqual(normalizeCapabilities(["browser", 3, null, "browser", "mail"]), ["browser", "mail"]);
 });
 //# sourceMappingURL=protocol.test.js.map

@@ -26,6 +26,116 @@ export const PI_BROWSER = {
   extensionId: "pi-browser@pi.dev",
 } as const;
 
+// ---------------------------------------------------------------------------
+// Agent-level (application-neutral) identity + capabilities
+// (THUNDERBIRD-PLAN.md §2, §24, §28)
+// ---------------------------------------------------------------------------
+
+/** Mozilla applications that can attach as capability providers. */
+export type AgentApplication = "firefox" | "thunderbird";
+
+/** Capability domains a client exposes to Pi (THUNDERBIRD-PLAN.md §28). */
+export type AgentCapability = "browser" | "mail" | "compose" | "attachments" | "contacts";
+
+/** Valid agent capabilities (for parsing/normalization). */
+export const AGENT_CAPABILITIES: readonly AgentCapability[] = ["browser", "mail", "compose", "attachments", "contacts"];
+
+/** Agent-level integration identity (application-neutral). */
+export const PI_AGENT = {
+  /** Native Messaging host name (manifest `name`), shared by both applications. */
+  nativeHost: "dev.pi.agent",
+  /** Legacy host name kept for already-registered Firefox installations. */
+  legacyNativeHost: "dev.pi.browser",
+  /**
+   * Add-on IDs the native host manifest authorizes. `pi-browser@pi.dev` is
+   * the original Firefox ID and stays authorized so existing installations
+   * keep working after the host rename.
+   */
+  authorizedExtensions: ["pi-browser@pi.dev", "pi-firefox@pi.dev", "pi-thunderbird@pi.dev"],
+  /** Agent integration protocol version (bump on breaking _meta.piAgent changes). */
+  protocolVersion: 1,
+} as const;
+
+/** Client identity declared in the integration hello. */
+export interface AgentClientIdentity {
+  application: AgentApplication;
+  extensionId: string;
+  version: string;
+}
+
+/**
+ * Integration hello (THUNDERBIRD-PLAN.md §24). Sent by the client in the
+ * ACP `initialize` params under `_meta.piAgent`.
+ */
+export interface AgentHello {
+  type: "pi.agent.hello";
+  client: AgentClientIdentity;
+  capabilities: AgentCapability[];
+}
+
+/** `_meta.piAgent` exchanged during ACP initialization. */
+export interface PiAgentMeta {
+  version: string;
+  protocolVersion: number;
+  /** Which client is attached (host echo of the hello). */
+  application?: AgentApplication;
+  /** Capabilities the host accepts from this client. */
+  capabilities: AgentCapability[];
+}
+
+export const PI_AGENT_META: PiAgentMeta = {
+  version: PI_BROWSER.version,
+  protocolVersion: PI_AGENT.protocolVersion,
+  capabilities: [],
+};
+
+/** Filter an arbitrary list down to known capabilities, preserving order. */
+export function normalizeCapabilities(values: unknown): AgentCapability[] {
+  if (!Array.isArray(values)) return [];
+  const out: AgentCapability[] = [];
+  for (const v of values) {
+    if (typeof v === "string" && (AGENT_CAPABILITIES as readonly string[]).includes(v) && !out.includes(v as AgentCapability)) {
+      out.push(v as AgentCapability);
+    }
+  }
+  return out;
+}
+
+/**
+ * Parse the integration hello from ACP `initialize` params.
+ * Returns undefined when absent/malformed (legacy clients); the caller
+ * falls back to browser compatibility defaults.
+ */
+export function parseAgentHello(params: unknown): AgentHello | undefined {
+  const meta = (params as { _meta?: { piAgent?: unknown } } | null | undefined)?._meta?.piAgent;
+  if (typeof meta !== "object" || meta === null) return undefined;
+  const m = meta as Record<string, unknown>;
+  const client = m.client as Record<string, unknown> | undefined;
+  if (typeof client?.application !== "string" || client.application !== "firefox" && client.application !== "thunderbird") {
+    return undefined;
+  }
+  return {
+    type: "pi.agent.hello",
+    client: {
+      application: client.application,
+      extensionId: typeof client.extensionId === "string" ? client.extensionId : "",
+      version: typeof client.version === "string" ? client.version : "",
+    },
+    capabilities: normalizeCapabilities(m.capabilities),
+  };
+}
+
+/** Build the `_meta.piAgent` client hello block for ACP `initialize` params. */
+export function buildAgentHelloMeta(hello: Omit<AgentHello, "type">): { piAgent: AgentHello } {
+  return {
+    piAgent: {
+      type: "pi.agent.hello",
+      client: hello.client,
+      capabilities: normalizeCapabilities(hello.capabilities),
+    },
+  };
+}
+
 /** Metadata exchanged during ACP initialization (PRODUCT.md §45). */
 export interface PiBrowserMeta {
   version: string;

@@ -1,7 +1,11 @@
 /**
- * Pi Browser native host entry point (PRODUCT.md §7, §42, §43).
+ * Pi Agent native host entry point (PRODUCT.md §7, §42, §43;
+ * THUNDERBIRD-PLAN.md §2 — application-neutral `dev.pi.agent`).
  *
- * Launched by Firefox via connectNative("dev.pi.browser"). Owns:
+ * Launched by Firefox or Thunderbird via connectNative("dev.pi.agent")
+ * (legacy Firefox registrations still use "dev.pi.browser"). Which provider
+ * capabilities (browser / mail / ...) are attached is negotiated by the
+ * client's pi.agent.hello handshake at ACP initialize. Owns:
  *  - Firefox framing on stdin/stdout (stdout: protocol data ONLY)
  *  - ACP agent over the Pi SDK backend
  *  - Browser tool provider (x-pi-browser/* + MCP-over-ACP)
