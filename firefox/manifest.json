@@ -10,14 +10,6 @@
     "storage",
     "tabs"
   ],
-  "data_collection_permissions": {
-    "data_types": [],
-    "data_types_identifiable": [],
-    "data_usage": [],
-    "third_party": [],
-    "third_party_sharing": [],
-    "third_party_sharing_identifiable": []
-  },
   "host_permissions": [
     "<all_urls>"
   ],
@@ -42,7 +34,10 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "pi-agent-firefox@matbee.com",
-      "strict_min_version": "126.0"
+      "strict_min_version": "126.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   }
 }
