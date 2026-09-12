@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
 import { dispatchMutationTool } from "../src/background/mutation-dispatcher.js";
+import { keyForName } from "../src/background/tag-utils.js";
 
 interface Call {
   fn: string;
@@ -50,11 +51,11 @@ function installStub(): void {
         async list() {
           return store.definedTags;
         },
-        async create(_key: string | null, tag: string) {
-          const key = tag.toLowerCase();
-          store.definedTags.push({ key, tag });
-          store.calls.push({ fn: "tags.create", args: [tag] });
-          return key;
+        async create(key: string, tag: string, _color?: string) {
+          const k = key.toLowerCase();
+          store.definedTags.push({ key: k, tag });
+          store.calls.push({ fn: "tags.create", args: [key, tag] });
+          return k;
         },
       },
     },
@@ -115,6 +116,14 @@ test("mail_set_tags creates a tag that does not exist yet", async () => {
   assert.deepEqual((upd!.args[1] as { tags: string[] }).tags, ["newproj"]);
   assert.deepEqual(r.created, ["NewProj"]);
   assert.ok(store.definedTags.some((t) => t.key === "newproj"));
+});
+
+test("keyForName derives a valid key and avoids collisions", () => {
+  assert.equal(keyForName("Finance", []), "finance");
+  assert.equal(keyForName("My Project", []), "my-project");
+  assert.equal(keyForName("Finance", ["finance"]), "finance-2");
+  assert.equal(keyForName("Finance", ["finance", "finance-2"]), "finance-3");
+  assert.equal(keyForName("", []), "tag");
 });
 
 test("mail_archive calls messages.archive with the selected ids", async () => {

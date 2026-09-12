@@ -38,6 +38,31 @@ export interface ResolvedTags {
 }
 
 /**
+ * Derive a tag key from a display name: lowercase, alnum/dash only. Avoids a key
+ * that already exists (appends -2, -3, ...).
+ */
+export function keyForName(name: string, existingKeys: string[]): string {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "tag";
+  if (!existingKeys.includes(base)) return base;
+  let n = 2;
+  while (existingKeys.includes(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
+/**
+ * Create a tag by display name and return its key.
+ *
+ * Thunderbird's `messages.tags.create(key, tag, color)` requires a STRING key
+ * (passing null is rejected by schema validation) and a hex color; the impl
+ * lowercases the key and stores tag->key. We derive a key from the name so the
+ * call always validates.
+ */
+export async function createTag(name: string, existingKeys: string[]): Promise<string> {
+  const key = keyForName(name, existingKeys);
+  return browser.messages.tags.create(key, name, "#888888");
+}
+
+/**
  * Resolve requested tag names or keys to existing keys. Matches case-
  * insensitively against both the key and the display name. Duplicate results
  * are de-duplicated; order follows the requested order.

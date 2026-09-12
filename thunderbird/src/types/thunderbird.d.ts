@@ -245,8 +245,9 @@ declare namespace browser.messages.tags {
   function list(): Promise<TagInfo[]>;
   /** One tag by key. */
   function get(key: string): Promise<TagInfo>;
-  /** Create a tag; returns the associated key. Pass a null key to auto-generate. */
-  function create(key: string | null, tag: string, color?: string): Promise<string>;
+  /** Create a tag; returns the associated key. The key must be a string (not null).
+   *  A 6-hex color (e.g. "#888888") should be supplied. */
+  function create(key: string, tag: string, color?: string): Promise<string>;
 }
 
 /** browser.contacts — address book (T6, addressBooks permission). Read-only here (no create/update/delete). */

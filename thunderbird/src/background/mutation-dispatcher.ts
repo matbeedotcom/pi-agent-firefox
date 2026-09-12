@@ -12,7 +12,7 @@
  *    so it does not clobber existing tags.
  */
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
-import { listTags, resolveTagKeys } from "./tag-utils.js";
+import { createTag, listTags, resolveTagKeys } from "./tag-utils.js";
 
 export type MutationToolResult = Record<string, unknown>;
 
@@ -71,10 +71,12 @@ async function mailSetTags(args: Record<string, unknown>): Promise<MutationToolR
   // each to an existing key; create any that don't exist so the tag the user
   // asked for is present after this call.
   const all = await listTags();
+  const existingKeys = all.map((t) => t.key);
   const { keys, unknown } = resolveTagKeys(all, requested);
   const created: string[] = [];
   for (const name of unknown) {
-    const key = await browser.messages.tags.create(null, name);
+    const key = await createTag(name, existingKeys);
+    existingKeys.push(key);
     created.push(name);
     if (!keys.includes(key)) keys.push(key);
   }

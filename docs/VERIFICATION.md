@@ -246,7 +246,7 @@ is defensive over vCard key styles (displayName / firstName+lastName, email / em
 organization / org / company) and falls back to the raw `properties` when nothing resolves.
 
 **Verified:**
-- **Unit tests (20):** `mutation-dispatcher.test.ts` (8: additive vs replace tagging, **create
+- **Unit tests (21):** `mutation-dispatcher.test.ts` (9: additive vs replace tagging, **create
   an unknown tag**, archive/move args, **no-delete guard**), `contacts-dispatcher.test.ts` (7:
   normalization across key styles, raw-properties fallback, **no-mutation guard**),
   `compose-dispatcher.test.ts` +1 (`compose_add_attachment` builds a real `File` from base64),
@@ -265,7 +265,7 @@ organization / org / company) and falls back to the raw `properties` when nothin
 
 ## Test suite map (§48)
 
-`npm test` (Node 22 required) → **153/153 green** as of 2026-09-12:
+`npm test` (Node 22 required) → **154/154 green** as of 2026-09-12:
 
 | Workspace | Tests | Covers |
 |-----------|-------|--------|
@@ -273,7 +273,7 @@ organization / org / company) and falls back to the raw `properties` when nothin
 | `@pi-browser/agent` | 62 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
 | `@pi-browser/webext` | — | shared `AcpClient` (injected identity + hello) + `SessionStore` (shared by both add-ons; exercised by the firefox tests + e2e) |
 | `@pi-browser/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) — now on the shared `@pi-browser/webext` |
-| `@pi-browser/thunderbird` | 48 | **mail tool dispatcher** (T2, 19 + 4 tag tests: search-by-tag name→key, `tagMode` all/any, unknown-tag error, `mail_list_tags`): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 8)**: mark read / additive+replace tags / create-unknown-tag / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 7)**: query pass-through, normalization across vCard key styles, raw-properties fallback, **no-mutation guard** |
+| `@pi-browser/thunderbird` | 49 | **mail tool dispatcher** (T2, 19 + 4 tag tests: search-by-tag name→key, `tagMode` all/any, unknown-tag error, `mail_list_tags`): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 9)**: mark read / additive+replace tags / create-unknown-tag / `keyForName` / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 7)**: query pass-through, normalization across vCard key styles, raw-properties fallback, **no-mutation guard** |
 | `pi-browser-tests` (e2e) | 15 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat, **a fake-Thunderbird client for `capabilities: []`, one for the T2 mail set, and one for the full T4/T6 set (mailModify + contacts tools registered + round-trip over the legacy transport)** |
 
 ## Live real-backend smoke test
@@ -298,8 +298,8 @@ initialize → capabilities + `mcpCapabilities.acp` → `session/new` → `sessi
 | Untrusted email = tool output only, never merged into the user prompt (§31–32) | ✅ | dispatcher returns normalized refs; body only via explicit `mail_get_message_body`; no prompt merging |
 | Durable id = `headerMessageId` (not numeric `messageId`) (§7) | ✅ | `MailMessageRef` dual-id; `mail-dispatcher.test.ts` durability rule |
 | Permissions: read (`nativeMessaging`,`accountsRead`,`messagesRead`,`compose`) + T4 (`messagesUpdate`,`messagesMove`,`messagesTags`,`messagesTagsList`) + T6 (`addressBooks`) — **no** `compose.send`/`messagesDelete`/`messagesImport`/`sensitiveDataUpload` | ✅ | `manifest.json` = exactly that set; built `background.js` has zero `sendMessage`/`saveMessage`/`messages.delete`/`deleteAttachments` |
-| **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 15 green in the 153/153 run |
-| `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **153/153** |
+| **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 15 green in the 154/154 run |
+| `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **154/154** |
 
 > **Note on the `piPane` column:** the `browser.piPane` Experiment API (4th column) was built and
 > proven working in an earlier stage, but Experiment APIs are **out of scope** for this goal
