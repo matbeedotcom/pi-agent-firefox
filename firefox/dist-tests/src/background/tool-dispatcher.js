@@ -11,6 +11,7 @@
  * background.
  */
 import { PI_BROWSER_ERROR, PiBrowserProtocolError, getBrowserTool, } from "@pi-browser/protocol";
+import { bindingRefId } from "@pi-browser/webext";
 function textResult(payload) {
     return { content: [{ type: "text", text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) }] };
 }
@@ -41,15 +42,16 @@ export class ToolDispatcher {
             throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${tool}`);
         }
         const binding = this.store.getBinding(sessionId);
-        if (!binding) {
+        const tabId = binding ? bindingRefId(binding) : undefined;
+        if (tabId === undefined) {
             throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, `session ${sessionId} has no bound Firefox tab`);
         }
         let tab;
         try {
-            tab = await browser.tabs.get(binding.tabId);
+            tab = await browser.tabs.get(tabId);
         }
         catch {
-            throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `bound tab ${binding.tabId} no longer exists`);
+            throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `bound tab ${tabId} no longer exists`);
         }
         const timeoutMs = Math.min(params.timeoutMs ?? DEFAULT_TIMEOUT_MS, 60_000);
         switch (tool) {

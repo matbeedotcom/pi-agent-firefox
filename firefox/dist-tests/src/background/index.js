@@ -5,9 +5,8 @@
  * presentation state, tab bindings, and the browser tool implementations.
  * All sidebar and content-script traffic routes through here.
  */
-import { AGENT_METHODS, PI_BROWSER_ERROR, PiBrowserProtocolError, X_PI_BROWSER, } from "@pi-browser/protocol";
-import { AcpClient, notifyHost } from "./acp-client.js";
-import { SessionStore } from "./session-store.js";
+import { AGENT_METHODS, PI_BROWSER, PI_BROWSER_ERROR, PiBrowserProtocolError, X_PI_BROWSER, } from "@pi-browser/protocol";
+import { AcpClient, bindingRefId, notifyHost, SessionStore } from "@pi-browser/webext";
 import { ToolDispatcher } from "./tool-dispatcher.js";
 import { McpServer } from "./mcp-server.js";
 // ---------------------------------------------------------------------------
@@ -201,6 +200,11 @@ async function sendPrompt(sessionId, text) {
 // ACP client
 // ---------------------------------------------------------------------------
 const client = new AcpClient({
+    clientName: "pi-browser-firefox",
+    application: "firefox",
+    capabilities: ["browser"],
+    extensionId: PI_BROWSER.extensionId,
+}, {
     onSessionUpdate(params) {
         pushSessionUpdate(params.sessionId, params.update);
         // Keep streaming state consistent even if a response was missed.
@@ -271,7 +275,7 @@ async function bootstrap() {
 // Tab lifecycle -> host notifications (invalidate element refs, etc.)
 // ---------------------------------------------------------------------------
 browser.tabs.onRemoved.addListener((tabId) => {
-    const sessionId = store.sessionForTab(tabId);
+    const sessionId = store.sessionForRef(tabId);
     if (!sessionId)
         return;
     store.unbind(sessionId);
@@ -282,7 +286,7 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
     const navigated = changeInfo.status === "loading" || typeof changeInfo.url === "string";
     if (!navigated)
         return;
-    const sessionId = store.sessionForTab(tabId);
+    const sessionId = store.sessionForRef(tabId);
     if (!sessionId)
         return;
     notifyHost(client, { sessionId, event: "tab_navigated", data: { tabId } });
@@ -392,7 +396,15 @@ async function handleAction(action, payload) {
             const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
             if (!tab?.id)
                 throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "no active tab to bind");
-            store.bind(sessionId, { tabId: tab.id, windowId: tab.windowId ?? 0, tabTitle: tab.title });
+            store.bind(sessionId, {
+                ref: tab.id,
+                refId: tab.id,
+                label: tab.title,
+                windowId: tab.windowId ?? 0,
+                // legacy fields kept so persisted state + the sidebar's inline type stay valid
+                tabId: tab.id,
+                tabTitle: tab.title,
+            });
             pushState();
             return {};
         }
@@ -407,7 +419,10 @@ async function handleAction(action, payload) {
             const binding = store.getBinding(sessionId);
             if (!binding)
                 throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "session has no bound tab");
-            await browser.tabs.update(binding.tabId, { active: true });
+            const tabId = bindingRefId(binding);
+            if (tabId === undefined)
+                throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "session binding has no tab");
+            await browser.tabs.update(tabId, { active: true });
             if (binding.windowId)
                 await browser.windows.update(binding.windowId, { focused: true }).catch(() => { });
             return {};

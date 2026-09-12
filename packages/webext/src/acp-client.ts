@@ -1,10 +1,14 @@
 /**
- * ACP client over the Firefox Native Messaging port (PRODUCT.md §15–18).
+ * ACP client over a Native Messaging port (PRODUCT.md §15–18;
+ * THUNDERBIRD-PLAN.md §8, §24 — shared by Firefox and Thunderbird).
  *
  * Owns exactly one persistent port. `browser.runtime.connectNative()`
- * handles Firefox's framing; this class implements the JSON-RPC/ACP layer:
+ * handles the app's framing; this class implements the JSON-RPC/ACP layer:
  * outgoing requests, incoming session/update notifications, and incoming
  * host requests (x-pi-browser/tool, mcp/*) routed to registered handlers.
+ *
+ * Application identity (client name + pi.agent.hello) is injected so the
+ * same class serves both Mozilla applications.
  */
 import {
   AGENT_METHODS,
@@ -14,8 +18,9 @@ import {
   PROTOCOL_VERSION,
   X_PI_BROWSER,
   buildAgentHelloMeta,
-  codeFromErrorObject,
   toErrorObject,
+  type AgentApplication,
+  type AgentCapability,
   type BrowserNotifyParams,
   type BrowserToolCallParams,
   type ConnectMcpRequest,
@@ -50,6 +55,17 @@ export interface AcpClientHandlers {
   onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse>;
 }
 
+/** Application identity used for the clientInfo + pi.agent.hello handshake. */
+export interface ClientIdentity {
+  /** Name sent as clientInfo.name (also the heartbeat client identity). */
+  clientName: string;
+  application: AgentApplication;
+  /** Provider capabilities this add-on exposes (plan §24, §28). */
+  capabilities: AgentCapability[];
+  /** Resolved add-on ID (falls back to runtime.id / declared id). */
+  extensionId?: string;
+}
+
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
@@ -72,7 +88,10 @@ export class AcpClient {
   private heardFromHost = false;
   private status: HostStatus = { state: "connecting" };
 
-  constructor(private readonly handlers: AcpClientHandlers) {}
+  constructor(
+    private readonly identity: ClientIdentity,
+    private readonly handlers: AcpClientHandlers,
+  ) {}
 
   get connected(): boolean {
     return this.port !== undefined;
@@ -128,7 +147,7 @@ export class AcpClient {
     port.onMessage.addListener((msg: unknown) => this.onMessage(msg));
     port.onDisconnect.addListener(() => {
       const message = browser.runtime.lastError?.message ?? "native port disconnected";
-      // Lifecycle detection (robust across Firefox builds): some builds
+      // Lifecycle detection (robust across Mozilla builds): some builds
       // return a port that dies immediately WITHOUT a lastError when the
       // host manifest is missing, so the message text is not a reliable
       // signal. A port that dies before we ever heard from the host means
@@ -197,7 +216,7 @@ export class AcpClient {
       try {
         this.handlers.onSessionUpdate(params as SessionNotification);
       } catch (err) {
-        console.error("[pi-browser] session_update handler failed", err);
+        console.error(`[pi-agent] session_update handler failed`, err);
       }
       return;
     }
@@ -226,11 +245,7 @@ export class AcpClient {
       const errorObject: JsonRpcErrorObject =
         err instanceof PiBrowserProtocolError
           ? err.toErrorObject()
-          : {
-              code: -32603,
-              message: err instanceof Error ? err.message : String(err),
-              data: { piBrowserError: PI_BROWSER_ERROR.INTERNAL },
-            };
+          : toErrorObject(PI_BROWSER_ERROR.INTERNAL, err instanceof Error ? err.message : String(err));
       this.send({ jsonrpc: "2.0", id, error: errorObject });
     }
   }
@@ -278,7 +293,7 @@ export class AcpClient {
     try {
       this.port?.postMessage(msg);
     } catch (err) {
-      console.error("[pi-browser] postMessage failed", err);
+      console.error(`[pi-agent] postMessage failed`, err);
     }
   }
 
@@ -290,27 +305,33 @@ export class AcpClient {
     this.pending.clear();
   }
 
-  /** ACP initialize; feature-detects capabilities and Pi Browser metadata. */
+  /** ACP initialize; feature-detects capabilities + sends the pi.agent.hello. */
   async initialize(): Promise<InitializeResponse> {
-    const res = await this.request<InitializeResponse>(AGENT_METHODS.initialize, {
-      protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: {},
-      clientInfo: { name: "pi-browser-firefox", version: browser.runtime.getManifest().version },
-      // pi.agent.hello: declare application + capabilities (THUNDERBIRD-PLAN.md §24).
-      _meta: buildAgentHelloMeta({
-        client: {
-          application: "firefox",
-          // runtime.id is the resolved add-on ID (temporary installs get a
-          // generated ID); fall back to the declared gecko.id.
-          extensionId:
-            browser.runtime.id ??
-            (browser.runtime.getManifest().browser_specific_settings?.gecko?.id as string | undefined) ??
-            PI_BROWSER.extensionId,
-          version: browser.runtime.getManifest().version,
-        },
-        capabilities: ["browser"],
-      }),
-    }, INITIALIZE_TIMEOUT_MS);
+    const manifest = browser.runtime.getManifest();
+    const version = manifest.version;
+    const extensionId =
+      this.identity.extensionId ??
+      browser.runtime.id ??
+      (manifest.browser_specific_settings?.gecko?.id as string | undefined) ??
+      "";
+    const res = await this.request<InitializeResponse>(
+      AGENT_METHODS.initialize,
+      {
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: {},
+        clientInfo: { name: this.identity.clientName, version },
+        // pi.agent.hello: declare application + capabilities (plan §24).
+        _meta: buildAgentHelloMeta({
+          client: {
+            application: this.identity.application,
+            extensionId,
+            version,
+          },
+          capabilities: this.identity.capabilities,
+        }),
+      },
+      INITIALIZE_TIMEOUT_MS,
+    );
     if (res.protocolVersion !== PROTOCOL_VERSION) {
       throw new PiBrowserProtocolError(
         PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH,
@@ -329,7 +350,7 @@ export class AcpClient {
   }
 }
 
-/** Notify the host about browser-side events (tab closed/navigated). */
+/** Notify the host about provider-side events (tab closed/navigated, ...). */
 export function notifyHost(client: AcpClient, params: BrowserNotifyParams): void {
   try {
     client
@@ -342,4 +363,4 @@ export function notifyHost(client: AcpClient, params: BrowserNotifyParams): void
   }
 }
 
-export { codeFromErrorObject, toErrorObject };
+export { PI_BROWSER_ERROR, toErrorObject };

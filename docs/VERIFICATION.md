@@ -79,16 +79,52 @@ led to the captureTab-first implementation).
 | 9 | No localhost TCP port required | `grep -rn "createServer\|\.listen(" packages/pi-agent/src/` (non-test) → no matches. Transport is Native Messaging stdio framing only. |
 | 10 | No native bridge separately downloaded by the user | `packages/pi-agent/src/installer/platforms.ts` — the host ships inside the Pi package; `/pi-browser install` copies/points at the package's own build (`dist/native-host/main.js`). |
 
+## Phase T1 — Thunderbird connection + Pi Space (2026-09-11)
+
+Thunderbird added as a second capability provider over the same application-neutral
+`dev.pi.agent` host (THUNDERBIRD-PLAN.md §36). T1 ships the Thunderbird add-on
+(`thunderbird/` workspace) as a **complete Pi chat interface** — a custom **Pi Space**
+with session list, new/resume, prompt, streaming, and cancel. T1 declares **no
+capabilities** (`capabilities: []`), so the host registers **no tools** for it (mail
+=T2, compose =T3).
+
+Shared code was extracted to `@pi-browser/webext` (the `AcpClient` + `SessionStore` the
+Firefox and Thunderbird backgrounds both use); Firefox was migrated to it with no
+behavior change (its 14 tests still green).
+
+**Verified live** on Thunderbird 155 ESR (flat install, `/home/acidhax/thunderbird/`),
+in an isolated test profile on a private Xvfb (`xvfb-run`-style, display :99), add-on
+pre-installed as an unsigned xpi (`xpinstall.signatures.required=false`):
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Add-on loads in real Gecko | ✅ live | Pre-installed xpi (id `pi-thunderbird@pi.dev`) from `thunderbird/dist`; background event page started. |
+| `connectNative("dev.pi.agent")` | ✅ live | The host recorded the connection: with `PI_BROWSER_HEARTBEAT_FILE` redirected, the heartbeat file read `{"client":"pi-thunderbird","pid":…}`. Thunderbird discovered the host from `~/.mozilla/native-messaging-hosts/dev.pi.agent.json` (the shared Linux path, plan §23) — `allowed_extensions` authorizes `pi-thunderbird@pi.dev`. |
+| ACP initialize + `pi.agent.hello` | ✅ live | Pi Space status bar showed **green dot “Pi · pi-coding-agent”** (connected; real backend `agentInfo`), i.e. the initialize handshake completed with `application: "thunderbird"`. |
+| Pi Space created + opens chat UI | ✅ live | `browser.spaces.create("Pi", {url: …/space/index.html})` added a puzzle-piece button to the spaces toolbar; clicking it opened the Pi tab (`moz-extension://…/space/index.html`). `docs/evidence/thunderbird-t1-pi-space-session-list.png`. |
+| Session list (real sessions) | ✅ live | The rail listed real Pi sessions (`session/list`) with cwd labels; footer shows **“capabilities: chat only”**. |
+| New session + config selectors | ✅ live | “+ New” → cwd `/tmp/pi-t1-check` → session `01a0933e` created; **Model** (Qwen3.8-27B-GGUF) and **Reasoning** (medium) selectors rendered from `session/new` configOptions. |
+| Prompt streams (user + thinking + reply) | ✅ live | Prompt “Reply with exactly the two words: T1 works” streamed back: user bubble + a `agent_thought_chunk` reasoning block (“The user is asking me to reply with exactly two words.”) + assistant reply **“T1 works”**. `docs/evidence/thunderbird-t1-pi-space-chat-roundtrip.png`. |
+| No tools registered for `capabilities: []` | ✅ e2e | `tests/src/e2e.test.mjs` “thunderbird client…”: the real host echoes `application: thunderbird, capabilities: []`; a scripted `browser_get_page` call reports `unknown tool` (proving no browser tools were registered); chat streams; cancel works. |
+| Host discovery path (Thunderbird logic) | ✅ verified | Replicated Thunderbird `NativeManifests` discovery (profile dir + `~/.mozilla/native-messaging-hosts`): both resolve `dev.pi.agent.json`, validate (name/type/absolute path), and authorize `pi-thunderbird@pi.dev`; the host spawns cleanly with the extension id as the last argv (as Thunderbird passes it). |
+
+**To load the add-on for real use** (temporary): Thunderbird → `about:debugging` →
+“This Thunderbird” → **Load Temporary Add-on…** → pick `thunderbird/dist/manifest.json`
+(build first: `npm run build`). The Pi Space button then appears in the spaces toolbar.
+(Or a permanent install of a signed xpi of `thunderbird/dist`.)
+
 ## Test suite map (§48)
 
-`npm test` (Node 22 required) → **85/85 green** as of 2026-09-11:
+`npm test` (Node 22 required) → **95/95 green** as of 2026-09-11:
 
 | Workspace | Tests | Covers |
 |-----------|-------|--------|
-| `@pi-browser/protocol` | 8 | framing helpers, JSON-RPC, structured errors, permission helpers, schema constants |
-| `@pi-browser/agent` | 51 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection), provider (both transports, feature detection, permission gate), installer (linux/macos lifecycle + windows registry: install/status/repair/uninstall), client heartbeat |
-| `@pi-browser/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) |
-| `pi-browser-tests` (e2e) | 12 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat |
+| `@pi-browser/protocol` | 12 | framing helpers, JSON-RPC, structured errors, permission helpers, schema constants, **agent identity + `pi.agent.hello` (firefox + thunderbird) + capability normalization** |
+| `@pi-browser/agent` | 56 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
+| `@pi-browser/webext` | — | shared `AcpClient` (injected identity + hello) + `SessionStore` (shared by both add-ons; exercised by the firefox tests + e2e) |
+| `@pi-browser/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) — now on the shared `@pi-browser/webext` |
+| `@pi-browser/thunderbird` | 0 | no unit tests yet (e2e below + live verification above) |
+| `pi-browser-tests` (e2e) | 13 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat, **and a fake-Thunderbird client proving the host contract for a `capabilities: []` Thunderbird session** |
 
 ## Live real-backend smoke test
 

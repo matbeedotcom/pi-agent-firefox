@@ -6,8 +6,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { BROWSER_TOOLS, CONTROL_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
-import { AcpClient } from "../src/background/acp-client.js";
-import { SessionStore } from "../src/background/session-store.js";
+import { AcpClient, SessionStore } from "@pi-browser/webext";
 import { ToolDispatcher } from "../src/background/tool-dispatcher.js";
 import { McpServer } from "../src/background/mcp-server.js";
 
@@ -132,8 +131,8 @@ test("SessionStore: bindings persist and round-trip", async () => {
   store.bind("s1", { tabId: 10, windowId: 1, tabTitle: "A" });
   store.bind("s2", { tabId: 20, windowId: 2 });
   assert.equal(store.getBinding("s1")?.tabId, 10);
-  assert.equal(store.sessionForTab(20), "s2");
-  assert.equal(store.sessionForTab(99), undefined);
+  assert.equal(store.sessionForRef(20), "s2");
+  assert.equal(store.sessionForRef(99), undefined);
   store.unbind("s1");
   assert.equal(store.getBinding("s1"), undefined);
 });
@@ -440,7 +439,14 @@ test("McpServer: control tools are rejected without a control handler", async ()
 // ---------------------------------------------------------------------------
 
 function makeClient(statuses: string[]): AcpClient {
-  return new AcpClient({
+  return new AcpClient(
+    {
+      clientName: "pi-browser-firefox",
+      application: "firefox",
+      capabilities: ["browser"],
+      extensionId: "pi-browser@pi.dev",
+    },
+    {
     onSessionUpdate() {},
     onToolCall: async () => ({}),
     onMcpConnect: async () => ({ connectionId: "c" }) as never,
@@ -448,7 +454,7 @@ function makeClient(statuses: string[]): AcpClient {
     onMcpDisconnect: async () => {},
     onStatus: (s) => statuses.push(s.state),
     onRequestPermission: async () => ({ outcome: { outcome: "cancelled" } }) as never,
-  });
+    });
 }
 
 test("AcpClient: auto-detects a host installed after the add-on loaded", async () => {

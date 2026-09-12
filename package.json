@@ -7,11 +7,12 @@
   "workspaces": [
     "packages/*",
     "firefox",
+    "thunderbird",
     "tests"
   ],
   "scripts": {
-    "build": "npm run build -w @pi-browser/protocol && npm run build -w @pi-browser/agent && npm run build -w @pi-browser/firefox",
-    "test": "npm run test -w @pi-browser/protocol && npm run test -w @pi-browser/agent && npm run test -w @pi-browser/firefox && npm run test -w pi-browser-tests",
+    "build": "npm run build -w @pi-browser/protocol && npm run build -w @pi-browser/webext && npm run build -w @pi-browser/agent && npm run build -w @pi-browser/firefox && npm run build -w @pi-browser/thunderbird",
+    "test": "npm run test -w @pi-browser/protocol && npm run test -w @pi-browser/agent && npm run test -w @pi-browser/firefox && npm run test -w @pi-browser/thunderbird && npm run test -w pi-browser-tests",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {

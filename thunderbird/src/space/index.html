@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pi</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="rail">
+        <div id="status" title="">connecting…</div>
+        <div class="rail-actions">
+          <button id="refresh" title="Refresh session list">⟳</button>
+          <button id="new-session" title="New session">+ New</button>
+        </div>
+
+        <div id="new-panel" class="hidden">
+          <label for="cwd-input">Working directory</label>
+          <input id="cwd-input" type="text" placeholder="/path/to/project" autocomplete="off" spellcheck="false" />
+          <div class="row">
+            <button id="cwd-create">Create</button>
+            <button id="cwd-cancel" class="secondary">Cancel</button>
+          </div>
+        </div>
+
+        <ul id="sessions"></ul>
+        <div id="caps" class="muted" title="Capabilities this Thunderbird exposes to Pi"></div>
+      </div>
+
+      <div id="main">
+        <div id="active-pane" class="hidden">
+          <div id="meta-row"></div>
+          <div id="config-row" class="hidden"></div>
+          <div id="conversation"></div>
+          <div id="composer">
+            <textarea id="prompt" rows="3" placeholder="Ask Pi… (Enter to send, Shift+Enter for newline)"></textarea>
+            <div class="row">
+              <button id="send">Send</button>
+              <button id="stop" class="secondary hidden">Stop</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="empty" class="hidden">
+          <p>No session selected.</p>
+          <p class="muted">Create one with “+ New”, or pick an existing session in the list.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Onboarding: no native host detected. Auto-connects once installed. -->
+    <div id="onboard-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="onboard-title">
+      <div id="onboard-card">
+        <div id="onboard-badge">setup</div>
+        <h3 id="onboard-title">Connect Pi to Thunderbird</h3>
+        <p id="onboard-desc" class="muted">
+          No ACP server detected: the <code>dev.pi.agent</code> native host
+          (installed by the Pi package) isn't present yet. This page connects
+          on its own the moment it's installed — no reload needed.
+        </p>
+        <ol id="onboard-steps">
+          <li>Install the Pi package:
+            <div class="step-code"><code>npm install -g @pi-browser/agent</code><span class="muted">from this repo: <code>npm i -g packages/pi-agent</code></span></div>
+          </li>
+          <li>In any Pi session, register the Thunderbird host:
+            <div class="step-code"><code>/pi-browser install thunderbird</code></div>
+          </li>
+          <li>Return here — the connection completes itself within ~10s.
+            <div class="step-code"><code>/pi-browser doctor</code><span class="muted">shows “OK (host + add-on connected)” when done</span></div>
+          </li>
+        </ol>
+        <div id="onboard-options" class="row">
+          <button id="onboard-check" class="perm-primary">Check again now</button>
+          <button id="onboard-dismiss" class="secondary">Dismiss</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="space.js"></script>
+  </body>
+</html>

@@ -1147,3 +1147,96 @@ test("json-rpc: pipelined requests keep their ids (no cross-talk)", async () => 
     await shutdown(host);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Thunderbird client (THUNDERBIRD-PLAN.md §36, Phase T1)
+//
+// The real Thunderbird add-on declares application=thunderbird and, in T1,
+// NO capabilities (pure chat — mail/compose tools land in T2/T3). It also
+// declares no MCP server (no tools to serve). This drives the REAL built host
+// exactly like that add-on does and proves the host contract for a
+// Thunderbird client: the hello is accepted and echoed, a session runs as a
+// complete chat interface (prompt → streaming, cancel), and NO browser tools
+// are registered for it.
+// ---------------------------------------------------------------------------
+
+async function initializeThunderbird(host) {
+  return host.request(AGENT_METHODS.initialize, {
+    protocolVersion: 1,
+    clientCapabilities: { loadSession: true },
+    clientInfo: { name: "pi-thunderbird", version: "0.1.0" },
+    _meta: {
+      piAgent: {
+        type: "pi.agent.hello",
+        client: { application: "thunderbird", extensionId: "pi-thunderbird@pi.dev", version: "0.1.0" },
+        // T1: pure chat interface — no tools (plan §28: mail/compose arrive later).
+        capabilities: [],
+      },
+    },
+  });
+}
+
+test("thunderbird client: hello accepted, no tools registered, chat streams + cancel", async () => {
+  const script = writeScript([
+    // Chat turn: streams text, then the script attempts a browser tool. For a
+    // capabilities:[] Thunderbird client the host registered no browser tools,
+    // so the mock backend must report it as an unknown tool.
+    {
+      match: "summarize",
+      events: [{ type: "text_delta", delta: "Here is the summary." }],
+      toolCalls: [{ toolName: "browser_get_page" }],
+    },
+    { match: "slow", events: [{ type: "text_delta", delta: "working…" }], delayMs: 3000 },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
+  try {
+    const res = await initializeThunderbird(host);
+
+    // The host echoes the Thunderbird hello it accepted (plan §24).
+    const agentMeta = res._meta?.piAgent;
+    assert.ok(agentMeta, "piAgent metadata present");
+    assert.equal(agentMeta.application, "thunderbird");
+    assert.deepEqual(agentMeta.capabilities, []);
+
+    // Session with NO mcpServers (T1 declares no MCP server / no tools).
+    const created = await host.request(AGENT_METHODS.session_new, { cwd: "/home/user" });
+    assert.ok(created.sessionId, "session created");
+
+    // A prompt streams assistant text back over session/update.
+    const mark = host.notifications.length;
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: created.sessionId, prompt: [{ type: "text", text: "summarize" }] },
+      60_000,
+    );
+    const updates = host.notifications
+      .slice(mark)
+      .filter((m) => m.method === "session/update" && m.params?.sessionId === created.sessionId);
+    const text = updates
+      .map((u) => (u.params.update?.sessionUpdate === "agent_message_chunk" ? u.params.update.content?.text : ""))
+      .join("");
+    assert.ok(text.includes("Here is the summary."), "assistant text streamed to the client");
+
+    // The scripted browser tool call must report FAILED as an unknown tool:
+    // proof that no browser tools were registered for this Thunderbird client.
+    const toolUpdates = updates.filter((u) => u.params.update?.sessionUpdate === "tool_call_update");
+    const failed = toolUpdates.find((u) => u.params.update?.status === "failed");
+    assert.ok(failed, "browser tool call reported failed for a capabilities:[] client");
+    const failedOut = JSON.stringify(failed.params.update?.rawOutput ?? failed.params.update?.content ?? "");
+    assert.ok(/unknown tool browser_get_page/i.test(failedOut), "browser tool was not registered for thunderbird");
+
+    // Cancel an in-flight turn (full chat interface: new/prompt/stream/cancel).
+    const promptP = host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: created.sessionId, prompt: [{ type: "text", text: "slow" }] },
+      60_000,
+    );
+    await sleep(50);
+    await host.request(AGENT_METHODS.session_cancel, { sessionId: created.sessionId });
+    await promptP; // resolves after abort
+
+    assert.ok(host.alive);
+  } finally {
+    await shutdown(host);
+  }
+});

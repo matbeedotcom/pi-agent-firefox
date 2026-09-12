@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Pi Thunderbird",
+  "version": "0.1.0",
+  "description": "Pi Agent space for Thunderbird: multi-session ACP chat with mail tools over Native Messaging",
+  "permissions": [
+    "nativeMessaging",
+    "storage"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "pi-thunderbird@pi.dev",
+      "strict_min_version": "115.0"
+    }
+  }
+}

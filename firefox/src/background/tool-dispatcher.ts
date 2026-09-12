@@ -16,7 +16,7 @@ import {
   getBrowserTool,
   type BrowserToolCallParams,
 } from "@pi-browser/protocol";
-import type { SessionStore } from "./session-store.js";
+import { bindingRefId, type SessionStore } from "@pi-browser/webext";
 
 interface ContentResult {
   ok: boolean;
@@ -55,7 +55,8 @@ export class ToolDispatcher {
     }
 
     const binding = this.store.getBinding(sessionId);
-    if (!binding) {
+    const tabId = binding ? bindingRefId(binding) : undefined;
+    if (tabId === undefined) {
       throw new PiBrowserProtocolError(
         PI_BROWSER_ERROR.BROWSER_NOT_BOUND,
         `session ${sessionId} has no bound Firefox tab`,
@@ -64,11 +65,11 @@ export class ToolDispatcher {
 
     let tab: browser.tabs.Tab;
     try {
-      tab = await browser.tabs.get(binding.tabId);
+      tab = await browser.tabs.get(tabId);
     } catch {
       throw new PiBrowserProtocolError(
         PI_BROWSER_ERROR.BROWSER_TAB_CLOSED,
-        `bound tab ${binding.tabId} no longer exists`,
+        `bound tab ${tabId} no longer exists`,
       );
     }
 

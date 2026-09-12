@@ -1,16 +1,48 @@
 /**
- * Session presentation state + browser bindings (PRODUCT.md §20, §24).
+ * Session presentation state (PRODUCT.md §20, §24; THUNDERBIRD-PLAN.md §8).
  *
- * Firefox owns ONLY presentation/binding state. Conversation history and
+ * The add-on owns ONLY presentation/binding state. Conversation history and
  * session semantics live in Pi (ACP is authoritative). Persisted state is
- * deliberately small: bindings + last session + sidebar prefs.
+ * deliberately small: bindings + last session.
+ *
+ * Shared by Firefox (tab bindings) and Thunderbird (message bindings land in
+ * T2; the binding map is simply unused until then).
  */
 import type { SessionInfo, SessionConfigOption } from "@pi-browser/protocol";
 
+/**
+ * App-specific context attached to a session (Firefox: tab, TB: message/folder).
+ *
+ * `ref`/`refId`/`label` are the canonical generic fields. The `tabId` and
+ * `tabTitle` fields are kept for backward compatibility with bindings
+ * persisted by earlier Firefox builds (and the still-shipped Firefox code).
+ */
 export interface Binding {
-  tabId: number;
-  windowId: number;
+  /** Opaque app-specific id (Firefox tabId / Thunderbird messageId, ...). */
+  ref?: number | string;
+  /** Numeric form when the app uses ids (undefined for string refs). */
+  refId?: number;
+  /** Window/space handle where the ref lives (optional). */
+  windowId?: number;
+  /** Human-readable label for the UI. */
+  label?: string;
+  /** @deprecated legacy Firefox tab id (=== refId for tabs). */
+  tabId?: number;
+  /** @deprecated legacy Firefox tab title (=== label for tabs). */
   tabTitle?: string;
+}
+
+/** The numeric handle a binding refers to (refId, falling back to legacy tabId). */
+export function bindingRefId(b: Binding): number | undefined {
+  if (typeof b.refId === "number") return b.refId;
+  if (typeof b.tabId === "number") return b.tabId;
+  if (typeof b.ref === "number") return b.ref;
+  return undefined;
+}
+
+/** The display label for a binding (label, falling back to legacy tabTitle). */
+export function bindingLabel(b: Binding): string | undefined {
+  return b.label ?? b.tabTitle;
 }
 
 export interface SessionView {
@@ -20,7 +52,7 @@ export interface SessionView {
   updatedAt?: string;
   messageCount?: number;
   streaming: boolean;
-  /** True once the sidebar has the transcript (fresh create or session/load replay). */
+  /** True once the UI has the transcript (fresh create or session/load replay). */
   loaded: boolean;
   configOptions?: SessionConfigOption[];
 }
@@ -30,20 +62,30 @@ export interface PersistedState {
   lastSessionId?: string;
 }
 
-const STORAGE_KEY = "piBrowserState";
+const DEFAULT_STORAGE_KEY = "piBrowserState";
 
 export class SessionStore {
+  /**
+   * Storage key for persisted state. Firefox keeps its original key so
+   * existing users' last-session/bindings survive the shared-store refactor;
+   * Thunderbird uses its own.
+   */
+  private readonly storageKey: string;
   private sessions = new Map<string, SessionView>();
   private bindings = new Map<string, Binding>();
   private lastSessionId: string | undefined;
   private hydrated = false;
 
+  constructor(storageKey: string = DEFAULT_STORAGE_KEY) {
+    this.storageKey = storageKey;
+  }
+
   async hydrate(): Promise<void> {
     if (this.hydrated) return;
     this.hydrated = true;
     try {
-      const stored = (await browser.storage.local.get(STORAGE_KEY)) as { [STORAGE_KEY]?: PersistedState };
-      const state = stored[STORAGE_KEY];
+      const stored = (await browser.storage.local.get(this.storageKey)) as Record<string, PersistedState | undefined>;
+      const state = stored[this.storageKey];
       if (state?.bindings) {
         for (const [sessionId, binding] of Object.entries(state.bindings)) {
           this.bindings.set(sessionId, binding);
@@ -60,7 +102,7 @@ export class SessionStore {
       bindings: Object.fromEntries(this.bindings),
       ...(this.lastSessionId ? { lastSessionId: this.lastSessionId } : {}),
     };
-    browser.storage.local.set({ [STORAGE_KEY]: state }).catch(() => {});
+    browser.storage.local.set({ [this.storageKey]: state }).catch(() => {});
   }
 
   /** Merge a session/list response into the view (preserving open-session state). */
@@ -125,7 +167,7 @@ export class SessionStore {
   }
 
   // ------------------------------------------------------------------
-  // Bindings (session ↔ tab)
+  // Bindings (session ↔ app context)
   // ------------------------------------------------------------------
 
   bind(sessionId: string, binding: Binding): void {
@@ -142,10 +184,10 @@ export class SessionStore {
     return this.bindings.get(sessionId);
   }
 
-  /** Find the session bound to a tab (for lifecycle event routing). */
-  sessionForTab(tabId: number): string | undefined {
+  /** Find the session whose binding refers to the given numeric app id. */
+  sessionForRef(refId: number): string | undefined {
     for (const [sessionId, b] of this.bindings) {
-      if (b.tabId === tabId) return sessionId;
+      if (bindingRefId(b) === refId) return sessionId;
     }
     return undefined;
   }
@@ -164,7 +206,7 @@ export class SessionStore {
   }
 
   // ------------------------------------------------------------------
-  // Snapshot for the sidebar
+  // Snapshot for the UI
   // ------------------------------------------------------------------
 
   snapshot(): {
