@@ -29,19 +29,19 @@ Requires **Node 22+** (the host uses Pi SDK APIs that need it) and a stable/nigh
 
 ### Order A — install the plugin first
 
-The plugin (`@pi-browser/agent`) is built from this repository (Node.js >= 22):
+The plugin (`@pi-browser/agent`) installs from this repository as a pi package
+(requires Node.js >= 22 available on the machine; pi clones the repo and builds
+the plugin automatically on install):
 
 ```sh
-git clone https://github.com/matbeedotcom/pi-agent-firefox.git
-cd pi-agent-firefox
-sh build.sh                        # installs deps + builds all workspaces
-npm i -g packages/pi-agent         # installs the plugin (host + /pi-browser command)
+pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.1.1
 ```
 
 1. In any Pi session: `/pi-browser install` — registers the Firefox Native Messaging host.
 2. Load the add-on: Firefox → `about:debugging#aboutThisFirefoxBrowser` →
    **“Load Temporary Add-on…”** → pick `firefox/dist/manifest.json`
-   (from source, build it first: `npm run build`).
+   (from source: clone the repo and run `sh build.sh` first — see
+   “Building from source” below).
 3. Done — the sidebar shows `Pi · agent` (connected). Verify anytime with `/pi-browser doctor`.
 
 ### Order B — install the add-on first
