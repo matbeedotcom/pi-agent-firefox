@@ -114,9 +114,9 @@ test("initialize: pi.agent.hello (thunderbird, mail + compose) -> no browser too
   assert.equal(res._meta.piAgent.application, "thunderbird");
   assert.deepEqual(res._meta.piAgent.capabilities, ["mail", "compose", "attachments"]);
   // A mail+compose client receives the read-only mail tools AND the draft-first
-  // compose tools (10 + 5), and no browser tools.
+  // compose tools (10 + 6, incl. compose_add_attachment), and no browser tools.
   const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/m", mcpServers: [] })) as { sessionId: string };
-  assert.equal(h.lastCreateTools.length, 15);
+  assert.equal(h.lastCreateTools.length, 16);
   assert.ok(
     h.lastCreateTools.every((t) => /^(mail_|compose_)/.test((t as { name: string }).name)),
     "mail+compose client gets only mail/compose tools",
@@ -127,6 +127,26 @@ test("initialize: pi.agent.hello (thunderbird, mail + compose) -> no browser too
   );
   assert.ok(h.lastCreateTools.every((t) => !(t as { name: string }).name.startsWith("browser_")), "mail client gets no browser tools");
   assert.ok(h.lastCreateTools.every((t) => (t as { name: string }).name !== "compose_send"), "no send tool is exposed");
+  await h.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
+});
+
+test("initialize: thunderbird mailModify + contacts capabilities register mutation + contact tools", async () => {
+  const h = setup();
+  await h.request(AGENT_METHODS.initialize, {
+    protocolVersion: PROTOCOL_VERSION,
+    _meta: buildAgentHelloMeta({
+      client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
+      capabilities: ["mail", "compose", "attachments", "mailModify", "contacts"],
+    }),
+  });
+  const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/mc", mcpServers: [] })) as { sessionId: string };
+  const names = h.lastCreateTools.map((t) => (t as { name: string }).name);
+  // 10 mail + 6 compose + 4 mutation + 2 contacts = 22
+  assert.equal(names.length, 22);
+  assert.ok(names.includes("mail_archive"), "mutation tool registered");
+  assert.ok(names.includes("mail_set_tags"), "tag tool registered");
+  assert.ok(names.includes("contacts_search"), "contacts tool registered");
+  assert.ok(!names.some((n) => n === "mail_delete" || n.endsWith("delete")), "no delete tool is exposed");
   await h.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
 });
 

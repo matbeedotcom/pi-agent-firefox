@@ -16,9 +16,13 @@ import {
   BROWSER_SCREENSHOT_TIMEOUT_MS,
   BROWSER_TOOL_TIMEOUT_MS,
   isComposeTool,
+  isContactsTool,
   isMailTool,
+  isMailMutationTool,
   COMPOSE_TOOL_TIMEOUT_MS,
+  CONTACTS_TOOL_TIMEOUT_MS,
   MAIL_ATTACHMENT_TIMEOUT_MS,
+  MAIL_MUTATION_TOOL_TIMEOUT_MS,
   MAIL_TOOL_TIMEOUT_MS,
   codeFromErrorObject,
   isStructuredErrorObject,
@@ -35,6 +39,8 @@ import {
 import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS, type BrowserToolSchema } from "./schemas.js";
 import { MAIL_TOOL_SCHEMAS, type MailToolSchema } from "../mail/schemas.js";
 import { COMPOSE_TOOL_SCHEMAS, type ComposeToolSchema } from "../compose/schemas.js";
+import { MAIL_MUTATION_TOOL_SCHEMAS, type MailMutationToolSchema } from "../mutation/schemas.js";
+import { CONTACTS_TOOL_SCHEMAS, type ContactsToolSchema } from "../contacts/schemas.js";
 import { McpAcpClient } from "./mcp-acp-client.js";
 
 export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
@@ -80,6 +86,8 @@ function timeoutFor(tool: string): number {
   if (tool === "mail_get_attachment") return MAIL_ATTACHMENT_TIMEOUT_MS;
   if (isMailTool(tool)) return MAIL_TOOL_TIMEOUT_MS;
   if (isComposeTool(tool)) return COMPOSE_TOOL_TIMEOUT_MS;
+  if (isMailMutationTool(tool)) return MAIL_MUTATION_TOOL_TIMEOUT_MS;
+  if (isContactsTool(tool)) return CONTACTS_TOOL_TIMEOUT_MS;
   return BROWSER_TOOL_TIMEOUT_MS;
 }
 
@@ -273,7 +281,15 @@ export class CapabilityToolProvider {
     const hasBrowser = caps.includes("browser");
     const hasMail = caps.includes("mail") || caps.includes("attachments");
     const hasCompose = caps.includes("compose");
-    const schemas: Array<BrowserToolSchema | MailToolSchema | ComposeToolSchema> = [];
+    const hasMailModify = caps.includes("mailModify");
+    const hasContacts = caps.includes("contacts");
+    const schemas: Array<
+      | BrowserToolSchema
+      | MailToolSchema
+      | ComposeToolSchema
+      | MailMutationToolSchema
+      | ContactsToolSchema
+    > = [];
     if (hasBrowser) {
       schemas.push(...BROWSER_TOOL_SCHEMAS);
       if (mode === "mcp-acp") schemas.push(...CONTROL_TOOL_SCHEMAS);
@@ -283,6 +299,12 @@ export class CapabilityToolProvider {
     }
     if (hasCompose) {
       schemas.push(...COMPOSE_TOOL_SCHEMAS);
+    }
+    if (hasMailModify) {
+      schemas.push(...MAIL_MUTATION_TOOL_SCHEMAS);
+    }
+    if (hasContacts) {
+      schemas.push(...CONTACTS_TOOL_SCHEMAS);
     }
     return schemas.map((entry) => ({
       name: entry.name,

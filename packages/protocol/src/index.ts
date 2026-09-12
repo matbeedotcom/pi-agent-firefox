@@ -7,4 +7,6 @@ export * from "./browser-tools.js";
 export * from "./control-tools.js";
 export * from "./mail-tools.js";
 export * from "./compose-tools.js";
+export * from "./mail-mutation-tools.js";
+export * from "./contacts-tools.js";
 export * from "./permission.js";

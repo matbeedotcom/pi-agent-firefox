@@ -1,10 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { BROWSER_TOOLS, CONTROL_TOOLS, MAIL_TOOLS, COMPOSE_TOOLS } from "@pi-browser/protocol";
+import {
+  BROWSER_TOOLS,
+  CONTROL_TOOLS,
+  MAIL_TOOLS,
+  COMPOSE_TOOLS,
+  MAIL_MUTATION_TOOLS,
+  CONTACTS_TOOLS,
+} from "@pi-browser/protocol";
 import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS } from "../src/browser/schemas.js";
 import { MAIL_TOOL_SCHEMAS } from "../src/mail/schemas.js";
 import { COMPOSE_TOOL_SCHEMAS } from "../src/compose/schemas.js";
+import { MAIL_MUTATION_TOOL_SCHEMAS } from "../src/mutation/schemas.js";
+import { CONTACTS_TOOL_SCHEMAS } from "../src/contacts/schemas.js";
 
 /**
  * The TypeBox schemas (used by Pi for validation + LLM tool definitions)
@@ -95,5 +104,7 @@ test("TypeBox schemas match the protocol JSON schemas", () => {
   allDiffs.push(...checkSync(CONTROL_TOOLS, CONTROL_TOOL_SCHEMAS, "control tools"));
   allDiffs.push(...checkSync(MAIL_TOOLS, MAIL_TOOL_SCHEMAS, "mail tools"));
   allDiffs.push(...checkSync(COMPOSE_TOOLS, COMPOSE_TOOL_SCHEMAS, "compose tools"));
+  allDiffs.push(...checkSync(MAIL_MUTATION_TOOLS, MAIL_MUTATION_TOOL_SCHEMAS, "mail mutation tools"));
+  allDiffs.push(...checkSync(CONTACTS_TOOLS, CONTACTS_TOOL_SCHEMAS, "contacts tools"));
   assert.deepEqual(allDiffs, [], allDiffs.join("\n"));
 });

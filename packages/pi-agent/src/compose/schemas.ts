@@ -41,6 +41,15 @@ const forwardType = Type.Union(
   [Type.Literal("forwardInline"), Type.Literal("forwardAsAttachment")],
   { description: "How the message is forwarded (default forwardInline)." },
 );
+const attachmentName = Type.String({
+  description: 'The attachment filename, e.g. "report.pdf".',
+});
+const attachmentContent = Type.String({
+  description: "The file content, base64-encoded.",
+});
+const attachmentContentType = Type.String({
+  description: 'The MIME type, e.g. "application/pdf" (default application/octet-stream).',
+});
 
 const SCHEMAS: Record<string, TSchema> = {
   compose_prepare_new: Type.Object(
@@ -96,6 +105,16 @@ const SCHEMAS: Record<string, TSchema> = {
       contentType: Type.Optional(contentType),
     },
     { additionalProperties: false, required: ["tabId"] },
+  ),
+
+  compose_add_attachment: Type.Object(
+    {
+      tabId: composeTabId,
+      name: attachmentName,
+      content: attachmentContent,
+      contentType: Type.Optional(attachmentContentType),
+    },
+    { additionalProperties: false, required: ["tabId", "name", "content"] },
   ),
 };
 

@@ -233,7 +233,7 @@ test("agent identity: host name + authorized extensions", () => {
   assert.equal(PI_AGENT.protocolVersion, 2);
   assert.equal(PI_AGENT_META.protocolVersion, PI_AGENT.protocolVersion);
   assert.deepEqual(PI_AGENT_META.capabilities, []);
-  assert.deepEqual(AGENT_CAPABILITIES, ["browser", "mail", "compose", "attachments", "contacts"]);
+  assert.deepEqual(AGENT_CAPABILITIES, ["browser", "mail", "compose", "attachments", "contacts", "mailModify"]);
 });
 
 test("agent hello: parseAgentHello accepts firefox and thunderbird clients", () => {

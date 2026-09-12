@@ -70,6 +70,18 @@ const forwardTypeUnion = {
   ],
   description: "How the message is forwarded (default forwardInline).",
 };
+const attachmentNameProp = {
+  type: "string" as const,
+  description: 'The attachment filename, e.g. "report.pdf".',
+};
+const attachmentContentProp = {
+  type: "string" as const,
+  description: "The file content, base64-encoded.",
+};
+const attachmentContentTypeProp = {
+  type: "string" as const,
+  description: 'The MIME type, e.g. "application/pdf" (default application/octet-stream).',
+};
 
 export const COMPOSE_TOOLS: readonly ComposeToolDef[] = [
   {
@@ -153,6 +165,22 @@ export const COMPOSE_TOOLS: readonly ComposeToolDef[] = [
         contentType: contentTypeUnion,
       },
       required: ["tabId"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "compose_add_attachment",
+    description:
+      "Attach a file to an open compose window (give its base64 content, a filename, and a MIME type). The window stays open for the user to review and send; this tool does not send.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        tabId: composeTabId,
+        name: attachmentNameProp,
+        content: attachmentContentProp,
+        contentType: attachmentContentTypeProp,
+      },
+      required: ["tabId", "name", "content"],
     },
     readOnly: false,
   },

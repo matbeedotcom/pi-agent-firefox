@@ -36,10 +36,17 @@ export const PI_BROWSER = {
 export type AgentApplication = "firefox" | "thunderbird";
 
 /** Capability domains a client exposes to Pi (THUNDERBIRD-PLAN.md §28). */
-export type AgentCapability = "browser" | "mail" | "compose" | "attachments" | "contacts";
+export type AgentCapability = "browser" | "mail" | "compose" | "attachments" | "contacts" | "mailModify";
 
 /** Valid agent capabilities (for parsing/normalization). */
-export const AGENT_CAPABILITIES: readonly AgentCapability[] = ["browser", "mail", "compose", "attachments", "contacts"];
+export const AGENT_CAPABILITIES: readonly AgentCapability[] = [
+  "browser",
+  "mail",
+  "compose",
+  "attachments",
+  "contacts",
+  "mailModify",
+];
 
 /** Agent-level integration identity (application-neutral). */
 export const PI_AGENT = {
