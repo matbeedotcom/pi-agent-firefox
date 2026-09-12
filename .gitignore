@@ -6,3 +6,4 @@ firefox/.bundle/
 firefox/dist/
 tests/.tmp/
 .pi/
+amo/*.zip
