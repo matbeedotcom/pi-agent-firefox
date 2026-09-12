@@ -7,3 +7,4 @@ firefox/dist/
 tests/.tmp/
 .pi/
 amo/*.zip
+dist-tests/
