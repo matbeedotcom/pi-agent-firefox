@@ -208,8 +208,33 @@ declare namespace browser.messages {
   function listAttachments(messageId: number): Promise<browser.mailTypes.MessageAttachment[]>;
   /** The file for one attachment (a DOM File/Blob). */
   function getAttachmentFile(messageId: number, partName: string): Promise<File>;
-  /** Search messages (paginated list). */
+  /** Search messages (paginated list). Result order is NOT guaranteed. */
   function query(queryInfo?: Record<string, unknown>): Promise<browser.mailTypes.MessageList>;
+  /**
+   * List the messages of one folder (paginated list). Since TB 148, `sortType`
+   * / `sortOrder` return a server-side SORTED folder view — the same order the
+   * UI shows — and continuation pages continue in sort order. Default sort
+   * order is descending when a sortType is given.
+   */
+  function list(
+    folderId: string,
+    options?: {
+      sortType?:
+        | "author"
+        | "date"
+        | "flagged"
+        | "junk"
+        | "junkScore"
+        | "priority"
+        | "read"
+        | "recipients"
+        | "size"
+        | "subject"
+        | "tags";
+      sortOrder?: "ascending" | "descending";
+      [k: string]: unknown;
+    },
+  ): Promise<browser.mailTypes.MessageList>;
   /** Continue a paginated message list (from a list id). */
   function continueList(messageListId: string): Promise<browser.mailTypes.MessageList>;
   /** Abort a paginated message list. */
