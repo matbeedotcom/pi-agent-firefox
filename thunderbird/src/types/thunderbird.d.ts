@@ -251,25 +251,31 @@ declare namespace browser.messages.tags {
 }
 
 /** browser.contacts — address book (T6, addressBooks permission). Read-only here (no create/update/delete). */
-declare namespace browser.contacts {
-  interface Contact {
-    /** The durable contact id (cardKey). */
-    id: string;
-    cardKey?: string;
-    /** vCard-style flat properties (firstName, lastName, displayName, email/emailAddresses, organization, tel, ...). */
-    properties?: Record<string, unknown>;
-    vCard?: string;
+/** browser.addressBooks.contacts — the MV3 contacts API.
+ *  NOTE: the top-level `browser.contacts` namespace is MV2-only (max_manifest_version: 2)
+ *  and is NOT registered in an MV3 add-on, so it is `undefined` at runtime. The MV3 path
+ *  is `browser.addressBooks.contacts.*` (min_manifest_version: 3, $import: contacts). */
+declare namespace browser.addressBooks {
+  namespace contacts {
+    interface Contact {
+      /** The durable contact id (cardKey). */
+      id: string;
+      cardKey?: string;
+      /** vCard-style flat properties (firstName, lastName, displayName, email/emailAddresses, organization, tel, ...). */
+      properties?: Record<string, unknown>;
+      vCard?: string;
+    }
+    interface QueryInfo {
+      searchString?: string;
+      includeLocal?: boolean;
+      includeRemote?: boolean;
+      [key: string]: unknown;
+    }
+    /** Search contacts across the address books. */
+    function query(queryInfo: QueryInfo): Promise<Contact[]>;
+    /** Get one contact by its id (cardKey). */
+    function get(contactId: string): Promise<Contact>;
   }
-  interface QueryInfo {
-    searchString?: string;
-    includeLocal?: boolean;
-    includeRemote?: boolean;
-    [key: string]: unknown;
-  }
-  /** Search contacts across the address books. */
-  function query(queryInfo: QueryInfo): Promise<Contact[]>;
-  /** Get one contact by its id (cardKey). */
-  function get(contactId: string): Promise<Contact>;
 }
 
 /** browser.folders — mail folders (accountsRead). */

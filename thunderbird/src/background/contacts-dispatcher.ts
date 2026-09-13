@@ -1,7 +1,8 @@
 /**
  * Thunderbird contacts (address book, T6) tool dispatcher (THUNDERBIRD-PLAN.md §41).
  *
- * Read-only. Maps `contacts_search` / `contacts_get` onto `browser.contacts`.
+ * Read-only. Maps `contacts_search` / `contacts_get` onto `browser.addressBooks.contacts`
+ * (the MV3 path; top-level `browser.contacts` is MV2-only and undefined in MV3).
  * Contact data is untrusted external data (plan §31–32): it is returned as
  * normalized tool output and never merged into the user prompt.
  *
@@ -81,7 +82,7 @@ function contactName(p: Record<string, unknown>): string | undefined {
   return firstStr(p.name);
 }
 
-function normalizeContact(c: browser.contacts.Contact): Record<string, unknown> {
+function normalizeContact(c: browser.addressBooks.contacts.Contact): Record<string, unknown> {
   const p = (c.properties ?? {}) as Record<string, unknown>;
   const out: Record<string, unknown> = { id: c.cardKey ?? c.id };
   const name = contactName(p);
@@ -105,14 +106,14 @@ function normalizeContact(c: browser.contacts.Contact): Record<string, unknown> 
 async function contactsSearch(args: Record<string, unknown>): Promise<ContactsToolResult> {
   const query = reqStr(args, "query");
   const limit = clampInt(args, "limit", 1, MAX_CONTACT_LIMIT, DEFAULT_CONTACT_LIMIT);
-  const results = await browser.contacts.query({ searchString: query });
+  const results = await browser.addressBooks.contacts.query({ searchString: query });
   const contacts = results.slice(0, limit).map(normalizeContact);
   return { query, count: contacts.length, contacts };
 }
 
 async function contactsGet(args: Record<string, unknown>): Promise<ContactsToolResult> {
   const contactId = reqStr(args, "contactId");
-  const c = await browser.contacts.get(contactId);
+  const c = await browser.addressBooks.contacts.get(contactId);
   return normalizeContact(c);
 }
 

@@ -241,9 +241,12 @@ into `messages.query({tags: {mode, tags: {key: true}}})`; an unknown tag name is
 `tags` on each message ref, so an applied tag can be read back and verified.
 
 **T6 contacts** (plan §41) — `contacts_search` / `contacts_get` (read-only) via
-`browser.contacts.query({searchString})` / `get(id)`, permission `addressBooks`. Normalization
-is defensive over vCard key styles (displayName / firstName+lastName, email / emailAddresses,
-organization / org / company) and falls back to the raw `properties` when nothing resolves.
+`browser.addressBooks.contacts.query({searchString})` / `.get(id)`, permission `addressBooks`.
+⚠️ The top-level `browser.contacts` namespace is **MV2-only** (`max_manifest_version: 2`) and is
+`undefined` in an MV3 add-on — the MV3 path is `browser.addressBooks.contacts.*` (`min_manifest_version: 3`,
+`$import: contacts`). Normalization is defensive over vCard key styles (displayName / firstName+lastName,
+email / emailAddresses, organization / org / company) and falls back to the raw `properties` when
+nothing resolves.
 
 **Verified:**
 - **Unit tests (21):** `mutation-dispatcher.test.ts` (9: additive vs replace tagging, **create
@@ -252,6 +255,12 @@ organization / org / company) and falls back to the raw `properties` when nothin
   `compose-dispatcher.test.ts` +1 (`compose_add_attachment` builds a real `File` from base64),
   plus 4 tag tests in `mail-dispatcher.test.ts` (search-by-tag name→key, `tagMode` all/any,
   unknown-tag error, `mail_list_tags`).
+- **Schema conformance (1, `schema-conformance.test.ts`):** parses the INSTALLED build's
+  `omni.ja` messenger schemas and asserts every `browser.<ns>.<fn>` the add-on source calls is
+  present, **Manifest-V3-available** (namespace + any function overload), and **permitted** by the
+  manifest. This is the guard that would have caught both live bugs (`browser.contacts` MV2-only;
+  missing `messagesTagsList`). Skips (green) when no Thunderbird build is present (CI-safe); run
+  with `THUNDERBIRD_OMNI_JA` or a build at the default path.
 - **Schema sync:** the new JSON + TypeBox schemas are byte-checked by `tool-schemas.test.ts`.
 - **Capability gate:** `acp-agent.test.ts` proves a `[..., "mailModify", "contacts"]` hello
   registers 23 tools (11 mail + 6 compose + 4 mutation + 2 contacts) with **no delete tool**.
@@ -265,7 +274,7 @@ organization / org / company) and falls back to the raw `properties` when nothin
 
 ## Test suite map (§48)
 
-`npm test` (Node 22 required) → **154/154 green** as of 2026-09-12:
+`npm test` (Node 22 required) → **155/155 green** as of 2026-09-12:
 
 | Workspace | Tests | Covers |
 |-----------|-------|--------|
@@ -273,7 +282,7 @@ organization / org / company) and falls back to the raw `properties` when nothin
 | `@pi-browser/agent` | 62 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
 | `@pi-browser/webext` | — | shared `AcpClient` (injected identity + hello) + `SessionStore` (shared by both add-ons; exercised by the firefox tests + e2e) |
 | `@pi-browser/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) — now on the shared `@pi-browser/webext` |
-| `@pi-browser/thunderbird` | 49 | **mail tool dispatcher** (T2, 19 + 4 tag tests: search-by-tag name→key, `tagMode` all/any, unknown-tag error, `mail_list_tags`): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 9)**: mark read / additive+replace tags / create-unknown-tag / `keyForName` / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 7)**: query pass-through, normalization across vCard key styles, raw-properties fallback, **no-mutation guard** |
+| `@pi-browser/thunderbird` | 50 | **mail tool dispatcher** (T2, 19 + 4 tag tests: search-by-tag name→key, `tagMode` all/any, unknown-tag error, `mail_list_tags`): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 9)**: mark read / additive+replace tags / create-unknown-tag / `keyForName` / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 7)**: MV3 `addressBooks.contacts` path, normalization across vCard key styles, raw-properties fallback, **no-mutation guard**. **+ schema conformance (1)**: every `browser.*` call is present, MV3-available, and permitted (vs the installed `omni.ja`) |
 | `pi-browser-tests` (e2e) | 15 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat, **a fake-Thunderbird client for `capabilities: []`, one for the T2 mail set, and one for the full T4/T6 set (mailModify + contacts tools registered + round-trip over the legacy transport)** |
 
 ## Live real-backend smoke test
@@ -293,13 +302,13 @@ initialize → capabilities + `mcpCapabilities.acp` → `session/new` → `sessi
 | **T3** compose tools; “Draft a reply saying Thursday works.” opens populated compose; user sends; no send anywhere | ✅ | `compose-dispatcher.test.ts` (incl. no-send guard); 3-layer no-send (tool/code/permission); live-confirmed (T3 section) |
 | **Draft attachments:** `compose_add_attachment` attaches a file; read-side `mail_list/get_attachment` | ✅ impl+unit · live pending | `compose-dispatcher.test.ts` (base64→`File`, `addAttachment`); read-side unit tests (T2) |
 | **T4** mail organization: mark read / tags (set + **list + search/filter + read-back**) / archive / move (selected only); **no deletion** | ✅ impl+unit · live pending | `mutation-dispatcher.test.ts` (8, incl. no-delete guard) + `mail-dispatcher.test.ts` tag tests; `mailModify` cap + `messagesUpdate`/`messagesMove`/`messagesTags`/`messagesTagsList` |
-| **T6** contacts: `contacts_search`/`contacts_get` (read-only, `addressBooks`) | ✅ impl+unit · live pending | `contacts-dispatcher.test.ts` (7, incl. no-mutation guard); defensive vCard normalization + raw fallback |
+| **T6** contacts: `contacts_search`/`contacts_get` (read-only, `addressBooks`, MV3 `addressBooks.contacts`) | ✅ impl+unit · live pending | `contacts-dispatcher.test.ts` (7, incl. no-mutation guard); MV3 namespace (not MV2 `browser.contacts`); defensive vCard normalization + raw fallback; schema-conformance guard |
 | **T7** calendar — deferred (no stable WebExtension calendar API in 155) | ⏸ | plan §42: do not depend on an Experiment; revisit when a stable API exists |
 | Untrusted email = tool output only, never merged into the user prompt (§31–32) | ✅ | dispatcher returns normalized refs; body only via explicit `mail_get_message_body`; no prompt merging |
 | Durable id = `headerMessageId` (not numeric `messageId`) (§7) | ✅ | `MailMessageRef` dual-id; `mail-dispatcher.test.ts` durability rule |
 | Permissions: read (`nativeMessaging`,`accountsRead`,`messagesRead`,`compose`) + T4 (`messagesUpdate`,`messagesMove`,`messagesTags`,`messagesTagsList`) + T6 (`addressBooks`) — **no** `compose.send`/`messagesDelete`/`messagesImport`/`sensitiveDataUpload` | ✅ | `manifest.json` = exactly that set; built `background.js` has zero `sendMessage`/`saveMessage`/`messages.delete`/`deleteAttachments` |
-| **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 15 green in the 154/154 run |
-| `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **154/154** |
+| **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 15 green in the 155/155 run |
+| `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **155/155** |
 
 > **Note on the `piPane` column:** the `browser.piPane` Experiment API (4th column) was built and
 > proven working in an earlier stage, but Experiment APIs are **out of scope** for this goal

@@ -1,7 +1,7 @@
 /**
  * Unit tests for the Thunderbird contacts (T6) dispatcher (plan §41).
  *
- * A fake `browser.contacts` supplies query/get results. These prove the contract:
+ * A fake `browser.addressBooks.contacts` supplies query/get results. These prove the contract:
  * search passes the query through, results are normalized (name / emails /
  * organization) across the varying vCard key styles, the raw-properties fallback
  * kicks in when nothing resolves, and there is no contacts mutation path.
@@ -26,15 +26,18 @@ function freshStore(): Store {
 function installStub(): void {
   const g = globalThis as { browser?: unknown };
   g.browser = {
-    contacts: {
-      async query(queryInfo: Record<string, unknown>) {
-        store.lastQuery = queryInfo;
-        return store.queryResults;
-      },
-      async get(id: string) {
-        const c = store.byId[id];
-        if (!c) throw new Error(`Contact not found: ${id}`);
-        return c;
+    // MV3 path: browser.addressBooks.contacts (top-level browser.contacts is MV2-only).
+    addressBooks: {
+      contacts: {
+        async query(queryInfo: Record<string, unknown>) {
+          store.lastQuery = queryInfo;
+          return store.queryResults;
+        },
+        async get(id: string) {
+          const c = store.byId[id];
+          if (!c) throw new Error(`Contact not found: ${id}`);
+          return c;
+        },
       },
     },
   };

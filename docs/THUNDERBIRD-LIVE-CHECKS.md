@@ -58,16 +58,22 @@ Space tool cards for per-tool results. A tool that isn’t registered fails with
    nothing is deleted.
 
 ## Check 4 — T6 contacts
-1. Ensure the address book has a contact like “Sarah <name>, Acme”.
-2. In the Pi Space: **“Draft a message to Sarah from Acme.”**
-3. **Expected:** Pi calls `contacts_search("Sarah Acme")` → gets back the normalized
-   contact (`name`, `emails`, `organization`) → `compose_prepare_new` (or a reply) with
-   the recipient filled in. The compose window opens with Sarah addressed.
-4. **If it fails / empty:** the one real variable is the vCard property key names. The
-   dispatcher tries `displayName`/`firstName+lastName`, `email`/`emailAddresses`,
-   `organization`/`org`/`company`; if none match it returns the raw `properties`. Paste
-   the raw `properties` here and the normalization keys can be corrected to match this
-   build.
+1. Ensure the address book has a contact like “Sarah <name>, Acme” (Address Book → Personal
+   or Collected Addresses).
+2. **Isolate the contacts API first:** “Who’s in my address book matching <a known name>?”. Pi
+   should call `contacts_search` and return normalized contacts (`name`, `emails`,
+   `organization`). This separates T6 from compose so a failure is unambiguous.
+3. **The full flow:** **“Draft a message to Sarah from Acme.”** Pi calls
+   `contacts_search("Sarah Acme")` → normalized contact → `compose_prepare_new` with the
+   recipient filled in; the compose window opens with Sarah addressed.
+4. **If it fails with `browser.contacts is undefined`:** that’s the MV2-namespace bug — the
+   add-on must use the MV3 path `browser.addressBooks.contacts.*` (already fixed; a stale xpi
+   or an un-reloaded temporary add-on would still show it). Reload `/tmp/pi-thunderbird-t46.xpi`.
+5. **If it fails / empty (contact comes back with the email but a blank name, or a raw blob):**
+   the variable is the vCard property key names. The dispatcher tries `displayName`/
+   `firstName+lastName`, `email`/`emailAddresses`, `organization`/`org`/`company`; if none match
+   it returns the raw `properties`. Paste the raw `properties` here and the normalization keys
+   can be corrected to match this build.
 
 ## Recording results
 Paste a one-line result per check (pass/fail + any error signature). On pass for all

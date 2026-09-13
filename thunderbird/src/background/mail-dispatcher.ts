@@ -137,21 +137,13 @@ async function drainMessageList(
 /**
  * Resolve the mail tab the user is working in.
  *
- * Fast path: the active tab is a mail tab — true when using the Pi pane, where
- * the mail tab stays the active tab. Slow path: the user is in a non-mail tab
- * (e.g. the full Pi Space, a separate tab), so `getCurrent()` returns nothing and
- * we fall back to the mail tab that actually has content: prefer an active mail
- * tab, then the first mail tab showing a displayed message, else the first one.
+ * `mailTabs.query()` lists every mail tab; we prefer an active mail tab (true
+ * when using the Pi pane, where the mail tab stays active), then the first mail
+ * tab that is actually showing a displayed message, else the first one.
+ * (The MV2-only `getCurrent()` fast path is not used: it is not registered in an
+ * MV3 add-on, and `query()` gives the same active-tab answer.)
  */
 async function resolveContextTab(): Promise<{ tab: ThunderbirdContext["tab"]; tabId: number } | null> {
-  try {
-    const t = await browser.mailTabs.getCurrent();
-    if (t && typeof t.tabId === "number") {
-      return { tab: { tabId: t.tabId, type: "mail" }, tabId: t.tabId };
-    }
-  } catch {
-    /* the active tab is not a mail tab */
-  }
   const tabs = await browser.mailTabs
     .query()
     .catch(() => [] as browser.mailTabs.MailTab[]);
