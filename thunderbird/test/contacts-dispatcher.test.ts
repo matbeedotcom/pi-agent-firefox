@@ -64,6 +64,12 @@ test("contacts_search passes the query through and normalizes displayName + emai
   ];
   const r = (await dispatchContactsTool("contacts_search", { query: "sarah acme" })) as Record<string, unknown>;
   assert.equal(store.lastQuery.searchString, "sarah acme");
+  // include* flags must be set, or query() skips local read-write books (the
+  // Personal book) entirely and the contact is never found.
+  assert.equal(store.lastQuery.includeLocal, true);
+  assert.equal(store.lastQuery.includeRemote, true);
+  assert.equal(store.lastQuery.includeReadOnly, true);
+  assert.equal(store.lastQuery.includeReadWrite, true);
   assert.equal(r.count, 1);
   const c = (r.contacts as Record<string, unknown>[])[0];
   assert.equal(c.id, "card-1");
@@ -78,6 +84,17 @@ test("contacts_search falls back to firstName+lastName + a plain email string", 
   const c = (r.contacts as Record<string, unknown>[])[0];
   assert.equal(c.name, "Jane Roe");
   assert.deepEqual(c.emails, ["jane@x.com"]);
+});
+
+test("contacts_search: an email-only card (no name) still surfaces the email", async () => {
+  // The user's real case: a card that is just an email (no displayName/name fields).
+  store.queryResults = [{ id: "card-email", properties: { email: "solo@example.com" } }];
+  const r = (await dispatchContactsTool("contacts_search", { query: "solo@example.com" })) as Record<string, unknown>;
+  assert.equal(r.count, 1);
+  const c = (r.contacts as Record<string, unknown>[])[0];
+  assert.equal(c.id, "card-email");
+  assert.equal(c.name, undefined); // no name on the card — not an error
+  assert.deepEqual(c.emails, ["solo@example.com"]);
 });
 
 test("contacts_search with unrecognized keys falls back to raw properties", async () => {

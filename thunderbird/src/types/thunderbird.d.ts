@@ -267,8 +267,11 @@ declare namespace browser.addressBooks {
     }
     interface QueryInfo {
       searchString?: string;
+      /** Include local address books (default false — REQUIRED to search the Personal book). */
       includeLocal?: boolean;
       includeRemote?: boolean;
+      includeReadOnly?: boolean;
+      includeReadWrite?: boolean;
       [key: string]: unknown;
     }
     /** Search contacts across the address books. */

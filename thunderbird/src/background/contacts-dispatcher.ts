@@ -106,7 +106,16 @@ function normalizeContact(c: browser.addressBooks.contacts.Contact): Record<stri
 async function contactsSearch(args: Record<string, unknown>): Promise<ContactsToolResult> {
   const query = reqStr(args, "query");
   const limit = clampInt(args, "limit", 1, MAX_CONTACT_LIMIT, DEFAULT_CONTACT_LIMIT);
-  const results = await browser.addressBooks.contacts.query({ searchString: query });
+  // include* flags are REQUIRED: without them, query() skips local read-write
+  // address books (e.g. the Personal book) entirely, so a real contact would never
+  // be found. Set all four so every book (local+remote, read-only+read-write) is searched.
+  const results = await browser.addressBooks.contacts.query({
+    searchString: query,
+    includeLocal: true,
+    includeRemote: true,
+    includeReadOnly: true,
+    includeReadWrite: true,
+  });
   const contacts = results.slice(0, limit).map(normalizeContact);
   return { query, count: contacts.length, contacts };
 }
