@@ -152,6 +152,29 @@ export function buildAgentHelloMeta(hello: Omit<AgentHello, "type">): { piAgent:
   };
 }
 
+/**
+ * Broker/relay private IPC (THUNDERBIRD-PLAN.md §26–27).
+ *
+ * One host process is the broker (owns the ACP agent + Pi sessions); later
+ * app connections attach to it as relays over private OS IPC (Unix socket,
+ * no localhost TCP). Native Messaging remains the externally visible
+ * Mozilla security boundary — the relay only forwards bytes.
+ */
+export const PI_BROKER = {
+  /** Run directory name under $HOME (0700; env PI_BROWSER_BROKER_DIR overrides). */
+  runDir: "run",
+  /** Unix socket file name inside the run directory (0600). */
+  socketFile: "agent-broker.sock",
+  /** Broker state file name inside the run directory (0600: pid + token). */
+  stateFile: "agent-broker.json",
+  /** First frame a relay sends after connecting (carries the token). */
+  handshake: "pi.broker.handshake",
+  /** First frame the broker sends back once the token is accepted. */
+  handshakeAck: "pi.broker.handshakeAck",
+  /** Broker IPC protocol version (bump on breaking handshake changes). */
+  version: 1,
+} as const;
+
 /** Metadata exchanged during ACP initialization (PRODUCT.md §45). */
 export interface PiBrowserMeta {
   version: string;
@@ -173,6 +196,15 @@ export const X_PI_BROWSER = {
   tool: "x-pi-browser/tool",
   /** Firefox → host: browser-side notifications (tab closed/navigated, binding changed). */
   notify: "x-pi-browser/notify",
+  /**
+   * Host → session-owner client: a tool's approval prompt is being shown in
+   * ANOTHER app (cross-app routing). The owner's UI is where the user is
+   * watching the session, so it should draw attention to where the prompt
+   * actually is (e.g. "approval needed in the mail client"). The owner
+   * displays it; it does NOT answer it (the executing client owns the
+   * canonical session/request_permission round-trip).
+   */
+  permission_prompted: "x-pi-browser/permission_prompted",
 } as const;
 
 /** Params for x-pi-browser/ping (Firefox → host). */
@@ -208,6 +240,22 @@ export interface BrowserNotifyParams {
   sessionId: string;
   event: BrowserNotifyEvent;
   data?: Record<string, unknown>;
+}
+
+/** Params for x-pi-browser/permission_prompted (host → session-owner client). */
+export interface PermissionPromptedParams {
+  sessionId: string;
+  /** The tool call the approval belongs to (matches the session/update stream). */
+  toolCallId: string;
+  /** The tool being approved. */
+  tool: string;
+  /** The application whose UI is showing the approval prompt. */
+  application: AgentApplication;
+}
+
+/** Human-facing name for an application (permission banners, prompts). */
+export function applicationDisplayName(app: AgentApplication): string {
+  return app === "thunderbird" ? "Thunderbird (mail)" : "Firefox (browser)";
 }
 
 /** MCP protocol version spoken inside mcp/message (MCP-over-ACP). */

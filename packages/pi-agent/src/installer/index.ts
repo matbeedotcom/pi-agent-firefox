@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { PI_AGENT, PI_BROWSER_META, PI_AGENT_META } from "@pi-browser/protocol";
 import { ADDON_HEARTBEAT_FRESH_MS, readClientHeartbeat } from "../client-heartbeat.js";
+import { brokerPaths, isBrokerIpcSupported, isPidAlive, readBrokerState } from "../native-host/broker-ipc.js";
 import { addonLoadHint, type AgentApp, type ExecFn, type InstallerEnv, type InstallAppTarget } from "./common.js";
 import {
   detectTargets,
@@ -82,12 +83,15 @@ export function buildEnv(ctx: InstallerContext = {}): { env: InstallerEnv; targe
    * means the add-on is loaded and connected.
    */
   function addonLines(homeDir: string, apps: readonly AgentApp[]): { lines: string[]; detected: boolean; fresh: boolean } {
-    const hb = readClientHeartbeat(homeDir);
     const buildSteps = apps
       .map((a) => (a === "firefox" ? "npm run build -w @pi-browser/firefox  →  firefox/dist/" : "npm run build -w @pi-browser/thunderbird  →  thunderbird/dist/"))
       .join(";");
     const loadSteps = apps.map((a, i) => `  ${i + 1}. ${a === "firefox" ? "Firefox" : "Thunderbird"}: ${a === "firefox" ? "about:debugging#aboutThisFirefoxBrowser" : "about:debugging#aboutThisThunderbird"} → “Load Temporary Add-on…” → pick ${a}/dist/manifest.json`).join("\n");
-    if (!hb) {
+    // Per-app heartbeats: each application reports independently so the
+    // cross-app (broker) setup is visible (plan §23).
+    const perApp = apps.map((app) => readClientHeartbeat(homeDir, app));
+    const anyDetected = perApp.some((hb) => hb !== undefined);
+    if (!anyDetected) {
       return {
         lines: [
           "add-on: not detected — to finish setup:",
@@ -99,15 +103,32 @@ export function buildEnv(ctx: InstallerContext = {}): { env: InstallerEnv; targe
         fresh: false,
       };
     }
-    const ageS = Math.round(hb.ageMs / 1000);
-    if (hb.ageMs <= ADDON_HEARTBEAT_FRESH_MS) {
-      return { lines: [`add-on: detected (${hb.client ?? "client"}, heartbeat ${ageS}s ago)`], detected: true, fresh: true };
+    const lines = apps.map((app, i) => {
+      const hb = perApp[i];
+      if (!hb) return `add-on ${app}: not detected (load the add-on in ${app === "firefox" ? "Firefox" : "Thunderbird"}; see steps above)`;
+      const ageS = Math.round(hb.ageMs / 1000);
+      if (hb.ageMs <= ADDON_HEARTBEAT_FRESH_MS) return `add-on ${app}: detected (${hb.client}, heartbeat ${ageS}s ago)`;
+      return `add-on ${app}: last heartbeat ${ageS}s ago (stale — the add-on may be disconnected or awaiting reload)`;
+    });
+    const allFresh = perApp.every((hb) => hb && hb.ageMs <= ADDON_HEARTBEAT_FRESH_MS);
+    return { lines, detected: true, fresh: allFresh };
+  }
+
+  /** Broker (cross-app) state, for status/doctor (plan §26–27). */
+  function brokerLines(): string[] {
+    if (!isBrokerIpcSupported()) return ["broker: n/a (Windows — cross-app broker is a follow-up)"];
+    try {
+      const paths = brokerPaths();
+      const state = readBrokerState(paths.state);
+      if (state && isPidAlive(state.pid)) {
+        const ageS = Math.round((Date.now() - state.startedAt) / 1000);
+        return [`broker: running (pid ${state.pid}, up ${ageS}s) — cross-app tool routing active`];
+      }
+      if (state) return ["broker: stale state file (previous broker exited)"];
+      return ["broker: not running (single-app mode; a second app will attach automatically)"];
+    } catch {
+      return ["broker: unknown state"];
     }
-    return {
-      lines: [`add-on: last heartbeat ${ageS}s ago (stale — the add-on may be disconnected or awaiting reload)`],
-      detected: true,
-      fresh: false,
-    };
   }
 
 export async function runCommand(command: InstallerCommand, ctx: InstallerContext = {}): Promise<CommandResult> {
@@ -140,6 +161,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
       if (report.installed) {
         const addon = addonLines(env.homeDir, apps);
         for (const l of addon.lines) note(l);
+        for (const l of brokerLines()) note(l);
         if (addon.fresh) note("status: OK (host + add-on connected)");
         else note(addon.detected ? "status: HOST OK — add-on heartbeat stale (reload the add-on or check the app)" : "status: HOST OK — add-on not detected yet (see steps above)");
       } else {
@@ -164,6 +186,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
       }
       const addon = addonLines(env.homeDir, apps);
       for (const l of addon.lines) note(l);
+      for (const l of brokerLines()) note(l);
       if (addon.fresh) note("doctor: OK (host + add-on connected)");
       else note(addon.detected ? "doctor: HOST OK — add-on heartbeat stale (reload the add-on or check the app)" : "doctor: HOST OK — next: load the add-on (see steps above; it auto-connects within ~10s)");
       return { ok: true, lines };

@@ -110,7 +110,7 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
   {
     name: "mail_search",
     description:
-      "Search messages across accounts and folders. Returns paginated metadata (no bodies). Matches are against untrusted email content.",
+      "Search messages. By default searches only the account Inbox(es); scope:'all' searches every folder. An explicit folderId overrides scope. Returns paginated metadata (no bodies), newest first (each page is date-sorted; pages as a whole are not guaranteed chronological). Matches are against untrusted email content.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
@@ -119,7 +119,15 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
         to: { type: "string", description: "Match the recipients." },
         subject: { type: "string", description: "Match the subject line." },
         accountId: { type: "string", description: "Limit the search to one account." },
-        folderId: { type: "string", description: "Limit the search to one folder." },
+        folderId: { type: "string", description: "Limit the search to one folder. Overrides scope." },
+        scope: {
+          anyOf: [
+            { type: "string", const: "inbox" },
+            { type: "string", const: "all" },
+          ],
+          description:
+            "Search scope when no folderId is given: 'inbox' (default) or 'all' (all folders).",
+        },
         after: isoDate("sent after"),
         before: isoDate("sent before"),
         hasAttachments: { type: "boolean", description: "Only messages with (true) or without (false) attachments." },

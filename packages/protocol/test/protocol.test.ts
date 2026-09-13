@@ -23,6 +23,9 @@ import {
   PiBrowserProtocolError,
   toErrorObject,
 } from "../src/errors.js";
+import { COMPOSE_TOOLS } from "../src/compose-tools.js";
+import { CONTACTS_TOOLS } from "../src/contacts-tools.js";
+import { MAIL_MUTATION_TOOLS } from "../src/mail-mutation-tools.js";
 import {
   MAIL_TOOLS,
   MAIL_TOOL_NAMES,
@@ -36,6 +39,7 @@ import {
   PI_BROWSER,
   PI_BROWSER_META,
   X_PI_BROWSER,
+  applicationDisplayName,
   buildAgentHelloMeta,
   normalizeCapabilities,
   parseAgentHello,
@@ -46,9 +50,12 @@ import {
   buildPermissionRequest,
   PERMISSION_ALLOW_ALWAYS,
   PERMISSION_ALLOW_ONCE,
+  PERMISSION_ALLOW_SESSION,
   PERMISSION_REJECT,
   permissionAllowed,
+  permissionPromptDescription,
   REQUEST_PERMISSION_METHOD,
+  toolRequiresApproval,
 } from "../src/permission.js";
 
 test("browser tool registry: names are unique and well-formed", () => {
@@ -207,20 +214,67 @@ test("permission helpers: request shape + outcome classification", () => {
   assert.equal(req.sessionId, "sess-1");
   assert.equal(req.toolCall.toolCallId, "tc-1");
   assert.equal(req.toolCall.status, "pending");
-  // All three canonical options are offered.
-  const kinds = req.options.map((o) => o.kind).sort();
-  assert.deepEqual(kinds, ["allow_always", "allow_once", "reject_once"]);
-  const ids = req.options.map((o) => o.optionId).sort();
-  assert.deepEqual(ids.sort(), [PERMISSION_ALLOW_ALWAYS, PERMISSION_ALLOW_ONCE, PERMISSION_REJECT].sort());
+  // All four options are offered, in the canonical order.
+  const ids = req.options.map((o) => o.optionId);
+  assert.deepEqual(ids, [
+    PERMISSION_ALLOW_ONCE,
+    PERMISSION_ALLOW_SESSION,
+    PERMISSION_ALLOW_ALWAYS,
+    PERMISSION_REJECT,
+  ]);
+  // allow_session carries the closest canonical kind (the ACP enum has no
+  // session scope) — the host disambiguates on the optionId.
+  const sessionOpt = req.options.find((o) => o.optionId === PERMISSION_ALLOW_SESSION);
+  assert.equal(sessionOpt?.name, "Allow for this session");
+  assert.equal(sessionOpt?.kind, "allow_once");
   // The tool name is carried in _meta for the client UI.
   assert.equal((req._meta as { piBrowser?: { tool?: string } }).piBrowser?.tool, "browser_screenshot");
 
   // Outcome classification.
   assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } }), true);
+  assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_SESSION } }), true);
   assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ALWAYS } }), true);
   assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_REJECT } }), false);
   assert.equal(permissionAllowed({ outcome: { outcome: "cancelled" } }), false);
   assert.equal(permissionAllowed(undefined), false);
+});
+
+test("toolRequiresApproval: per-application approval policy", () => {
+  // Firefox: only the pixel-capture tool is gated (live-gesture requirement).
+  assert.equal(toolRequiresApproval("firefox", "browser_screenshot"), true);
+  assert.equal(toolRequiresApproval("firefox", "browser_get_page"), false);
+  assert.equal(toolRequiresApproval("firefox", "browser_click"), false);
+  assert.equal(toolRequiresApproval("firefox", "mail_get_message"), false);
+
+  // Thunderbird: every mail-surface tool is gated (mailbox + address book
+  // access is approval-gated per tool).
+  for (const t of MAIL_TOOLS) assert.equal(toolRequiresApproval("thunderbird", t.name), true, t.name);
+  for (const t of COMPOSE_TOOLS) assert.equal(toolRequiresApproval("thunderbird", t.name), true, t.name);
+  for (const t of MAIL_MUTATION_TOOLS) assert.equal(toolRequiresApproval("thunderbird", t.name), true, t.name);
+  for (const t of CONTACTS_TOOLS) assert.equal(toolRequiresApproval("thunderbird", t.name), true, t.name);
+
+  // A mail tool served by a firefox client is not gated (the policy keys on
+  // the EXECUTING application, not the tool name).
+  assert.equal(toolRequiresApproval("firefox", "mail_search"), false);
+  assert.equal(toolRequiresApproval("thunderbird", "browser_screenshot"), false);
+  assert.equal(toolRequiresApproval("thunderbird", "pi_unknown_tool"), false);
+});
+
+test("cross-app remote-prompt notification: method + app display names", () => {
+  // Host → session-owner client, display-only (the executing client answers
+  // the canonical session/request_permission itself).
+  assert.equal(X_PI_BROWSER.permission_prompted, "x-pi-browser/permission_prompted");
+  assert.equal(applicationDisplayName("thunderbird"), "Thunderbird (mail)");
+  assert.equal(applicationDisplayName("firefox"), "Firefox (browser)");
+});
+
+test("permissionPromptDescription: friendly text for known tools, safe fallback", () => {
+  assert.match(permissionPromptDescription("mail_get_message"), /email/i);
+  assert.match(permissionPromptDescription("compose_prepare_reply"), /draft/i);
+  assert.match(permissionPromptDescription("mail_move"), /move/i);
+  assert.match(permissionPromptDescription("browser_screenshot"), /screenshot/i);
+  // Unknown tools fall back to the bare tool name (UI-safe for new tools).
+  assert.equal(permissionPromptDescription("brand_new_tool"), "Pi wants to run: brand_new_tool.");
 });
 
 test("agent identity: host name + authorized extensions", () => {

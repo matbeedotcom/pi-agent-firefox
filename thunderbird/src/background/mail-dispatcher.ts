@@ -329,6 +329,26 @@ async function mailGetMessageBody(args: Record<string, unknown>): Promise<MailTo
   return { bodyText: truncated ? body.slice(0, maxChars) : body, truncated };
 }
 
+// Inbox resolution for the default search scope. In Thunderbird the root
+// folder of an IMAP/POP3/EWS account IS that account's Inbox; local-folders
+// and unified smart accounts are excluded.
+async function inboxFolderIds(): Promise<string[]> {
+  const accounts = await browser.accounts.list(false);
+  return accounts
+    .filter((a) => a.type === "imap" || a.type === "pop3" || a.type === "ews")
+    .map((a) => a.rootFolder?.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+// messages.query() without a folderId merges results across folders in
+// arbitrary (per-folder index) order, not chronological. Re-sort each page by
+// date desc (messages lacking a date sink to the bottom) so callers can rely
+// on "newest first". Stable, so within-page relative order is otherwise kept.
+function byDateDesc(messages: MailMessageRef[]): MailMessageRef[] {
+  const rank = (m: MailMessageRef) => (m.date ? Date.parse(m.date) : Number.NEGATIVE_INFINITY);
+  return [...messages].sort((a, b) => rank(b) - rank(a));
+}
+
 async function mailSearch(args: Record<string, unknown>): Promise<MailToolResult> {
   const limit = clampInt(args.limit, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
   const cursor = optStr(args.cursor);
@@ -336,7 +356,9 @@ async function mailSearch(args: Record<string, unknown>): Promise<MailToolResult
   // Continuation: resume a previously returned list id.
   if (cursor) {
     const list = await browser.messages.continueList(cursor);
-    const messages = (list && Array.isArray(list.messages) ? list.messages : []).map(normalizeHeader);
+    const messages = byDateDesc(
+      (list && Array.isArray(list.messages) ? list.messages : []).map(normalizeHeader),
+    );
     return { messages, nextCursor: list && list.id && messages.length > 0 ? list.id : null };
   }
 
@@ -391,9 +413,45 @@ async function mailSearch(args: Record<string, unknown>): Promise<MailToolResult
     queryInfo.tags = { mode, tags: Object.fromEntries(keys.map((k) => [k, true])) };
   }
 
+  // Default scope: the account Inbox(es), not all folders. An explicit
+  // folderId takes precedence over scope; scope "all" is the legacy
+  // search-everything behavior.
+  let note: string | undefined;
+  let inboxes: string[] = [];
+  if (!queryInfo.folderId && args.scope !== "all") {
+    inboxes = await inboxFolderIds();
+    if (inboxes.length === 0) {
+      note = "No account inbox found; searched all folders.";
+    } else if (inboxes.length === 1) {
+      queryInfo.folderId = inboxes[0];
+    }
+  }
+
+  if (inboxes.length > 1) {
+    // Multiple real accounts: one query per inbox, merged date-desc.
+    // The combined page is not paginatable (continueList is per-query).
+    const lists = await Promise.all(
+      inboxes.map((fid) => browser.messages.query({ ...queryInfo, folderId: fid })),
+    );
+    const messages = byDateDesc(
+      lists
+        .flatMap((l) => (l && Array.isArray(l.messages) ? l.messages : []))
+        .map(normalizeHeader),
+    ).slice(0, limit);
+    return {
+      messages,
+      nextCursor: null,
+      note: `Search covered ${inboxes.length} inboxes; the combined page is not paginated. Re-run with folderId or scope:'all' for more results.`,
+    };
+  }
+
   const list = await browser.messages.query(queryInfo);
-  const messages = (list && Array.isArray(list.messages) ? list.messages : []).map(normalizeHeader);
-  return { messages, nextCursor: list && list.id ? list.id : null };
+  const messages = byDateDesc(
+    (list && Array.isArray(list.messages) ? list.messages : []).map(normalizeHeader),
+  );
+  const result: MailToolResult = { messages, nextCursor: list && list.id ? list.id : null };
+  if (note) result.note = note;
+  return result;
 }
 
 async function mailListAttachments(args: Record<string, unknown>): Promise<MailToolResult> {

@@ -47,11 +47,18 @@ interface Store {
   parts: Record<number, Part>;
   attachments: Record<number, Array<Record<string, unknown>>>;
   files: Record<string, { name: string; type: string; bytes: Uint8Array }>;
-  accounts: Array<{ id: string; name: string; type?: string; identities: Array<Record<string, unknown>> }>;
+  accounts: Array<{
+    id: string;
+    name: string;
+    type?: string;
+    identities: Array<Record<string, unknown>>;
+    rootFolder?: { id?: string };
+  }>;
   folders: Array<{ id?: string; name?: string; path?: string; accountId?: string; isRoot?: boolean }>;
   tags: Array<{ key: string; tag: string; color?: string }>;
   lastQuery?: Record<string, unknown>;
   search: MsgHeader[];
+  searchByFolder?: Record<string, MsgHeader[]>;
   searchCursor?: string | null;
 }
 
@@ -116,7 +123,9 @@ function installStub(): void {
       },
       async query(queryInfo?: Record<string, unknown>) {
         store.lastQuery = queryInfo;
-        return { id: "list-1", messages: store.search };
+        const fid = queryInfo?.folderId as string | undefined;
+        const pool = fid && store.searchByFolder?.[fid] ? store.searchByFolder[fid] : store.search;
+        return { id: "list-1", messages: pool };
       },
       async continueList(listId: string) {
         assert.equal(listId, "list-1");
@@ -338,6 +347,55 @@ test("mail_search: unknown tag name -> PI_NOT_FOUND", async () => {
     call("mail_search", { tags: ["nonexistent"] }),
     (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.PI_NOT_FOUND,
   );
+});
+
+test("mail_search: defaults to the account Inbox when no folderId is given", async () => {
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
+  ];
+  store.search = [{ id: 10 }];
+  await call("mail_search", { text: "x" });
+  assert.equal(store.lastQuery?.folderId, "acct1-inbox");
+});
+
+test("mail_search: scope:'all' searches every folder", async () => {
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
+  ];
+  await call("mail_search", { scope: "all" });
+  assert.equal(store.lastQuery?.folderId, undefined);
+});
+
+test("mail_search: explicit folderId overrides scope", async () => {
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
+  ];
+  await call("mail_search", { folderId: "archive-99", scope: "all" });
+  assert.equal(store.lastQuery?.folderId, "archive-99");
+});
+
+test("mail_search: multiple inboxes are merged date-desc and not paginated", async () => {
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "in1" } },
+    { id: "a2", name: "Home", type: "pop3", identities: [], rootFolder: { id: "in2" } },
+  ];
+  store.searchByFolder = {
+    in1: [{ id: 1, subject: "old work", date: "2024-01-01T00:00:00Z" }],
+    in2: [{ id: 2, subject: "new home", date: "2024-06-01T00:00:00Z" }],
+  };
+  const res = await call("mail_search", { text: "x" });
+  assert.deepEqual(res.messages.map((m: any) => m.messageId), [2, 1]);
+  assert.equal(res.nextCursor, null);
+  assert.match(res.note, /2 inboxes/);
+});
+
+test("mail_search: no real mail account falls back to all folders with a note", async () => {
+  store.accounts = [{ id: "a1", name: "Local Folders", type: "none", identities: [] }];
+  store.search = [{ id: 10 }];
+  const res = await call("mail_search", { text: "x" });
+  assert.equal(store.lastQuery?.folderId, undefined);
+  assert.equal(res.messages.length, 1);
+  assert.match(res.note, /searched all folders/);
 });
 
 test("mail_list_tags: returns normalized { key, name, color }", async () => {

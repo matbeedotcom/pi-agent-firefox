@@ -32,6 +32,7 @@ import {
   type MessageMcpRequest,
   type MessageMcpResponse,
   type PiBrowserMeta,
+  type PermissionPromptedParams,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
@@ -53,6 +54,12 @@ export interface AcpClientHandlers {
   onStatus(status: HostStatus): void;
   /** Ask the user to approve/deny a sensitive tool call. Returns their choice. */
   onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse>;
+  /**
+   * Optional: a tool's approval prompt is being shown in ANOTHER app (the
+   * session-owner UI should draw the user's attention there). Display-only —
+   * this client does not answer the prompt.
+   */
+  onPermissionPrompted?(params: PermissionPromptedParams): void;
 }
 
 /** Application identity used for the clientInfo + pi.agent.hello handshake. */
@@ -236,6 +243,11 @@ export class AcpClient {
         result = await this.handlers.onMcpDisconnect(params as DisconnectMcpRequest);
       } else if (method === CLIENT_METHODS.session_request_permission) {
         result = await this.handlers.onRequestPermission(params as RequestPermissionRequest);
+      } else if (method === X_PI_BROWSER.permission_prompted) {
+        // Display-only cross-app heads-up; ack so the host's fire-and-forget
+        // request settles even if no UI handler is registered.
+        this.handlers.onPermissionPrompted?.(params as PermissionPromptedParams);
+        result = { ok: true };
       } else {
         this.send({ jsonrpc: "2.0", id, error: { code: -32601, message: `unknown method: ${method}` } });
         return;

@@ -74,6 +74,44 @@ handlers the sidebar uses.
 | `/pi-browser doctor` | status + live framed host probe + add-on detection |
 | `/pi-browser uninstall` | remove the registration |
 
+## Using Firefox and Thunderbird together (cross-app broker)
+
+Both add-ons connect to the same `com.matbee.agent` host, and the host makes the two
+apps usable **from each other** — no extra setup beyond loading both add-ons and having
+the host installed:
+
+1. **First app to connect = broker.** It owns the Pi sessions and listens on private OS IPC
+   (`~/.pi/run/agent-broker.sock`, 0600; Windows: single-app mode for now).
+2. **Second app = relay.** Its host process transparently forwards the app's Native
+   Messaging pipe into the broker. Native Messaging stays the only visible app boundary;
+   there is no localhost TCP. If the broker is gone, the roles simply re-elect on the next
+   connection — the add-ons' normal reconnect logic handles all of it.
+3. **Every session sees every connected app's tools** (capabilities from each app's
+   `pi.agent.hello`). Tool calls route to the app that provides the tool:
+   - A session in the **Firefox sidebar** can call `mail_*`, `compose_*`, `contacts_*`
+     → executed by the **Thunderbird** add-on.
+   - A session in the **Thunderbird pane** can call `browser_*`
+     → executed by the **Firefox** add-on (bind a tab to the session in the Firefox
+     sidebar for browser tools to have a page to act on).
+4. **Check the wiring:** `/pi-browser status` / `doctor` report per-app heartbeats and the
+   broker state (`broker: running (pid N) — cross-app tool routing active`).
+5. **Example flagship prompt** (either app): *“Look at the email Alice just sent about the
+   login problem, reproduce it in the tab, fix it, and draft a reply.”* — one session,
+   both apps.
+
+Notes: a session's tool surface is fixed when the session is created (union of the apps
+connected at that moment); a provider that connects later is used by sessions created
+afterwards. Email content reaches Pi as untrusted tool data, exactly like page content,
+and every mail-surface tool (read, compose, mutation, contacts) is approval-gated:
+before the LLM's first call to a given tool runs, the app that executes it shows an
+**Allow once / Allow for this session / Always allow / Deny** prompt
+(always-allow sticks for the host's lifetime; session-allow for the session,
+so each tool asks at most once per scope). When the prompt shows in the OTHER
+app (cross-app), the session-owner UI draws attention with a banner —
+“🔔 `mail_…` is waiting for your approval in **Thunderbird (mail)** — the prompt
+will appear in your mail client” — and dismisses it when the tool finishes.
+Verified live + integration: [docs/CROSS-APP-VERIFICATION.md](docs/CROSS-APP-VERIFICATION.md).
+
 ## Building from source (build instructions)
 
 ### Environment requirements
@@ -135,5 +173,9 @@ sh amo/make-zip.sh   # rebuild the AMO submission zip from firefox/dist
 - web pages cannot initiate prompts; tools resolve explicit session→tab bindings
   (`BROWSER_NOT_BOUND` / `BROWSER_TAB_CLOSED`, never silent fallback)
 - `browser_screenshot` is permission-gated via ACP `session/request_permission`
-  (allow once / always / deny; deny or timeout → `BROWSER_PERMISSION_DENIED`)
+  (allow once / allow for this session / always / deny; deny or timeout → `BROWSER_PERMISSION_DENIED`)
+- Thunderbird mail tools (read, compose, mutations, contacts) are approval-gated
+  the same way — the prompt is asked in the app that EXECUTES the tool (Thunderbird,
+  in its Pi Space or side pane); deny or timeout → `BROWSER_PERMISSION_DENIED` and
+  the dispatcher is never reached
 - full checklist with code locations: [docs/VERIFICATION.md](docs/VERIFICATION.md)

@@ -46,7 +46,18 @@ export interface ClientHeartbeat {
   pid: number;
 }
 
-/** Heartbeat file location (env override for tests; default under $HOME). */
+/** Application a client name belongs to (for per-app heartbeat files). */
+export function applicationForClient(name: string | undefined): "firefox" | "thunderbird" | undefined {
+  if (name === "pi-thunderbird") return "thunderbird";
+  if (name === "pi-browser-firefox" || name === "pi-firefox") return "firefox";
+  return undefined;
+}
+
+/**
+ * Heartbeat file locations (env override for tests; default under $HOME).
+ * Legacy single file (latest client) + per-app files so status/doctor can
+ * report both applications independently (plan §23, cross-app broker).
+ */
 export function heartbeatPathForHome(homeDir: string): string {
   return process.env.PI_BROWSER_HEARTBEAT_FILE || path.join(homeDir, ".pi-browser", "client.heartbeat");
 }
@@ -55,11 +66,25 @@ export function heartbeatPath(): string {
   return heartbeatPathForHome(os.homedir());
 }
 
+/** Per-app heartbeat file (e.g. client.heartbeat.thunderbird). */
+export function appHeartbeatPath(homeDir: string, application: "firefox" | "thunderbird"): string {
+  const dir = process.env.PI_BROWSER_HEARTBEAT_FILE
+    ? path.dirname(process.env.PI_BROWSER_HEARTBEAT_FILE)
+    : path.join(homeDir, ".pi-browser");
+  return path.join(dir, `client.heartbeat.${application}`);
+}
+
 /**
  * Record add-on presence. No-op for non-add-on clients (e.g. test harnesses).
+ * Writes the legacy single file (latest client) AND the per-app file so
+ * /pi-browser status|doctor can report both applications (plan §23).
  * Best-effort: never throws.
  */
-export function touchClientHeartbeat(clientName: string | undefined, clientVersion?: string): void {
+export function touchClientHeartbeat(
+  clientName: string | undefined,
+  clientVersion?: string,
+  application?: "firefox" | "thunderbird",
+): void {
   try {
     if (!isKnownAddonClient(clientName)) return;
     const file = heartbeatPath();
@@ -71,20 +96,37 @@ export function touchClientHeartbeat(clientName: string | undefined, clientVersi
       pid: process.pid,
     };
     writeFileSync(file, JSON.stringify(hb));
+    const app = application ?? applicationForClient(clientName);
+    if (app) {
+      writeFileSync(appHeartbeatPath(os.homedir(), app), JSON.stringify(hb));
+    }
   } catch {
     // best-effort only — the protocol path must never break on this
   }
 }
 
-/** Read the latest add-on heartbeat, or undefined when absent/unreadable. */
-export function readClientHeartbeat(homeDir: string): (ClientHeartbeat & { ageMs: number }) | undefined {
-  try {
-    const file = heartbeatPathForHome(homeDir);
-    if (!existsSync(file)) return undefined;
-    const raw = JSON.parse(readFileSync(file, "utf8")) as ClientHeartbeat;
-    if (typeof raw.ts !== "number" || !isKnownAddonClient(raw.client)) return undefined;
-    return { ...raw, ageMs: Date.now() - raw.ts };
-  } catch {
-    return undefined;
+/**
+ * Read the add-on heartbeat, or undefined when absent/unreadable.
+ * With `application`, reads the per-app file (falling back to the legacy
+ * file when its client belongs to that application).
+ */
+export function readClientHeartbeat(
+  homeDir: string,
+  application?: "firefox" | "thunderbird",
+): (ClientHeartbeat & { ageMs: number }) | undefined {
+  const files: string[] = application
+    ? [appHeartbeatPath(homeDir, application), heartbeatPathForHome(homeDir)]
+    : [heartbeatPathForHome(homeDir)];
+  for (const file of files) {
+    try {
+      if (!existsSync(file)) continue;
+      const raw = JSON.parse(readFileSync(file, "utf8")) as ClientHeartbeat;
+      if (typeof raw.ts !== "number" || !isKnownAddonClient(raw.client)) continue;
+      if (application && applicationForClient(raw.client) !== application) continue;
+      return { ...raw, ageMs: Date.now() - raw.ts };
+    } catch {
+      // try the next file
+    }
   }
+  return undefined;
 }

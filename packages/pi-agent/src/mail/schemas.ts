@@ -69,7 +69,15 @@ const SCHEMAS: Record<string, TSchema> = {
       to: Type.Optional(Type.String({ description: "Match the recipients." })),
       subject: Type.Optional(Type.String({ description: "Match the subject line." })),
       accountId: Type.Optional(Type.String({ description: "Limit the search to one account." })),
-      folderId: Type.Optional(Type.String({ description: "Limit the search to one folder." })),
+      folderId: Type.Optional(
+        Type.String({ description: "Limit the search to one folder. Overrides scope." }),
+      ),
+      scope: Type.Optional(
+        Type.Union([Type.Literal("inbox"), Type.Literal("all")], {
+          description:
+            "Search scope when no folderId is given: 'inbox' (default) or 'all' (all folders).",
+        }),
+      ),
       after: Type.Optional(isoDate("sent after")),
       before: Type.Optional(isoDate("sent before")),
       hasAttachments: Type.Optional(

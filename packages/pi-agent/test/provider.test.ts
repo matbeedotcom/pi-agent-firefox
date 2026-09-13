@@ -7,7 +7,14 @@ import { CapabilityToolProvider, LegacyBrowserCallbackTransport, NativeMcpOverAc
 import {
   BROWSER_TOOLS,
   CLIENT_METHODS,
+  COMPOSE_TOOL_NAMES,
+  CONTACTS_TOOL_NAMES,
+  MAIL_MUTATION_TOOL_NAMES,
   MAIL_TOOLS,
+  PERMISSION_ALLOW_ALWAYS,
+  PERMISSION_ALLOW_ONCE,
+  PERMISSION_ALLOW_SESSION,
+  PERMISSION_REJECT,
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
   X_PI_BROWSER,
@@ -114,6 +121,168 @@ test("legacy transport: mail tool call round-trip over x-pi-browser/tool", async
   assert.equal(ff.toolCalls[0].sessionId, "session-mail");
   assert.equal(ff.toolCalls[0].tool, "mail_get_context");
   assert.equal(result.content[0].type, "text");
+});
+
+// ---------------------------------------------------------------------------
+// Tool approval gate (session/request_permission)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fake Thunderbird that records permission requests and answers with the
+ * configured option (default: reject). Returns the created provider.
+ */
+function setupFakeThunderbird(answerOptionId: string = PERMISSION_REJECT) {
+  const { a, b } = createMemoryTransportPair(quiet, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet);
+  const permRequests: Array<{ sessionId: string; tool: string }> = [];
+  const toolCalls: Array<{ tool: string }> = [];
+  a.transport.onRequest = (method, params, id) => {
+    if (method === CLIENT_METHODS.session_request_permission) {
+      const p = params as {
+        sessionId: string;
+        toolCall: { toolCallId: string };
+        _meta?: { piBrowser?: { tool?: string } };
+      };
+      const tool = p._meta?.piBrowser?.tool ?? "?";
+      permRequests.push({ sessionId: p.sessionId, tool });
+      if (answerOptionId === "cancelled") {
+        a.transport.respond(id, { outcome: { outcome: "cancelled" } });
+      } else {
+        a.transport.respond(id, { outcome: { outcome: "selected", optionId: answerOptionId } });
+      }
+      return;
+    }
+    if (method === X_PI_BROWSER.tool) {
+      const p = params as { tool: string };
+      toolCalls.push({ tool: p.tool });
+      a.transport.respond(id, { content: [{ type: "text", text: "ok" }] });
+      return;
+    }
+    a.transport.respondError(id, { code: -32601, message: `fake thunderbird: unknown ${method}` });
+  };
+  return { a, provider, permRequests, toolCalls };
+}
+
+test("approval gate: thunderbird mail tool is denied until the user approves", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_REJECT);
+  const tools = tb.provider.createTools({ id: "s-tb" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const get = tools.find((t) => t.name === "mail_get_message");
+  assert.ok(get);
+
+  await assert.rejects(
+    get.execute("tc-denied", { messageId: 42 }, undefined),
+    (err: unknown) =>
+      err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+  );
+  // The prompt went to the client naming the tool...
+  assert.equal(tb.permRequests.length, 1);
+  assert.equal(tb.permRequests[0].tool, "mail_get_message");
+  assert.equal(tb.permRequests[0].sessionId, "s-tb");
+  // ...and the dispatcher was never reached.
+  assert.equal(tb.toolCalls.length, 0);
+});
+
+test("approval gate: allow_once executes the tool; next call asks again", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_ALLOW_ONCE);
+  const tools = tb.provider.createTools({ id: "s-tb" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const get = tools.find((t) => t.name === "mail_get_message");
+  assert.ok(get);
+
+  await get.execute("tc-1", {}, undefined);
+  await get.execute("tc-2", {}, undefined);
+  assert.deepEqual(tb.toolCalls.map((c) => c.tool), ["mail_get_message", "mail_get_message"]);
+  // allow_once does not stick — both calls were prompted.
+  assert.equal(tb.permRequests.length, 2);
+});
+
+test("approval gate: allow_session applies to the session only", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_ALLOW_SESSION);
+  const toolsA = tb.provider.createTools({ id: "s-a" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const toolsB = tb.provider.createTools({ id: "s-b" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const getA = toolsA.find((t) => t.name === "mail_get_message");
+  const getB = toolsB.find((t) => t.name === "mail_get_message");
+  assert.ok(getA);
+  assert.ok(getB);
+
+  await getA.execute("tc-1", {}, undefined); // prompts
+  await getA.execute("tc-2", {}, undefined); // same session: no prompt
+  await getB.execute("tc-3", {}, undefined); // different session: prompts again
+  assert.equal(tb.permRequests.length, 2);
+  assert.equal(tb.toolCalls.length, 3);
+
+  // Disposing the session drops its session-scoped approvals.
+  await tb.provider.disposeSession("s-a");
+  await getA.execute("tc-4", {}, undefined); // prompts again
+  assert.equal(tb.permRequests.length, 3);
+});
+
+test("approval gate: allow_always is remembered for the host lifetime", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_ALLOW_ALWAYS);
+  const tools = tb.provider.createTools({ id: "s-tb" }, "legacy", undefined, [
+    "mail",
+    "compose",
+    "mailModify",
+    "contacts",
+  ], undefined, "thunderbird");
+
+  await tools.find((t) => t.name === "mail_get_message")!.execute("tc-1", {}, undefined);
+  await tools.find((t) => t.name === "mail_get_message")!.execute("tc-2", {}, undefined);
+  // A different tool still asks on its first call.
+  await tools.find((t) => t.name === "mail_search")!.execute("tc-3", {}, undefined);
+  assert.equal(tb.permRequests.length, 2); // mail_get_message once, mail_search once
+  assert.equal(tb.toolCalls.length, 3);
+});
+
+test("approval gate: all thunderbird capability tools are gated on first call", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_ALLOW_ONCE);
+  const tools = tb.provider.createTools({ id: "s-tb" }, "legacy", undefined, [
+    "mail",
+    "compose",
+    "mailModify",
+    "contacts",
+  ], undefined, "thunderbird");
+  const expected = [
+    ...MAIL_TOOLS.map((t) => t.name),
+    ...COMPOSE_TOOL_NAMES,
+    ...MAIL_MUTATION_TOOL_NAMES,
+    ...CONTACTS_TOOL_NAMES,
+  ];
+  assert.equal(tools.length, expected.length);
+  for (const tool of tools) {
+    await tool.execute(`tc-${tool.name}`, {}, undefined);
+    const prompts = tb.permRequests.filter((p) => p.tool === tool.name);
+    assert.equal(prompts.length, 1, `${tool.name} should have prompted once`);
+  }
+  assert.equal(tb.toolCalls.length, expected.length);
+});
+
+test("approval gate: firefox client keeps screenshot-only gating (mail tools not gated)", async () => {
+  // Default application is firefox: mail tools pass through with no prompt.
+  const tb = setupFakeThunderbird(PERMISSION_REJECT);
+  const mailTools = tb.provider.createTools({ id: "s-ff" }, "legacy", undefined, ["mail"]);
+  const get = mailTools.find((t) => t.name === "mail_get_message");
+  assert.ok(get);
+  await get.execute("tc-ff", {}, undefined);
+  assert.equal(tb.permRequests.length, 0);
+  assert.equal(tb.toolCalls.length, 1);
+
+  // And a browser tool on firefox is NOT gated except the screenshot.
+  const ff = setupFakeThunderbird(PERMISSION_REJECT);
+  const browserTools = ff.provider.createTools({ id: "s-ff2" }, "legacy", undefined, ["browser"]);
+  const getPage = browserTools.find((t) => t.name === "browser_get_page");
+  assert.ok(getPage);
+  await getPage.execute("tc-ff2", {}, undefined);
+  assert.equal(ff.permRequests.length, 0);
+
+  const shot = browserTools.find((t) => t.name === "browser_screenshot");
+  assert.ok(shot);
+  await assert.rejects(
+    shot.execute("tc-shot", {}, undefined),
+    (err: unknown) =>
+      err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+  );
+  assert.equal(ff.permRequests.length, 1);
+  assert.equal(ff.permRequests[0].tool, "browser_screenshot");
 });
 
 test("legacy transport: tool call round-trip over x-pi-browser/tool", async () => {

@@ -6,6 +6,7 @@
  * renders ACP session/update streams. Same model as the Firefox sidebar, laid
  * out as a full Space tab (session rail + conversation pane).
  */
+import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
 import type {
   SessionConfigOption,
   SessionConfigSelect,
@@ -137,12 +138,71 @@ function applySessionUpdate(sessionId: string, update: SessionUpdate): void {
       if (update.title) block.title = update.title;
       const text = toolUpdateText(update);
       if (text) block.text = text;
+      // The tool finished (approved or denied elsewhere): the remote
+      // approval banner for it is stale.
+      if (update.status && isTerminalToolStatus(update.status)) {
+        clearRemotePrompt(sessionId, (update as ToolCallUpdate).toolCallId);
+      }
       break;
     }
     default:
       break;
   }
   if (activeSessionId === sessionId) renderConversation();
+  renderRemotePromptBanner();
+}
+
+// ---------------------------------------------------------------------------
+// Remote approval banner (cross-app, plan §29)
+//
+// When a tool in THIS session needs approval in ANOTHER app (e.g. the user
+// is in the mail client and the prompt shows in the browser), the host
+// notifies us (pi/permission_prompted). We can't answer it here — we just
+// draw the user's attention to where the prompt is.
+// ---------------------------------------------------------------------------
+
+interface RemotePrompt {
+  tool: string;
+  application: string;
+}
+const remotePrompts = new Map<string, RemotePrompt>(); // key: `${sessionId}:${toolCallId}`
+
+function isTerminalToolStatus(status: string): boolean {
+  return status !== "pending" && status !== "in_progress";
+}
+
+function clearRemotePrompt(sessionId: string, toolCallId: string): void {
+  if (remotePrompts.delete(`${sessionId}:${toolCallId}`)) renderRemotePromptBanner();
+}
+
+function renderRemotePromptBanner(): void {
+  const el = $("remote-prompt-banner");
+  if (!el) return;
+  const pending = new Map<string, RemotePrompt>();
+  if (activeSessionId) {
+    for (const [key, rp] of remotePrompts) {
+      if (key.startsWith(`${activeSessionId}:`)) pending.set(key, rp);
+    }
+  }
+  if (pending.size === 0) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  const first = pending.values().next().value as RemotePrompt;
+  el.textContent = "";
+  const icon = document.createElement("span");
+  icon.className = "rp-icon";
+  icon.textContent = "🔔";
+  const msg = document.createElement("span");
+  const label = applicationDisplayName(first.application as never);
+  const count = pending.size > 1 ? ` (+${pending.size - 1} more)` : "";
+  msg.append(`${first.tool} is waiting for your approval in `);
+  const b = document.createElement("b");
+  b.textContent = label;
+  msg.append(b, ` — the prompt will appear in your ${first.application === "thunderbird" ? "mail" : "browser"} client${count}.`);
+  el.append(icon, msg);
+  el.classList.remove("hidden");
 }
 
 function chunkText(update: SessionUpdate): string {
@@ -176,6 +236,7 @@ function renderAll(): void {
   renderCaps();
   renderActive();
   renderConversation();
+  renderRemotePromptBanner();
   renderOnboarding();
 }
 
@@ -433,15 +494,121 @@ function fragmentFromInline(line: string): DocumentFragment {
 
 browser.runtime.onMessage.addListener((message: unknown) => {
   if (typeof message !== "object" || message === null) return;
-  const msg = message as { type?: string; state?: UiState; sessionId?: string; update?: SessionUpdate };
+  const msg = message as {
+    type?: string;
+    state?: UiState;
+    sessionId?: string;
+    update?: SessionUpdate;
+    request?: PermissionRequestUi;
+    params?: { sessionId: string; toolCallId: string; tool: string; application: string };
+  };
   if (msg.type === "pi/state" && msg.state) {
     uiState = msg.state;
     activeSessionId = msg.state.activeSessionId;
     renderAll();
   } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update);
+  } else if (msg.type === "pi/permission_request" && msg.request) {
+    showPermissionPrompt(msg.request);
+  } else if (msg.type === "pi/permission_prompted" && msg.params) {
+    const { sessionId, toolCallId, tool, application } = msg.params;
+    remotePrompts.set(`${sessionId}:${toolCallId}`, { tool, application });
+    renderRemotePromptBanner();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Tool approval prompt (sensitive mail tools)
+// ---------------------------------------------------------------------------
+
+interface PermissionOptionUi {
+  optionId: string;
+  name: string;
+  kind: string;
+}
+interface PermissionRequestUi {
+  sessionId: string;
+  toolCall: { toolCallId: string; title?: string };
+  options: PermissionOptionUi[];
+  _meta?: { piBrowser?: { tool?: string } };
+}
+
+function answerPermission(permId: string, optionId: string): void {
+  browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId }).catch(() => {});
+  hidePermissionPrompt();
+}
+
+function showPermissionPrompt(request: PermissionRequestUi): void {
+  const overlay = $("perm-overlay");
+  const desc = $("perm-desc");
+  const toolEl = $("perm-tool");
+  const optionsWrap = $("perm-options");
+  const permId = request.toolCall.toolCallId;
+  // Guard against a stale page (no modal markup): answer "cancelled" so the
+  // host never hangs, rather than crashing the message handler.
+  if (!overlay || !desc || !optionsWrap) {
+    browser.runtime
+      .sendMessage({ type: "pi/permission_response", permId, optionId: "cancelled" })
+      .catch(() => {});
+    return;
+  }
+  const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
+  desc.textContent = permissionPromptDescription(tool);
+  if (toolEl) toolEl.textContent = tool;
+
+  optionsWrap.textContent = "";
+  renderPermissionOptions(optionsWrap, request.options, permId, (optionId) =>
+    answerPermission(permId, optionId),
+  );
+  overlay.classList.remove("hidden");
+}
+
+/**
+ * Render the approval buttons in the canonical order. Branches on the
+ * optionId (the host's identity for each option) with a kind fallback so
+ * unknown future options still get a sensible style.
+ */
+function renderPermissionOptions(
+  wrap: HTMLElement,
+  options: PermissionOptionUi[],
+  permId: string,
+  answer: (optionId: string) => void,
+): void {
+  const order = ["allow_once", "allow_session", "allow_always", "reject_once"];
+  const rank = (o: PermissionOptionUi): number => {
+    const byId = order.indexOf(o.optionId);
+    return byId !== -1 ? byId : order.indexOf(o.kind);
+  };
+  const sorted = [...options].sort((a, b) => rank(a) - rank(b));
+  for (const opt of sorted) {
+    const btn = document.createElement("button");
+    btn.textContent = opt.name;
+    switch (opt.optionId) {
+      case "allow_once":
+        btn.className = "perm-primary";
+        break;
+      case "allow_session":
+        btn.className = "perm-session";
+        break;
+      case "allow_always":
+        btn.className = "perm-always";
+        break;
+      case "reject_once":
+        btn.className = "perm-reject";
+        break;
+      default:
+        // Unknown option: style by kind (allow* → always style, else reject).
+        btn.className = opt.kind.startsWith("allow") ? "perm-always" : "perm-reject";
+    }
+    btn.addEventListener("click", () => answer(opt.optionId));
+    wrap.append(btn);
+  }
+}
+
+function hidePermissionPrompt(): void {
+  const overlay = $("perm-overlay");
+  if (overlay) overlay.classList.add("hidden");
+}
 
 $<HTMLButtonElement>("new-session").addEventListener("click", () => {
   $<HTMLDivElement>("new-panel").classList.toggle("hidden");

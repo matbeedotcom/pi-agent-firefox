@@ -10,3 +10,4 @@ export * from "./compose-tools.js";
 export * from "./mail-mutation-tools.js";
 export * from "./contacts-tools.js";
 export * from "./permission.js";
+export * from "./tool-capabilities.js";

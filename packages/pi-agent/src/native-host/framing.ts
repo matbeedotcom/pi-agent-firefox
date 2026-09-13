@@ -60,6 +60,17 @@ export class FrameDecoder {
     }
     return frames;
   }
+
+  /**
+   * Return and clear any incomplete trailing bytes. Used once a pre-protocol
+   * handshake (broker relay attach) has consumed the first frame: the
+   * remainder must flow onward, not stay stranded in this decoder.
+   */
+  drain(): Buffer {
+    const out = this.buf;
+    this.buf = Buffer.alloc(0);
+    return out;
+  }
 }
 
 /** Encode a message as a single Firefox frame. */

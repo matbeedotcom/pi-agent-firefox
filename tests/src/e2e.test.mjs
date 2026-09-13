@@ -44,149 +44,7 @@ import { McpServer } from "@pi-browser/firefox/mcp-server";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOST_ENTRY = path.join(REPO_ROOT, "packages", "pi-agent", "dist", "native-host", "main.js");
 
-// ---------------------------------------------------------------------------
-// Framed host client (Firefox framing: 4-byte LE length + JSON)
-// ---------------------------------------------------------------------------
-
-class HostClient {
-  constructor(child) {
-    this.child = child;
-    this.nextId = 1;
-    this.pending = new Map();
-    this.notifications = [];
-    this.handlers = new Map();
-    this.incomingRequests = []; // host -> client requests we chose not to handle
-    this.buffer = Buffer.alloc(0);
-    this.alive = true;
-
-    child.stdout.on("data", (chunk) => this.onData(chunk));
-    // stderr is diagnostics only; optionally mirror it to a file for debugging.
-    child.stderr.on("data", (chunk) => {
-      if (process.env.PI_BROWSER_E2E_STDERR) {
-        import("node:fs").then((fs) => fs.appendFileSync(process.env.PI_BROWSER_E2E_STDERR, chunk));
-      }
-    });
-    child.on("exit", (code, signal) => {
-      this.exitCode = code;
-      this.exitSignal = signal;
-      this.alive = false;
-      for (const [, p] of this.pending) p.reject(new Error(`host exited (code=${code} signal=${signal})`));
-      this.pending.clear();
-    });
-  }
-
-  onData(chunk) {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    for (;;) {
-      if (this.buffer.length < 4) return;
-      const len = this.buffer.readUInt32LE(0);
-      if (this.buffer.length < 4 + len) return;
-      const payload = this.buffer.subarray(4, 4 + len).toString("utf8");
-      this.buffer = this.buffer.subarray(4 + len);
-      let msg;
-      try {
-        msg = JSON.parse(payload);
-      } catch {
-        continue;
-      }
-      this.dispatch(msg);
-    }
-  }
-
-  dispatch(msg) {
-    // JSON-RPC: requests carry a method; responses never do. Host and
-    // client id spaces are independent, so NEVER dispatch on id alone.
-    if (typeof msg.method === "string" && typeof msg.id === "number") {
-      // Request from the host: the fake Firefox answers.
-      const handler = this.handlers.get(msg.method);
-      if (!handler) {
-        this.incomingRequests.push(msg);
-        this.sendRaw({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: `no handler for ${msg.method}` } });
-        return;
-      }
-      Promise.resolve()
-        .then(() => handler(msg.params))
-        .then((result) => this.sendRaw({ jsonrpc: "2.0", id: msg.id, result: result ?? null }))
-        .catch((err) => {
-          // Mirror the add-on's AcpClient error serialization exactly:
-          // structured errors become reserved numeric codes + data.piBrowserError.
-          const error = isStructuredErrorObject(err)
-            ? { code: err.code, message: err.message, ...(err.data ? { data: err.data } : {}) }
-            : {
-                code: -32603,
-                message: err instanceof Error ? err.message : String(err),
-                data: { piBrowserError: PI_BROWSER_ERROR.INTERNAL },
-              };
-          this.sendRaw({ jsonrpc: "2.0", id: msg.id, error });
-        });
-      return;
-    }
-    if (typeof msg.id === "number" && this.pending.has(msg.id)) {
-      // Response to one of our requests.
-      const p = this.pending.get(msg.id);
-      this.pending.delete(msg.id);
-      if (msg.error) p.reject(msg.error);
-      else p.resolve(msg.result);
-      return;
-    }
-    if (typeof msg.method === "string") {
-      // Notification (method, no id): record, no response.
-      this.notifications.push(msg);
-      return;
-    }
-    if (msg.id !== undefined || msg.method !== undefined) this.notifications.push(msg);
-  }
-
-  sendRaw(obj) {
-    // Safe against shutdown: a test's finally block may end the child's stdin
-    // (or the child may exit) while an async response write from dispatch()
-    // is still in the microtask queue. Writing a late frame to a closed stdin
-    // would throw an uncaught ERR_STREAM_WRITE_AFTER_END and fail the test.
-    const stdin = this.child.stdin;
-    if (!stdin || !stdin.writable) return;
-    const json = Buffer.from(JSON.stringify(obj), "utf8");
-    const frame = Buffer.alloc(4 + json.length);
-    frame.writeUInt32LE(json.length, 0);
-    json.copy(frame, 4);
-    try {
-      stdin.write(frame);
-    } catch {
-      /* stdin closed between the check and the write — harmless */
-    }
-  }
-
-  request(method, params, timeoutMs = 15_000) {
-    const id = this.nextId++;
-    this.sendRaw({ jsonrpc: "2.0", id, method, ...(params !== undefined ? { params } : {}) });
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`host request timed out: ${method}`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (v) => {
-          clearTimeout(timer);
-          resolve(v);
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      });
-    });
-  }
-
-  on(method, handler) {
-    this.handlers.set(method, handler);
-  }
-
-  /** Collect session/update notifications for a session. */
-  sessionUpdates(sessionId) {
-    return this.notifications.filter(
-      (m) => m.method === "session/update" && m.params?.sessionId === sessionId,
-    );
-  }
-}
+import { HostClient } from "./host-client.mjs";
 
 // ---------------------------------------------------------------------------
 // Fake Firefox: in-memory tabs + the REAL add-on McpServer class
@@ -417,6 +275,12 @@ function spawnHost(extraEnv = {}) {
       ...process.env,
       PI_BROWSER_BACKEND: "mock",
       PI_BROWSER_LOG_LEVEL: "silent",
+      // Isolated broker dir per host: e2e hosts must not attach to the
+      // developer's real broker (or to each other) unless a test opts in.
+      PI_BROWSER_BROKER_DIR: path.join(
+        tmpRoot,
+        `broker-${Math.random().toString(36).slice(2)}`,
+      ),
       ...extraEnv,
     },
   });
@@ -1320,6 +1184,13 @@ test("thunderbird mail client: hello accepted, mail tools registered, mail tool 
   try {
     // Client-side mail dispatcher, as the add-on's onToolCall installs one.
     host.on(X_PI_BROWSER.tool, (params) => mail.dispatch(params));
+    // Mail tools are approval-gated: the fake user approves, and each prompt
+    // is recorded so the test can assert the permission flow fired.
+    const permLog = [];
+    host.on("session/request_permission", (params) => {
+      permLog.push(params);
+      return { outcome: { outcome: "selected", optionId: "allow_always" } };
+    });
 
     const res = await host.request(AGENT_METHODS.initialize, {
       protocolVersion: 1,
@@ -1361,6 +1232,13 @@ test("thunderbird mail client: hello accepted, mail tools registered, mail tool 
     const out = JSON.stringify(completed.params.update?.rawOutput ?? "");
     assert.ok(out.includes("T2 works"), "mail tool returned the fake mail context");
     assert.ok(mail.calls.includes("mail_get_context"), "client-side mail dispatcher was invoked");
+    // The approval gate fired for the mail tool before it executed.
+    assert.equal(permLog.length, 1, "one permission prompt for the mail tool");
+    assert.equal(
+      permLog[0]?._meta?.piBrowser?.tool,
+      "mail_get_context",
+      "prompt named the mail tool",
+    );
 
     assert.ok(host.alive);
   } finally {
@@ -1420,6 +1298,12 @@ test("thunderbird T4/T6 client: mailModify + contacts tools registered and round
   const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
   try {
     host.on(X_PI_BROWSER.tool, (params) => t46.dispatch(params));
+    // Approval-gated tools: the fake user approves; record each prompt.
+    const permLog = [];
+    host.on("session/request_permission", (params) => {
+      permLog.push(params);
+      return { outcome: { outcome: "selected", optionId: "allow_always" } };
+    });
 
     const res = await host.request(AGENT_METHODS.initialize, {
       protocolVersion: 1,
@@ -1457,6 +1341,10 @@ test("thunderbird T4/T6 client: mailModify + contacts tools registered and round
     assert.ok(t46.calls.includes("mail_archive"), "mail_archive routed to the client dispatcher");
     assert.ok(outs.includes("Sarah Doe"), "contacts_search returned the fake contact");
     assert.ok(outs.includes("archived"), "mail_archive returned a result");
+    // Both tools were approval-gated before execution.
+    const promptedTools = permLog.map((p) => p?._meta?.piBrowser?.tool);
+    assert.ok(promptedTools.includes("contacts_search"), "contacts_search prompted for approval");
+    assert.ok(promptedTools.includes("mail_archive"), "mail_archive prompted for approval");
 
     assert.ok(host.alive);
   } finally {

@@ -34,6 +34,10 @@
       <div id="main">
         <div id="active-pane" class="hidden">
           <div id="meta-row"></div>
+          <!-- Cross-app heads-up: a tool in this session is waiting for the
+               user's approval in the OTHER app (shown when the host reports a
+               remote prompt; we cannot answer it here). -->
+          <div id="remote-prompt-banner" class="hidden" role="alert"></div>
           <div id="conversation"></div>
         </div>
 
@@ -49,6 +53,19 @@
           <button id="send">Send</button>
           <button id="stop" class="secondary hidden">Stop</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Tool-approval prompt: shown when the agent calls an approval-gated
+         mail tool; blocks until the user answers (Allow once / Allow for this
+         session / Always allow / Deny) or it times out. -->
+    <div id="perm-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="perm-title">
+      <div id="perm-card">
+        <div id="perm-badge">approval</div>
+        <h3 id="perm-title">Allow Pi to use this mail tool?</h3>
+        <p id="perm-desc" class="muted"></p>
+        <p id="perm-tool" class="perm-tool"></p>
+        <div id="perm-options" class="row perm-options"></div>
       </div>
     </div>
 

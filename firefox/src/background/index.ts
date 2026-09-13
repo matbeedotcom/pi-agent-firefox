@@ -271,6 +271,16 @@ const client = new AcpClient(
   onMcpMessage: (params) => mcpServer.handleMessage(params),
   onMcpDisconnect: (params) => mcpServer.handleDisconnect(params),
   onRequestPermission: (params) => requestPermissionFromUser(params),
+  // Cross-app heads-up: a tool's approval prompt is showing in ANOTHER app
+  // (e.g. Thunderbird). The sidebar draws the user's attention there. This
+  // client does NOT answer the prompt — the executing client owns it.
+  onPermissionPrompted: (params) => {
+    browser.runtime
+      .sendMessage({ type: "pi/permission_prompted", params })
+      .catch(() => {
+        /* sidebar not open */
+      });
+  },
   onStatus(status: HostStatus) {
     hostStatus = status;
     pushState();

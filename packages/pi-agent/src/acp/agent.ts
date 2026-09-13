@@ -55,6 +55,7 @@ import { buildConfigOptions, CONFIG_ID_MODEL, CONFIG_ID_THINKING } from "./confi
 import type { BrowserMode, CapabilityToolProvider } from "../browser/provider.js";
 import type { ImageAttachment } from "./backend.js";
 import { touchClientHeartbeat } from "../client-heartbeat.js";
+import type { CapabilityRegistry } from "../capability-registry.js";
 
 export interface AcpAgentOptions {
   backend: PiBackend;
@@ -62,6 +63,14 @@ export interface AcpAgentOptions {
   transport: AcpTransport;
   log: Logger;
   agentInfo: { name: string; version: string };
+  /** Stable id of this client connection (broker provider registry, plan §28). */
+  clientId?: string;
+  /**
+   * Broker provider registry. When present, this client registers its hello
+   * capabilities on `initialize` and its sessions see the union of all
+   * connected clients' tools (cross-app routing, plan §29).
+   */
+  registry?: CapabilityRegistry;
 }
 
 interface SessionState {
@@ -230,9 +239,19 @@ export class AcpAgent {
         `application=${this.clientApplication} capabilities=[${this.clientCapabilities.join(",")}] ` +
         `proto=${req.protocolVersion}`,
     );
+    // Register in the broker provider registry (plan §28): this client's
+    // capabilities become routable to/from every session.
+    if (this.opts.registry) {
+      this.opts.registry.register({
+        clientId: this.opts.clientId ?? "stdio",
+        application: this.clientApplication,
+        capabilities: this.clientCapabilities,
+        transport: this.opts.transport,
+      });
+    }
     // Record add-on presence (no-op for non-add-on clients like test harnesses).
     this.clientIdentityName = req.clientInfo?.name;
-    touchClientHeartbeat(req.clientInfo?.name, req.clientInfo?.version);
+    touchClientHeartbeat(req.clientInfo?.name, req.clientInfo?.version, this.clientApplication);
     const piAgentMeta: PiAgentMeta = {
       ...PI_AGENT_META,
       application: this.clientApplication,
@@ -370,7 +389,17 @@ export class AcpAgent {
     // Register the tool surface the client advertised in its hello
     // (plan §19): "browser" → browser tools, "mail"/"attachments" → the
     // read-only mail tools. Legacy clients (no hello) default to browser.
-    const tools = this.opts.provider.createTools(idRef, browserMode, mcpServerId, this.clientCapabilities);
+    // In broker mode (registry present) the surface is instead the union of
+    // ALL connected clients' capabilities (plan §29) and each call is
+    // routed to the client that provides the tool.
+    const tools = this.opts.provider.createTools(
+      idRef,
+      browserMode,
+      mcpServerId,
+      this.clientCapabilities,
+      this.opts.registry ? (this.opts.clientId ?? "stdio") : undefined,
+      this.clientApplication,
+    );
     const session = await open(tools);
     idRef.id = session.sessionId;
 

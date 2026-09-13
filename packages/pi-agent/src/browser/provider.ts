@@ -31,9 +31,12 @@ import {
   X_PI_BROWSER,
   buildPermissionRequest,
   permissionAllowed,
+  toolRequiresApproval,
   REQUEST_PERMISSION_METHOD,
   type AcpTransportLike,
+  type AgentApplication,
   type BrowserNotifyParams,
+  type PermissionPromptedParams,
   type RequestPermissionResponse,
 } from "@pi-browser/protocol";
 import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS, type BrowserToolSchema } from "./schemas.js";
@@ -42,6 +45,7 @@ import { COMPOSE_TOOL_SCHEMAS, type ComposeToolSchema } from "../compose/schemas
 import { MAIL_MUTATION_TOOL_SCHEMAS, type MailMutationToolSchema } from "../mutation/schemas.js";
 import { CONTACTS_TOOL_SCHEMAS, type ContactsToolSchema } from "../contacts/schemas.js";
 import { McpAcpClient } from "./mcp-acp-client.js";
+import type { CapabilityRegistry } from "../capability-registry.js";
 
 export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
 import { TransportClosedError, TransportTimeoutError } from "../native-host/transport.js";
@@ -221,14 +225,6 @@ interface SessionBrowserState {
   mcp?: NativeMcpOverAcpTransport;
 }
 
-/**
- * Tools that require explicit user approval before running. Sensitive tools
- * (pixel capture) need a live user gesture: the host sends ACP
- * `session/request_permission` to the client, the user approves in the
- * browser UI, and only then does the tool execute. This is what makes the
- * `activeTab` host access that capture needs actually available.
- */
-const SENSITIVE_TOOLS = new Set<string>(["browser_screenshot"]);
 /** How long to wait for the user to answer a permission prompt. */
 const PERMISSION_TIMEOUT_MS = 120_000;
 
@@ -237,16 +233,40 @@ const PERMISSION_TIMEOUT_MS = 120_000;
  * through the per-session tool transport. The tool surface is selected by
  * the capabilities the client advertised in its hello (plan §19): "browser"
  * → browser tools, "mail"/"attachments" → read-only mail tools.
+ *
+ * With a `CapabilityRegistry` (broker mode, plan §26–29) the tool surface is
+ * the UNION of all connected clients' capabilities, and each tool call is
+ * routed to the connected client that provides it — the session owner when
+ * it does, otherwise a peer application (cross-app routing).
  */
 export class CapabilityToolProvider {
   private readonly sessions = new Map<string, SessionBrowserState>();
   /** Tools the user has approved with "Always allow" (per host lifetime). */
   private readonly alwaysAllowed = new Set<string>();
+  /**
+   * Tools the user has approved with "Allow for this session", keyed by ACP
+   * session id. Cleared when the session is disposed.
+   */
+  private readonly sessionAllowed = new Map<string, Set<string>>();
 
   constructor(
-    private readonly transport: AcpTransportLike,
+    /**
+     * Fallback transport (single-client / legacy mode). In registry (broker)
+     * mode this may be undefined: every call is routed through the registry.
+     */
+    private readonly transport: AcpTransportLike | undefined,
     private readonly log: Logger,
+    private readonly registry: CapabilityRegistry | undefined = undefined,
   ) {}
+
+  /** The ACP transport a tool call / permission prompt goes to (legacy mode). */
+  private legacyTransport(): AcpTransportLike {
+    if (this.transport) return this.transport;
+    throw new PiBrowserProtocolError(
+      PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+      "no connected client for tool call (registry mode requires a connected owner)",
+    );
+  }
 
   /** Choose the transport for a session from the MCP servers the client declared. */
   selectMode(mcpServers?: unknown[]): BrowserMode {
@@ -276,8 +296,15 @@ export class CapabilityToolProvider {
     mode: BrowserMode,
     mcpServerId?: string,
     capabilities: readonly string[] = ["browser"],
+    ownerClientId?: string,
+    ownerApplication: AgentApplication = "firefox",
   ): ToolSpec[] {
-    const caps = capabilities ?? [];
+    // Broker mode: the session sees every connected provider (plan §29),
+    // not only the owner's tools.
+    const caps =
+      this.registry && ownerClientId !== undefined
+        ? this.registry.allCapabilities()
+        : (capabilities ?? []);
     const hasBrowser = caps.includes("browser");
     const hasMail = caps.includes("mail") || caps.includes("attachments");
     const hasCompose = caps.includes("compose");
@@ -316,17 +343,51 @@ export class CapabilityToolProvider {
         if (!sessionId) {
           throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser tool invoked before session id assigned");
         }
-        // Sensitive tools require explicit user approval first. The user's
-        // approval is a live gesture that makes the capture's host access
-        // (activeTab) available at execution time.
-        if (SENSITIVE_TOOLS.has(entry.name)) {
-          await this.requestPermission(sessionId, toolCallId, entry.name);
+        // Route to the connected client that provides this tool (owner
+        // first; cross-app peer otherwise, plan §29). In legacy (no
+        // registry) mode there is a single client — it is always the target.
+        const target = this.registry
+          ? this.registry.resolveTarget(ownerClientId, entry.name)
+          : undefined;
+        const targetTransport = target ? target.transport : this.legacyTransport();
+        const isOwnerPath = !target || target.clientId === ownerClientId;
+        // Tools the policy marks as approval-gated (browser_screenshot on
+        // Firefox; every mail-surface tool on Thunderbird) require explicit
+        // user approval before they run. The policy is keyed on the
+        // application of the client that EXECUTES the tool — the routed
+        // target in broker mode, the owner otherwise.
+        const executingApp = target ? target.application : ownerApplication;
+        if (toolRequiresApproval(executingApp, entry.name)) {
+          // Cross-app: the prompt shows in ANOTHER app than the one the user
+          // is watching. Tell the session owner so its UI can point the user
+          // at the mail/browser client (display-only; the executing client
+          // owns the actual session/request_permission round-trip). In broker
+          // mode the registry is authoritative for the owner's application
+          // (the createTools parameter is only the legacy-mode default).
+          if (this.willPrompt(sessionId, entry.name)) {
+            const ownerApp =
+              this.registry && ownerClientId !== undefined
+                ? this.registry.get(ownerClientId)?.application ?? ownerApplication
+                : ownerApplication;
+            this.announceRemotePrompt({
+              ownerClientId,
+              ownerApplication: ownerApp,
+              executingApp,
+              sessionId,
+              toolCallId,
+              toolName: entry.name,
+            });
+          }
+          await this.requestPermission(sessionId, toolCallId, entry.name, targetTransport);
         }
-        const state = this.ensureState(sessionId, mode, mcpServerId);
-        const transport =
-          state.mode === "mcp-acp"
-            ? (state.mcp as NativeMcpOverAcpTransport)
-            : this.legacy();
+        const state = this.ensureState(sessionId, mode, mcpServerId, isOwnerPath ? targetTransport : undefined);
+        // The session's own MCP-over-ACP connection is used only for the
+        // owner's own tools; cross-app tools always go over the target
+        // client's legacy x-pi-browser/tool callback.
+        const useOwnerMcp = isOwnerPath && state.mode === "mcp-acp" && state.mcp !== undefined;
+        const transport = useOwnerMcp
+          ? (state.mcp as NativeMcpOverAcpTransport)
+          : new LegacyBrowserCallbackTransport(targetTransport);
         const result = await transport.call(sessionId, entry.name, args as Record<string, unknown>);
         if (result.isError) {
           const text = result.content
@@ -348,16 +409,64 @@ export class CapabilityToolProvider {
    * the rest of the host lifetime. A denial/timeout surfaces a structured
    * BROWSER_PERMISSION_DENIED error so the agent can react.
    */
-  private async requestPermission(sessionId: string, toolCallId: string, toolName: string): Promise<void> {
-    if (this.alwaysAllowed.has(toolName)) {
-      this.log.debug(`${toolName}: already always-allowed; skipping permission prompt`);
+  /** True when a permission prompt WILL be sent for this tool call. */
+  private willPrompt(sessionId: string, toolName: string): boolean {
+    return !this.alwaysAllowed.has(toolName) && !this.sessionAllowed.get(sessionId)?.has(toolName);
+  }
+
+  /**
+   * Tell the session-owner client that the approval prompt is being shown in
+   * a different app (cross-app routing, plan §29). Fire-and-forget: if the
+   * owner's UI is closed or the app is a version without the banner, the
+   * prompt still works — the executing client's modal is authoritative.
+   */
+  private announceRemotePrompt(ctx: {
+    ownerClientId: string | undefined;
+    ownerApplication: AgentApplication;
+    executingApp: AgentApplication;
+    sessionId: string;
+    toolCallId: string;
+    toolName: string;
+  }): void {
+    if (
+      !this.registry ||
+      ctx.ownerClientId === undefined ||
+      ctx.ownerApplication === ctx.executingApp
+    )
+      return;
+    const owner = this.registry.get(ctx.ownerClientId);
+    if (!owner) return;
+    const params: PermissionPromptedParams = {
+      sessionId: ctx.sessionId,
+      toolCallId: ctx.toolCallId,
+      tool: ctx.toolName,
+      application: ctx.executingApp,
+    };
+    this.log.info(`${ctx.toolName}: approval prompt shows in ${ctx.executingApp}; notifying session owner ${owner.clientId} (${owner.application})`);
+    owner.transport
+      .request(X_PI_BROWSER.permission_prompted, params, 5_000)
+      .catch((err) => {
+        this.log.debug(
+          `permission_prompted → owner ${owner.clientId} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  }
+
+  private async requestPermission(
+    sessionId: string,
+    toolCallId: string,
+    toolName: string,
+    target: AcpTransportLike,
+  ): Promise<void> {
+    if (!this.willPrompt(sessionId, toolName)) {
+      this.log.debug(`${toolName}: already allowed (session or host scope); skipping permission prompt`);
       return;
     }
     const request = buildPermissionRequest({ sessionId, toolCallId, toolName });
     this.log.info(`${toolName}: requesting user permission (toolCall=${toolCallId})`);
     let response: RequestPermissionResponse;
     try {
-      response = await this.transport.request<RequestPermissionResponse>(
+      response = await target.request<RequestPermissionResponse>(
         REQUEST_PERMISSION_METHOD,
         request,
         PERMISSION_TIMEOUT_MS,
@@ -371,11 +480,18 @@ export class CapabilityToolProvider {
       );
     }
     if (permissionAllowed(response)) {
-      const allowedAlways =
-        response.outcome.outcome === "selected" && response.outcome.optionId === "allow_always";
-      if (allowedAlways) {
+      const optionId = response.outcome.outcome === "selected" ? response.outcome.optionId : "";
+      if (optionId === "allow_always") {
         this.alwaysAllowed.add(toolName);
         this.log.info(`${toolName}: user chose Always allow`);
+      } else if (optionId === "allow_session") {
+        let set = this.sessionAllowed.get(sessionId);
+        if (!set) {
+          set = new Set();
+          this.sessionAllowed.set(sessionId, set);
+        }
+        set.add(toolName);
+        this.log.info(`${toolName}: user chose Allow for this session (${sessionId})`);
       } else {
         this.log.info(`${toolName}: user chose Allow once`);
       }
@@ -390,13 +506,20 @@ export class CapabilityToolProvider {
   }
 
   /** Ensure per-session transport state exists (called at tool execution). */
-  ensureState(sessionId: string, mode: BrowserMode, mcpServerId?: string): SessionBrowserState {
+  ensureState(
+    sessionId: string,
+    mode: BrowserMode,
+    mcpServerId?: string,
+    ownerTransport?: AcpTransportLike,
+  ): SessionBrowserState {
     let state = this.sessions.get(sessionId);
     if (!state) {
-      if (mode === "mcp-acp" && mcpServerId) {
+      if (mode === "mcp-acp" && mcpServerId && ownerTransport) {
+        // Only the session owner's MCP-over-ACP connection is created (the
+        // owner passes its transport); peer (cross-app) calls use legacy.
         state = {
           mode,
-          mcp: new NativeMcpOverAcpTransport(this.transport, mcpServerId, this.log, sessionId),
+          mcp: new NativeMcpOverAcpTransport(ownerTransport, mcpServerId, this.log, sessionId),
         };
       } else {
         state = { mode };
@@ -405,10 +528,6 @@ export class CapabilityToolProvider {
       this.log.info(`browser state for session ${sessionId}: mode=${state.mode}`);
     }
     return state;
-  }
-
-  private legacy(): LegacyBrowserCallbackTransport {
-    return new LegacyBrowserCallbackTransport(this.transport);
   }
 
 
@@ -430,6 +549,7 @@ export class CapabilityToolProvider {
 
   /** Release per-session state (session/close or host shutdown). */
   async disposeSession(sessionId: string): Promise<void> {
+    this.sessionAllowed.delete(sessionId);
     const state = this.sessions.get(sessionId);
     if (!state) return;
     this.sessions.delete(sessionId);

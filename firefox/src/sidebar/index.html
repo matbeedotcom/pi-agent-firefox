@@ -31,6 +31,10 @@
         <div id="meta-row"></div>
         <div id="config-row" class="hidden"></div>
         <div id="binding-row"></div>
+        <!-- Cross-app heads-up: a tool in this session is waiting for the
+             user's approval in the OTHER app (shown when the host reports a
+             remote prompt; we cannot answer it here). -->
+        <div id="remote-prompt-banner" class="hidden" role="alert"></div>
         <div id="conversation"></div>
         <div id="composer">
           <textarea id="prompt" rows="3" placeholder="Ask Pi… (Enter to send, Shift+Enter for newline)"></textarea>

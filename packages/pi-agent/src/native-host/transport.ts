@@ -207,7 +207,7 @@ export function createJsonRpcDispatcher(write: (msg: unknown) => void, opts: Dis
   }
 
   function emitEof(): void {
-    if (eofEmitted || closed) return;
+    if (eofEmitted) return;
     eofEmitted = true;
     try {
       transport.onEof?.();
@@ -220,13 +220,17 @@ export function createJsonRpcDispatcher(write: (msg: unknown) => void, opts: Dis
     transport,
     deliverMessage,
     dispose(): void {
+      // First dispose signals the peer went away (input EOF/error) — emit
+      // onEof exactly once, then. A later local close() (shutdown) must not
+      // emit a second EOF.
+      const firstDispose = !closed;
       closed = true;
       for (const p of pending.values()) {
         clearTimeout(p.timer);
         p.reject(new TransportClosedError());
       }
       pending.clear();
-      emitEof();
+      if (firstDispose) emitEof();
     },
   };
 }

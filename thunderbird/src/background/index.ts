@@ -27,6 +27,8 @@ import {
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
   X_PI_BROWSER,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
   type SessionInfo,
   type SessionNotification,
   type SessionUpdate,
@@ -50,6 +52,67 @@ let bootstrapInFlight = false;
 
 /** The Pi Space's integer id (assigned by spaces.create at startup). */
 let spaceId: number | undefined;
+
+// ---------------------------------------------------------------------------
+// Permission prompts (sensitive tools require explicit user approval)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pending permission requests, keyed by the tool call id. When the host asks
+ * for permission (session/request_permission) before running an approval-
+ * gated mail tool, we push the prompt to the Pi Space AND every open Pi pane
+ * and block here until the user answers (or the timer auto-cancels). The
+ * user's click is the live approval that authorizes the LLM's access to the
+ * given mail API / data.
+ */
+interface PendingPermission {
+  resolve: (optionId: string | "cancelled") => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+const pendingPermissions = new Map<string, PendingPermission>();
+
+/** Match the host's PERMISSION_TIMEOUT_MS (120s) with a small buffer. */
+const PERMISSION_PROMPT_TIMEOUT_MS = 125_000;
+
+function pushPermissionRequest(request: RequestPermissionRequest): void {
+  broadcastUi({ type: "pi/permission_request", request });
+}
+
+/** Resolve a pending permission prompt (from the space/pane or a timeout). */
+function resolvePermission(permId: string, optionId: string | "cancelled"): void {
+  const pending = pendingPermissions.get(permId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingPermissions.delete(permId);
+  pending.resolve(optionId);
+}
+
+/**
+ * Ask the user to approve/deny a tool call. Blocks until the Space or a pane
+ * answers or the prompt times out (auto-cancel → the host surfaces a denial).
+ */
+function requestPermissionFromUser(
+  request: RequestPermissionRequest,
+): Promise<RequestPermissionResponse> {
+  const permId = request.toolCall.toolCallId;
+  const knownOptions = new Set(request.options.map((o) => o.optionId));
+  const timer = setTimeout(() => {
+    // Timed out: treat as cancelled so the host surfaces a denial.
+    resolvePermission(permId, "cancelled");
+  }, PERMISSION_PROMPT_TIMEOUT_MS);
+  const answer = new Promise<string | "cancelled">((resolve) => {
+    pendingPermissions.set(permId, { resolve, timer });
+  });
+  pushPermissionRequest(request);
+  return answer.then((optionId) => {
+    if (optionId === "cancelled" || !knownOptions.has(optionId)) {
+      return { outcome: { outcome: "cancelled" as const } };
+    }
+    return {
+      outcome: { outcome: "selected" as const, optionId },
+    };
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Pi Space (THUNDERBIRD-PLAN.md §5)
@@ -140,8 +203,14 @@ const client = new AcpClient(
     onMcpDisconnect: async () => {
       /* nothing to release */
     },
-    // No sensitive tools in T1; deny any permission request defensively.
-    onRequestPermission: async () => ({ outcome: { outcome: "cancelled" as const } }),
+    // Approval-gated mail tools: push the prompt to the Space and panes and
+    // block until the user answers (or the timeout auto-cancels).
+    onRequestPermission: (request) => requestPermissionFromUser(request),
+    // Cross-app heads-up: a tool's approval prompt is showing in ANOTHER app
+    // (e.g. the browser). Point the user there; we do not answer it.
+    onPermissionPrompted: (params) => {
+      broadcastUi({ type: "pi/permission_prompted", params });
+    },
     onStatus(status: HostStatus) {
       hostStatus = status;
       pushState();
@@ -201,23 +270,24 @@ function currentUiState(): UiState {
   };
 }
 
+/**
+ * Broadcast a UI message to the Pi Space (runtime.sendMessage) AND every
+ * open Pi pane (its runtime Port). The Space's sendMessage rejects when the
+ * page isn't open — expected, not an error.
+ */
+function broadcastUi(message: Record<string, unknown>): void {
+  browser.runtime.sendMessage(message).catch(() => {
+    /* space page not open */
+  });
+  postToPanes(message);
+}
+
 function pushState(): void {
-  const state = currentUiState();
-  browser.runtime
-    .sendMessage({ type: "pi/state", state })
-    .catch(() => {
-      /* space page not open */
-    });
-  postToPanes({ type: "pi/state", state });
+  broadcastUi({ type: "pi/state", state: currentUiState() });
 }
 
 function pushSessionUpdate(sessionId: string, update: SessionUpdate): void {
-  browser.runtime
-    .sendMessage({ type: "pi/session_update", sessionId, update })
-    .catch(() => {
-      /* space page not open */
-    });
-  postToPanes({ type: "pi/session_update", sessionId, update });
+  broadcastUi({ type: "pi/session_update", sessionId, update });
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +396,13 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
     action?: string;
     payload?: Record<string, unknown>;
   };
+  if (msg.type === "pi/permission_response") {
+    const permId = String((msg as { permId?: unknown }).permId ?? "");
+    const optionId = String((msg as { optionId?: unknown }).optionId ?? "cancelled");
+    resolvePermission(permId, optionId);
+    sendResponse({ ok: true });
+    return;
+  }
   if (msg.type === "pi/ensure_connected") {
     // Onboarding: the space's "Check again now" button. Idempotent no-op when
     // already connected; otherwise attempts the connect immediately.
@@ -460,6 +537,14 @@ browser.runtime.onConnect.addListener((port: browser.runtime.Port) => {
       payload?: Record<string, unknown>;
       requestId?: number;
     };
+
+    if (msg.type === "pi/permission_response") {
+      // The pane's permission modal answers the pending prompt.
+      const permId = String((msg as { permId?: unknown }).permId ?? "");
+      const optionId = String((msg as { optionId?: unknown }).optionId ?? "cancelled");
+      resolvePermission(permId, optionId);
+      return;
+    }
 
     if (msg.type === "pane.ready") {
       // The pane reports its own tabId (from its URL query); prefer that.

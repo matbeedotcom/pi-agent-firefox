@@ -282,22 +282,25 @@ test("status reports add-on auto-detection via heartbeat (missing / fresh / stal
     assert.ok(status.lines.some((l) => l.includes("about:debugging") && l.includes("firefox/dist/manifest.json")), `step 2 load temp add-on: ${JSON.stringify(status.lines)}`);
 
     // A fresh Firefox add-on heartbeat flips status to connected.
+    // (Legacy single-file heartbeat still works: it maps to its app.)
     const hbDir = path.join(home, ".pi-browser");
     await mkdir(hbDir, { recursive: true });
     await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now(), client: "pi-browser-firefox", version: "0.1.1", pid: 1 }));
     status = await runCommand("status", ctx);
-    assert.ok(status.lines.some((l) => l.startsWith("add-on: detected")), `fresh heartbeat -> detected: ${JSON.stringify(status.lines)}`);
+    assert.ok(status.lines.some((l) => l.startsWith("add-on firefox: detected")), `fresh heartbeat -> detected: ${JSON.stringify(status.lines)}`);
     assert.ok(status.lines.some((l) => l.includes("OK (host + add-on connected)")));
 
-    // A Thunderbird heartbeat is also recognized (same host, second app).
-    await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now(), client: "pi-thunderbird", version: "0.1.1", pid: 2 }));
-    status = await runCommand("status", ctx);
-    assert.ok(status.lines.some((l) => l.startsWith("add-on: detected") && l.includes("pi-thunderbird")), `thunderbird heartbeat -> detected: ${JSON.stringify(status.lines)}`);
+    // Per-app reporting: a Thunderbird heartbeat is tracked independently —
+    // with both apps' heartbeats fresh, status reports each app (mozilla target).
+    await writeFile(path.join(hbDir, "client.heartbeat.thunderbird"), JSON.stringify({ ts: Date.now(), client: "pi-thunderbird", version: "0.1.1", pid: 2 }));
+    status = await runCommand("status", { ...ctx, apps: "mozilla" });
+    assert.ok(status.lines.some((l) => l.startsWith("add-on thunderbird: detected") && l.includes("pi-thunderbird")), `thunderbird heartbeat -> detected: ${JSON.stringify(status.lines)}`);
+    assert.ok(status.lines.some((l) => l.startsWith("add-on firefox: detected")), `firefox still detected: ${JSON.stringify(status.lines)}`);
 
     // A stale heartbeat is reported as stale (add-on disconnected/reloading).
     await writeFile(path.join(hbDir, "client.heartbeat"), JSON.stringify({ ts: Date.now() - 10 * 60_000, client: "pi-browser-firefox", pid: 1 }));
     status = await runCommand("status", ctx);
-    assert.ok(status.lines.some((l) => l.includes("add-on: last heartbeat") && l.includes("stale")));
+    assert.ok(status.lines.some((l) => l.includes("add-on firefox: last heartbeat") && l.includes("stale")));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
