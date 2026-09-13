@@ -6,6 +6,7 @@
  * in-memory transcript and renders ACP session/update streams.
  */
 import { applicationDisplayName } from "@pi-browser/protocol";
+import { applyPiTheme, type PiTheme } from "@pi-browser/webext";
 import type {
   SessionConfigOption,
   SessionConfigSelect,
@@ -36,6 +37,8 @@ interface UiState {
   status: StatusInfo;
   activeSessionId?: string;
   sessions: SessionUi[];
+  /** Active browser theme (LWT colors); undefined when the API is unavailable. */
+  theme?: PiTheme;
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +551,7 @@ browser.runtime.onMessage.addListener((message: unknown) => {
   if (msg.type === "pi/state" && msg.state) {
     uiState = msg.state;
     activeSessionId = msg.state.activeSessionId;
+    applyPiTheme(msg.state.theme);
     renderAll();
   } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update as SessionNotification["update"]);
@@ -732,6 +736,7 @@ void (async () => {
     const state = (await action<UiState>("get_state")) as UiState;
     uiState = state;
     activeSessionId = state.activeSessionId;
+    applyPiTheme(state.theme);
     renderAll();
     // Rehydrate the transcript of the active session if needed.
     const active = state.sessions.find((s) => s.sessionId === activeSessionId);

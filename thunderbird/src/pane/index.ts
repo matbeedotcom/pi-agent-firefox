@@ -14,6 +14,7 @@
  * transcript and renders ACP session/update streams pushed over the Port.
  */
 import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
+import { applyPiTheme, type PiTheme } from "@pi-browser/webext";
 import type { SessionUpdate, ToolCallUpdate } from "@pi-browser/protocol";
 
 interface StatusInfo {
@@ -36,6 +37,8 @@ interface UiState {
   activeSessionId?: string;
   sessions: SessionUi[];
   lastSessionId?: string;
+  /** Active browser theme (LWT colors); undefined when the API is unavailable. */
+  theme?: PiTheme;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +145,7 @@ function onPortMessage(raw: unknown): void {
     reconnectAttempts = 0;
     uiState = msg.state;
     activeSessionId = msg.state.activeSessionId;
+    applyPiTheme(msg.state.theme);
     renderAll();
   } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update);

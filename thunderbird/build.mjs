@@ -8,7 +8,7 @@
  */
 import * as esbuild from "esbuild";
 import { cp, mkdir, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,16 +73,18 @@ await esbuild.build({
 await cp(path.join(root, "src", "pane", "index.html"), path.join(dist, "pane", "index.html"));
 await cp(path.join(root, "src", "pane", "pane.css"), path.join(dist, "pane", "pane.css"));
 
-// The piPane Experiment is raw JS/JSON (loaded by the WebExtension module
-// system, not bundled by esbuild): copy the schema + implementation verbatim.
-await mkdir(path.join(dist, "experiments", "piPane"), { recursive: true });
-await cp(
-  path.join(root, "src", "experiments", "piPane", "schema.json"),
-  path.join(dist, "experiments", "piPane", "schema.json"),
-);
-await cp(
-  path.join(root, "src", "experiments", "piPane", "implementation.js"),
-  path.join(dist, "experiments", "piPane", "implementation.js"),
-);
+// The Experiment APIs are raw JS/JSON (loaded by the WebExtension module
+// system, not bundled by esbuild): copy each schema + implementation verbatim.
+for (const name of readdirSync(path.join(root, "src", "experiments"))) {
+  await mkdir(path.join(dist, "experiments", name), { recursive: true });
+  await cp(
+    path.join(root, "src", "experiments", name, "schema.json"),
+    path.join(dist, "experiments", name, "schema.json"),
+  );
+  await cp(
+    path.join(root, "src", "experiments", name, "implementation.js"),
+    path.join(dist, "experiments", name, "implementation.js"),
+  );
+}
 
 console.log("thunderbird add-on built to", dist);

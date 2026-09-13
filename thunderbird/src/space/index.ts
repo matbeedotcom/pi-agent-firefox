@@ -7,6 +7,7 @@
  * out as a full Space tab (session rail + conversation pane).
  */
 import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
+import { applyPiTheme, type PiTheme } from "@pi-browser/webext";
 import type {
   SessionConfigOption,
   SessionConfigSelect,
@@ -37,6 +38,8 @@ interface UiState {
   sessions: SessionUi[];
   lastSessionId?: string;
   spaceId?: number;
+  /** Active browser theme (LWT colors); undefined when the API is unavailable. */
+  theme?: PiTheme;
 }
 
 // ---------------------------------------------------------------------------
@@ -505,6 +508,7 @@ browser.runtime.onMessage.addListener((message: unknown) => {
   if (msg.type === "pi/state" && msg.state) {
     uiState = msg.state;
     activeSessionId = msg.state.activeSessionId;
+    applyPiTheme(msg.state.theme);
     renderAll();
   } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update);
@@ -703,6 +707,7 @@ void (async () => {
     const state = (await action<UiState>("get_state")) as UiState;
     uiState = state;
     activeSessionId = state.activeSessionId;
+    applyPiTheme(state.theme);
     renderAll();
   } catch {
     // background not ready yet; state will arrive via push

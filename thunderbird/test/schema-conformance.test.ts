@@ -88,7 +88,10 @@ function loadMessengerNamespaces(omniJa: string): Map<string, NsSpec> {
     for (const n of doc) {
       const name = n.namespace as string | undefined;
       if (!name || name === "manifest") continue;
-      const functions = ((n.functions ?? []) as Array<Record<string, unknown>>).map((f) => ({
+      // Events (browser.<ns>.onX.addListener) resolve like functions for
+      // conformance purposes; include them so namespace+event usage is checked.
+    const functions = [...((n.functions ?? []) as Array<Record<string, unknown>>),
+      ...((n.events ?? []) as Array<Record<string, unknown>>)].map((f) => ({
         name: f.name as string,
         permissions: ((f.permissions ?? []) as string[]),
         max: f.max_manifest_version as number | undefined,

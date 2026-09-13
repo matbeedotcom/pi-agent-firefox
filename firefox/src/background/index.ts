@@ -20,7 +20,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@pi-browser/protocol";
-import { AcpClient, bindingRefId, notifyHost, SessionStore, type HostStatus } from "@pi-browser/webext";
+import { AcpClient, bindingRefId, fetchPiTheme, notifyHost, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
 import { ToolDispatcher } from "./tool-dispatcher.js";
 import { McpServer, type ControlHandler } from "./mcp-server.js";
 
@@ -74,6 +74,8 @@ let hostStatus: HostStatus = { state: "connecting" };
 let activeSessionId: string | undefined;
 let initialized = false;
 let bootstrapInFlight = false;
+/** Active browser theme snapshot (browser.theme); undefined when unavailable. */
+let theme: PiTheme | undefined;
 
 // ---------------------------------------------------------------------------
 // Permission prompts (PRODUCT.md §43)
@@ -148,6 +150,7 @@ interface UiState {
   activeSessionId?: string;
   sessions: ReturnType<SessionStore["snapshot"]>["sessions"];
   lastSessionId?: string;
+  theme?: PiTheme;
 }
 
 function pushState(): void {
@@ -156,6 +159,7 @@ function pushState(): void {
     ...(activeSessionId ? { activeSessionId } : {}),
     sessions: store.snapshot().sessions,
     ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
+    ...(theme ? { theme } : {}),
   };
   browser.runtime
     .sendMessage({ type: "pi/state", state })
@@ -400,6 +404,7 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
         ...(activeSessionId ? { activeSessionId } : {}),
         sessions: store.snapshot().sessions,
         ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
+        ...(theme ? { theme } : {}),
       };
     }
     case "new_session": {
@@ -513,6 +518,17 @@ function processCwdLikeFallback(): string {
 
 void (async () => {
   await store.hydrate();
+  // Read the active browser theme so the sidebar renders with it; re-read on
+  // theme change and re-push state (the sidebar applies theme on every state).
+  theme = await fetchPiTheme();
+  if (typeof browser.theme !== "undefined" && browser.theme?.onUpdated) {
+    browser.theme.onUpdated.addListener(() => {
+      void fetchPiTheme().then((t) => {
+        theme = t;
+        pushState();
+      });
+    });
+  }
   pushState();
   client.start();
 })();

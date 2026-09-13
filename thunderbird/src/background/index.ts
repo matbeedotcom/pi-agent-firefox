@@ -33,7 +33,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@pi-browser/protocol";
-import { AcpClient, SessionStore, type HostStatus } from "@pi-browser/webext";
+import { AcpClient, fetchPiTheme, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
 import { dispatchMailTool } from "./mail-dispatcher.js";
 import { dispatchComposeTool } from "./compose-dispatcher.js";
 import { dispatchMutationTool } from "./mutation-dispatcher.js";
@@ -52,6 +52,9 @@ let bootstrapInFlight = false;
 
 /** The Pi Space's integer id (assigned by spaces.create at startup). */
 let spaceId: number | undefined;
+
+/** Active browser theme snapshot (browser.theme); undefined when unavailable. */
+let theme: PiTheme | undefined;
 
 // ---------------------------------------------------------------------------
 // Permission prompts (sensitive tools require explicit user approval)
@@ -239,6 +242,7 @@ interface UiState {
   sessions: ReturnType<SessionStore["snapshot"]>["sessions"];
   lastSessionId?: string;
   spaceId?: number;
+  theme?: PiTheme;
 }
 
 /**
@@ -267,6 +271,7 @@ function currentUiState(): UiState {
     sessions: store.snapshot().sessions,
     ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
     ...(spaceId !== undefined ? { spaceId } : {}),
+    ...(theme ? { theme } : {}),
   };
 }
 
@@ -440,6 +445,7 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
         sessions: store.snapshot().sessions,
         ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
         ...(spaceId !== undefined ? { spaceId } : {}),
+        ...(theme ? { theme } : {}),
       };
     }
     case "new_session": {
@@ -648,6 +654,17 @@ browser.action.onClicked.addListener(async () => {
 void (async () => {
   await store.hydrate();
   await ensurePiSpace();
+  // Read the active browser theme so the Space and panes render with it;
+  // re-read on theme change and re-push state (UIs apply theme per state).
+  theme = await fetchPiTheme();
+  if (typeof browser.theme !== "undefined" && browser.theme?.onUpdated) {
+    browser.theme.onUpdated.addListener(() => {
+      void fetchPiTheme().then((t) => {
+        theme = t;
+        pushState();
+      });
+    });
+  }
   pushState();
   client.start();
 })();
