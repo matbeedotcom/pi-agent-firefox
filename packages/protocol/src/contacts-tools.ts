@@ -26,7 +26,7 @@ export const CONTACTS_TOOLS: readonly ContactsToolDef[] = [
   {
     name: "contacts_search",
     description:
-      "Search the address book by name, email, or organization (e.g. \"Sarah Acme\"). Returns normalized contacts (id, name, emails, organization).",
+      "Search the address book by name, email, or organization (e.g. \"Sarah Acme\"). Returns normalized contacts (id, name, emails, organization) plus the raw properties (all card fields).",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
@@ -40,7 +40,7 @@ export const CONTACTS_TOOLS: readonly ContactsToolDef[] = [
   {
     name: "contacts_list",
     description:
-      "List address-book contacts with optional filtering and pagination. Use for \"who's in my address book\" / browsing; contacts_search is a faster indexed lookup by term. Returns { contacts, count, total, cursor, nextCursor }.",
+      "List address-book contacts with optional filtering and pagination. Use for \"who's in my address book\" / browsing; contacts_search is a faster indexed lookup by term. Returns { contacts, count, total, cursor, nextCursor }; each contact includes its raw properties.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
@@ -54,7 +54,7 @@ export const CONTACTS_TOOLS: readonly ContactsToolDef[] = [
   {
     name: "contacts_get",
     description:
-      "Get a single contact by its id (from a contacts_search result). Returns the normalized contact (name, emails, organization, phone).",
+      "Get a single contact by its id (from a contacts_search result). Returns the contact (name, emails, organization) plus the raw properties (all card fields).",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {

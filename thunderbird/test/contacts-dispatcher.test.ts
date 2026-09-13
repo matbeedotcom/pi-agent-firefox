@@ -105,13 +105,27 @@ test("contacts_search: an email-only card (no name) still surfaces the email", a
   assert.deepEqual(c.emails, ["solo@example.com"]);
 });
 
-test("contacts_search with unrecognized keys falls back to raw properties", async () => {
+test("contacts_search always surfaces the raw properties (incl. unrecognized keys)", async () => {
   store.queryResults = [{ id: "card-3", properties: { customOnly: "value" } }];
   const r = (await dispatchContactsTool("contacts_search", { query: "x" })) as Record<string, unknown>;
   const c = (r.contacts as Record<string, unknown>[])[0];
   assert.equal(c.id, "card-3");
   assert.equal(c.name, undefined);
-  assert.ok(c.properties, "raw properties are surfaced as a fallback");
+  const props = c.properties as Record<string, unknown>;
+  assert.equal(props.customOnly, "value", "raw properties are always surfaced");
+});
+
+test("contacts_get returns the raw properties alongside the extracted fields", async () => {
+  store.byId["card-raw"] = {
+    id: "card-raw",
+    properties: { DisplayName: "Ann", PrimaryEmail: "ann@x.com", Company: "X", SomeCustom: "raw-data" },
+  };
+  const r = (await dispatchContactsTool("contacts_get", { contactId: "card-raw" })) as Record<string, unknown>;
+  assert.equal(r.name, "Ann");
+  assert.deepEqual(r.emails, ["ann@x.com"]);
+  const props = r.properties as Record<string, unknown>;
+  assert.equal(props.SomeCustom, "raw-data", "custom/raw keys are preserved verbatim");
+  assert.equal(props.DisplayName, "Ann");
 });
 
 test("contacts_search respects limit", async () => {

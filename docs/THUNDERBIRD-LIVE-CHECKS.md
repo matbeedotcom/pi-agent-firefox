@@ -1,7 +1,7 @@
 # Thunderbird live checks (goal `mtymz4tm`)
 
 Operational runbook for the 4 live verifications that close the goal. The
-implementation + unit/e2e tests are already green (148/148); these confirm the
+implementation + unit/e2e tests are already green (161/161); these confirm the
 real add-on against the installed Thunderbird (`/home/acidhax/thunderbird`,
 155.0.1 ESR).
 
@@ -62,7 +62,9 @@ Space tool cards for per-tool results. A tool that isn’t registered fails with
    or Collected Addresses).
 2. **List them (the key test):** “Who’s in my address book?” Pi calls `contacts_list` and returns
    every contact (optionally filtered / paginated via `cursor`). This works even for a card that is
-   just an email (no name) — it shows up with its `emails`.
+   just an email (no name) — it shows up with its `emails`. **Each contact includes its raw
+   `properties` verbatim (all card fields, incl. the `vCard`)**, not just the extracted name/emails/org,
+   so you can see exactly what’s in the card.
 3. **Isolate the search API:** “Find the contact <a known name or email>.” Pi calls
    `contacts_search` and returns the normalized contact (`name`, `emails`, `organization`).
 4. **The full flow:** **“Draft a message to Sarah from Acme.”** Pi calls

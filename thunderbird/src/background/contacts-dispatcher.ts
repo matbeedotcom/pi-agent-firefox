@@ -134,9 +134,9 @@ function normalizeContact(c: browser.addressBooks.contacts.Contact): Record<stri
   if (name) out.name = name;
   if (emails.length > 0) out.emails = emails;
   if (org) out.organization = org;
-  // Fallback: if none of the known keys resolved, surface the raw properties so
-  // the agent still has the data (field names are a live-verify detail).
-  if (!name && emails.length === 0 && !org) out.properties = p;
+  // Always expose the raw properties (incl. the vCard string) so the full card is
+  // visible, not just the extracted fields.
+  out.properties = p;
   return out;
 }
 
