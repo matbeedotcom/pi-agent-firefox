@@ -73,11 +73,11 @@ Space tool cards for per-tool results. A tool that isn’t registered fails with
 5. **If `contacts_list` is empty but you know a contact exists:** the include-* flags / MV3 path
    bug (already fixed) — a stale or un-reloaded add-on would still show it. Reload
    `/tmp/pi-thunderbird-t46.xpi`.
-6. **If a contact comes back with a blank name but the right email:** that’s correct (the card has
-   no name). If *both* name and email are missing and you see a raw `properties` blob, the vCard
-   key names differ from this build — paste the raw `properties` and the normalization keys can be
-   corrected to match (the normalizer already handles the installed build’s CamelCase abCard names:
-   `DisplayName`, `PrimaryEmail`, `Company`).
+6. **If a contact comes back empty (`properties: {}`, no name or email):** MV3 returns only a
+   `vCard` string (no `properties` map) — the normalizer now parses it (`FN`/`N`→name, `EMAIL`→
+   emails, `ORG`→org). If fields still look wrong, the result also includes the raw `vCard` string —
+   paste it here and the field mapping can be corrected to match this build. (A card that genuinely
+   has no name shows `emails` only, which is correct.)
 
 ## Recording results
 Paste a one-line result per check (pass/fail + any error signature). On pass for all

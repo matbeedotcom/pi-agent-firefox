@@ -271,8 +271,12 @@ declare namespace browser.addressBooks {
       /** The durable contact id (cardKey). */
       id: string;
       cardKey?: string;
-      /** vCard-style flat properties (firstName, lastName, displayName, email/emailAddresses, organization, tel, ...). */
+      /**
+       * MV2-only: flat vCard-style properties (DisplayName, PrimaryEmail, Company, ...).
+       * In MV3 this is NOT populated — use `vCard` instead.
+       */
       properties?: Record<string, unknown>;
+      /** MV3 source of truth: the full vCard string (no flat `properties` map in MV3). */
       vCard?: string;
     }
     interface QueryInfo {

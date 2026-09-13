@@ -128,6 +128,71 @@ test("contacts_get returns the raw properties alongside the extracted fields", a
   assert.equal(props.DisplayName, "Ann");
 });
 
+// MV3 returns a vCard string ONLY (no `properties` map) — the real live shape.
+test("contacts_get: parses the MV3 vCard string (no properties map)", async () => {
+  store.byId["card-v"] = {
+    id: "card-v",
+    vCard: [
+      "BEGIN:VCARD",
+      "VERSION:3.0",
+      "N:;Valerie;Presti;;",
+      "FN:Valerie Presti",
+      "ORG:Dorsay Co;HQ",
+      "TITLE:Director",
+      "EMAIL;TYPE=INTERNET:valerie@dorsayco.com",
+      "EMAIL;TYPE=HOME:vp@other.com",
+      "TEL;TYPE=CELL:+1-555-0100",
+      "UID:card-v",
+      "END:VCARD",
+    ].join("\r\n"),
+  };
+  const r = (await dispatchContactsTool("contacts_get", { contactId: "card-v" })) as Record<string, unknown>;
+  assert.equal(r.id, "card-v");
+  assert.equal(r.name, "Valerie Presti");
+  assert.deepEqual(r.emails, ["valerie@dorsayco.com", "vp@other.com"]);
+  assert.equal(r.organization, "Dorsay Co");
+  assert.ok(r.vCard, "the raw vCard string is surfaced");
+  const props = r.properties as Record<string, unknown>;
+  assert.equal(props.JobTitle, "Director");
+  assert.equal(props.PrimaryPhone, "+1-555-0100");
+});
+
+test("contacts_list: parses a vCard with only an email (the user's real card)", async () => {
+  store.books = [{ id: "b1" }];
+  store.byBook = {
+    b1: [
+      {
+        id: "c-email",
+        vCard: "BEGIN:VCARD\r\nVERSION:3.0\r\nEMAIL;TYPE=INTERNET:solo@example.com\r\nUID:c-email\r\nEND:VCARD",
+      },
+    ],
+  };
+  const r = (await dispatchContactsTool("contacts_list", {})) as Record<string, unknown>;
+  const c = (r.contacts as Record<string, unknown>[])[0];
+  assert.equal(c.id, "c-email");
+  assert.equal(c.name, undefined); // no name in the vCard
+  assert.deepEqual(c.emails, ["solo@example.com"]);
+  assert.ok(c.vCard, "raw vCard present");
+});
+
+test("contacts_get: vCard continuation lines + escaped comma", async () => {
+  store.byId["card-c"] = {
+    id: "card-c",
+    vCard: [
+      "BEGIN:VCARD",
+      "VERSION:3.0",
+      "N:Smith\\, Jane;",
+      "FN:Jane ",
+      " Presti",
+      "END:VCARD",
+    ].join("\r\n"),
+  };
+  const r = (await dispatchContactsTool("contacts_get", { contactId: "card-c" })) as Record<string, unknown>;
+  const props = r.properties as Record<string, unknown>;
+  assert.equal(props.LastName, "Smith, Jane"); // escaped comma \\, unescaped to ,
+  assert.equal(props.DisplayName, "Jane Presti"); // " Jane " kept + " Presti" (fold marker) joined
+})
+
 test("contacts_search respects limit", async () => {
   store.queryResults = Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, properties: { displayName: `N${i}` } }));
   const r = (await dispatchContactsTool("contacts_search", { query: "n", limit: 5 })) as Record<string, unknown>;

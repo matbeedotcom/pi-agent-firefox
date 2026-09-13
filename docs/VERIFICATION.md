@@ -243,19 +243,22 @@ into `messages.query({tags: {mode, tags: {key: true}}})`; an unknown tag name is
 **T6 contacts** (plan §41) — `contacts_search` (indexed lookup by term) / `contacts_get` / `contacts_list`
 (enumerate all books, optional filter + `cursor`/`limit` pagination — the answer to "who's in my
 address book", since `query()` can't list-all), read-only via `browser.addressBooks.contacts.*`,
-permission `addressBooks`. Three live bugs fixed here:
+permission `addressBooks`. Four live bugs fixed here:
 - ⚠️ The top-level `browser.contacts` namespace is **MV2-only** (`max_manifest_version: 2`) and is
   `undefined` in an MV3 add-on — the MV3 path is `browser.addressBooks.contacts.*` (`min_manifest_version: 3`,
   `$import: contacts`).
 - ⚠️ `query()` must be called with **all four** `include*` flags (`includeLocal`, `includeRemote`,
   `includeReadOnly`, `includeReadWrite` = true) — without them it **skips local read-write books**
   (the Personal address book), so a real contact is never found. `query` also returns `[]` for an empty search string.
-- ⚠️ The `properties` map is keyed by **CamelCase abCard names** — `DisplayName`, `FirstName`/`LastName`,
-  `PrimaryEmail`/`SecondEmail`, `Company` — NOT lowercase vCard names. The normalizer matches
-  case-insensitively over the real abCard names first, then legacy variants. Every result also
-  **surfaces the raw `properties` verbatim** (all card fields incl. the `vCard` string) alongside the
-  extracted `name`/`emails`/`organization`, so the full card is visible; an email-only card (no name)
-  still surfaces its `emails`.
+- ⚠️ **MV3 contacts have no flat `properties` map at all.** `ext-addressBook.js convert()` does
+  `if (manifest_version < 3) copy.properties = …; else copy.vCard = …` — so in MV3 `list/get/query`
+  return a **`vCard` string only** (`properties` is undefined → `{}`). The normalizer now parses that
+  vCard (RFC 5545: CRLF, continuation/fold lines, `\,`/`\;`/`\\n`/`\\` unescaping) into an abCard-style
+  map (`FN`/`N`→name, `EMAIL`→emails, `ORG`→org, plus `TEL`/`TITLE`/`NOTE`/`ADR`), falling back to a
+  populated MV2 `properties` map when present. **This was the last live bug:** the earlier "abCard
+  property names" theory was wrong — there simply is no `properties` in MV3, only the vCard.
+- Every result also **surfaces the raw `vCard` string + the flat map** so the full card is visible; an
+  email-only card (no name) still surfaces its `emails`.
 - `contacts_list` enumerates via `addressBooks.list()` + `contacts.list(bookId)`, dedupes by id,
   filters case-insensitively across name/email/org, and paginates by `cursor` (offset) + `limit`.
 
@@ -285,7 +288,7 @@ permission `addressBooks`. Three live bugs fixed here:
 
 ## Test suite map (§48)
 
-`npm test` (Node 22 required) → **161/161 green** as of 2026-09-12:
+`npm test` (Node 22 required) → **164/164 green** as of 2026-09-12:
 
 | Workspace | Tests | Covers |
 |-----------|-------|--------|
@@ -293,7 +296,7 @@ permission `addressBooks`. Three live bugs fixed here:
 | `@pi-browser/agent` | 62 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
 | `@pi-browser/webext` | — | shared `AcpClient` (injected identity + hello) + `SessionStore` (shared by both add-ons; exercised by the firefox tests + e2e) |
 | `@pi-browser/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) — now on the shared `@pi-browser/webext` |
-| `@pi-browser/thunderbird` | 56 | **mail tool dispatcher** (T2, 19 + 4 tag tests: search-by-tag name→key, `tagMode` all/any, unknown-tag error, `mail_list_tags`): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 9)**: mark read / additive+replace tags / create-unknown-tag / `keyForName` / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 13)**: MV3 `addressBooks.contacts` path, include-*-flags, **abCard-key normalization (DisplayName/PrimaryEmail/Company)**, email-only card, **raw properties always surfaced**, **contacts_list (enumerate/filter/paginate)**, **no-mutation guard**. **+ schema conformance (1)**: every `browser.*` call is present, MV3-available, and permitted (vs the installed `omni.ja`) |
+| `@pi-browser/thunderbird` | 59 | **mail tool dispatcher** (T2, 19 + 4 tag tests: search-by-tag name→key, `tagMode` all/any, unknown-tag error, `mail_list_tags`): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 9)**: mark read / additive+replace tags / create-unknown-tag / `keyForName` / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 16)**: MV3 `addressBooks.contacts` path, include-*-flags, **MV3 vCard parsing (no `properties` map — `FN`/`N`/`EMAIL`/`ORG`/`TEL`/`TITLE`/`NOTE`/`ADR` + RFC 5545 fold/unescape)**, email-only card, **raw vCard + flat map surfaced**, **contacts_list (enumerate/filter/paginate)**, **no-mutation guard**. **+ schema conformance (1)**: every `browser.*` call is present, MV3-available, and permitted (vs the installed `omni.ja`) |
 | `pi-browser-tests` (e2e) | 15 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat, **a fake-Thunderbird client for `capabilities: []`, one for the T2 mail set, and one for the full T4/T6 set (mailModify + contacts tools registered + round-trip over the legacy transport)** |
 
 ## Live real-backend smoke test
@@ -313,13 +316,13 @@ initialize → capabilities + `mcpCapabilities.acp` → `session/new` → `sessi
 | **T3** compose tools; “Draft a reply saying Thursday works.” opens populated compose; user sends; no send anywhere | ✅ | `compose-dispatcher.test.ts` (incl. no-send guard); 3-layer no-send (tool/code/permission); live-confirmed (T3 section) |
 | **Draft attachments:** `compose_add_attachment` attaches a file; read-side `mail_list/get_attachment` | ✅ impl+unit · live pending | `compose-dispatcher.test.ts` (base64→`File`, `addAttachment`); read-side unit tests (T2) |
 | **T4** mail organization: mark read / tags (set + **list + search/filter + read-back**) / archive / move (selected only); **no deletion** | ✅ impl+unit · live pending | `mutation-dispatcher.test.ts` (8, incl. no-delete guard) + `mail-dispatcher.test.ts` tag tests; `mailModify` cap + `messagesUpdate`/`messagesMove`/`messagesTags`/`messagesTagsList` |
-| **T6** contacts: `contacts_search`/`contacts_get`/`contacts_list` (read-only, `addressBooks`, MV3 `addressBooks.contacts`) | ✅ impl+unit · live pending | `contacts-dispatcher.test.ts` (13, incl. no-mutation guard); MV3 namespace; **include-* flags (searches the Personal book)**; **abCard-key normalization (DisplayName/PrimaryEmail/Company)** + email-only card; **raw properties always surfaced**; **contacts_list enumerate/filter/paginate**; schema-conformance guard |
+| **T6** contacts: `contacts_search`/`contacts_get`/`contacts_list` (read-only, `addressBooks`, MV3 `addressBooks.contacts`) | ✅ impl+unit · live pending | `contacts-dispatcher.test.ts` (16, incl. no-mutation guard); MV3 namespace; **include-* flags (searches the Personal book)**; **MV3 vCard parsing (no `properties` map)** + email-only card + fold/escape; **raw vCard surfaced**; **contacts_list enumerate/filter/paginate**; schema-conformance guard |
 | **T7** calendar — deferred (no stable WebExtension calendar API in 155) | ⏸ | plan §42: do not depend on an Experiment; revisit when a stable API exists |
 | Untrusted email = tool output only, never merged into the user prompt (§31–32) | ✅ | dispatcher returns normalized refs; body only via explicit `mail_get_message_body`; no prompt merging |
 | Durable id = `headerMessageId` (not numeric `messageId`) (§7) | ✅ | `MailMessageRef` dual-id; `mail-dispatcher.test.ts` durability rule |
 | Permissions: read (`nativeMessaging`,`accountsRead`,`messagesRead`,`compose`) + T4 (`messagesUpdate`,`messagesMove`,`messagesTags`,`messagesTagsList`) + T6 (`addressBooks`) — **no** `compose.send`/`messagesDelete`/`messagesImport`/`sensitiveDataUpload` | ✅ | `manifest.json` = exactly that set; built `background.js` has zero `sendMessage`/`saveMessage`/`messages.delete`/`deleteAttachments` |
-| **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 15 green in the 161/161 run |
-| `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **161/161** |
+| **Gate:** Firefox suite stays green after every change | ✅ | Firefox 14 + e2e 15 green in the 164/164 run |
+| `npm run typecheck` + `npm test` at root: 0 failures | ✅ | typecheck 0 failures; `npm test` **164/164** |
 
 > **Note on the `piPane` column:** the `browser.piPane` Experiment API (4th column) was built and
 > proven working in an earlier stage, but Experiment APIs are **out of scope** for this goal
