@@ -16,11 +16,13 @@ interface Store {
   lastQuery: Record<string, unknown>;
   queryResults: Array<Record<string, unknown>>;
   byId: Record<string, Record<string, unknown>>;
+  books: Array<{ id: string; name?: string }>;
+  byBook: Record<string, Array<Record<string, unknown>>>;
 }
 
 let store: Store;
 function freshStore(): Store {
-  return { lastQuery: {}, queryResults: [], byId: {} };
+  return { lastQuery: {}, queryResults: [], byId: {}, books: [], byBook: {} };
 }
 
 function installStub(): void {
@@ -28,6 +30,9 @@ function installStub(): void {
   g.browser = {
     // MV3 path: browser.addressBooks.contacts (top-level browser.contacts is MV2-only).
     addressBooks: {
+      async list() {
+        return store.books;
+      },
       contacts: {
         async query(queryInfo: Record<string, unknown>) {
           store.lastQuery = queryInfo;
@@ -37,6 +42,9 @@ function installStub(): void {
           const c = store.byId[id];
           if (!c) throw new Error(`Contact not found: ${id}`);
           return c;
+        },
+        async list(bookId: string) {
+          return store.byBook[bookId] ?? [];
         },
       },
     },
@@ -110,6 +118,63 @@ test("contacts_search respects limit", async () => {
   store.queryResults = Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, properties: { displayName: `N${i}` } }));
   const r = (await dispatchContactsTool("contacts_search", { query: "n", limit: 5 })) as Record<string, unknown>;
   assert.equal(r.count, 5);
+});
+
+test("contacts_search: normalizes the REAL MV3 abCard keys (DisplayName/PrimaryEmail/Company)", async () => {
+  // The installed build keys `properties` by CamelCase abCard names, not lowercase.
+  store.queryResults = [
+    { id: "c-real", properties: { DisplayName: "Valerie Presti", PrimaryEmail: "valerie@dorsayco.com", SecondEmail: "vp@other.com", Company: "Dorsay Co" } },
+  ];
+  const r = (await dispatchContactsTool("contacts_search", { query: "valerie" })) as Record<string, unknown>;
+  const c = (r.contacts as Record<string, unknown>[])[0];
+  assert.equal(c.name, "Valerie Presti");
+  assert.deepEqual(c.emails, ["valerie@dorsayco.com", "vp@other.com"]);
+  assert.equal(c.organization, "Dorsay Co");
+});
+
+test("contacts_list enumerates all books and dedupes by id", async () => {
+  store.books = [{ id: "b1" }, { id: "b2" }];
+  store.byBook = {
+    b1: [
+      { id: "c1", properties: { DisplayName: "A", PrimaryEmail: "a@x" } },
+      { id: "c2", properties: { PrimaryEmail: "b@x" } },
+    ],
+    b2: [
+      { id: "c2", properties: { PrimaryEmail: "b@x" } }, // duplicate of b1's c2
+      { id: "c3", properties: { PrimaryEmail: "c@x" } },
+    ],
+  };
+  const r = (await dispatchContactsTool("contacts_list", {})) as Record<string, unknown>;
+  assert.equal(r.total, 3);
+  assert.equal(r.count, 3);
+  assert.deepEqual((r.contacts as Record<string, unknown>[]).map((c) => c.id), ["c1", "c2", "c3"]);
+});
+
+test("contacts_list filters case-insensitively across name/email/org", async () => {
+  store.books = [{ id: "b1" }];
+  store.byBook = {
+    b1: [
+      { id: "c1", properties: { DisplayName: "Valerie", PrimaryEmail: "v@acme.com" } },
+      { id: "c2", properties: { PrimaryEmail: "other@x.com" } },
+    ],
+  };
+  const r = (await dispatchContactsTool("contacts_list", { filter: "ACME" })) as Record<string, unknown>;
+  assert.equal(r.total, 1);
+  assert.equal((r.contacts as Record<string, unknown>[])[0].id, "c1");
+});
+
+test("contacts_list paginates with cursor/limit and nextCursor", async () => {
+  store.books = [{ id: "b1" }];
+  store.byBook = { b1: [1, 2, 3, 4, 5].map((n) => ({ id: `c${n}`, properties: { PrimaryEmail: `${n}@x` } })) };
+  const p1 = (await dispatchContactsTool("contacts_list", { limit: 2, cursor: 0 })) as Record<string, unknown>;
+  assert.equal(p1.count, 2);
+  assert.equal(p1.total, 5);
+  assert.equal(p1.nextCursor, 2);
+  const p2 = (await dispatchContactsTool("contacts_list", { limit: 2, cursor: 2 })) as Record<string, unknown>;
+  assert.equal(p2.nextCursor, 4);
+  const p3 = (await dispatchContactsTool("contacts_list", { limit: 2, cursor: 4 })) as Record<string, unknown>;
+  assert.equal(p3.count, 1);
+  assert.equal(p3.nextCursor, null);
 });
 
 test("contacts_get returns one normalized contact (org key alias)", async () => {

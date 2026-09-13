@@ -15,6 +15,20 @@ const SCHEMAS: Record<string, TSchema> = {
     { query, limit: Type.Optional(limit) },
     { additionalProperties: false, required: ["query"] },
   ),
+  contacts_list: Type.Object(
+    {
+      filter: Type.Optional(
+        Type.String({ description: "Only contacts whose name, email, or organization contains this (case-insensitive)." }),
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: "Maximum contacts per page (default 10, max 50)." }),
+      ),
+      cursor: Type.Optional(
+        Type.Number({ description: "Offset into the full (filtered) list for pagination; pass the previous nextCursor." }),
+      ),
+    },
+    { additionalProperties: false },
+  ),
   contacts_get: Type.Object(
     { contactId },
     { additionalProperties: false, required: ["contactId"] },

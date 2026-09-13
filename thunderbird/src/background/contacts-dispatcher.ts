@@ -73,23 +73,64 @@ function emailValues(v: unknown): string[] {
   return [];
 }
 
+/**
+ * The MV3 `properties` map is keyed by abCard property names, which are
+ * CamelCase — e.g. `DisplayName`, `FirstName`/`LastName`, `PrimaryEmail`/
+ * `SecondEmail`, `Company`, `NickName`, `Notes` — NOT the lowercase vCard names.
+ * We match case-insensitively and try the real abCard names first, then the
+ * legacy/lowercase variants, so both shapes resolve.
+ */
+function ciMap(p: Record<string, unknown>): Map<string, unknown> {
+  const m = new Map<string, unknown>();
+  for (const [k, v] of Object.entries(p)) {
+    const lk = k.toLowerCase();
+    if (!m.has(lk)) m.set(lk, v);
+  }
+  return m;
+}
+
+function pick(m: Map<string, unknown>, ...keys: string[]): unknown {
+  for (const k of keys) {
+    const v = m.get(k.toLowerCase());
+    if (v !== undefined && v !== null && v !== "") return v;
+  }
+  return undefined;
+}
+
 function contactName(p: Record<string, unknown>): string | undefined {
-  const display = firstStr(p.displayName) ?? firstStr(p.fn);
+  const m = ciMap(p);
+  const display = firstStr(pick(m, "DisplayName", "fn", "displayName"));
   if (display) return display;
-  const first = firstStr(p.firstName) ?? firstStr(p.givenName);
-  const last = firstStr(p.lastName) ?? firstStr(p.familyName);
+  const first = firstStr(pick(m, "FirstName", "firstName", "givenName", "given"));
+  const last = firstStr(pick(m, "LastName", "lastName", "familyName", "family"));
   if (first || last) return `${first ?? ""} ${last ?? ""}`.trim();
-  return firstStr(p.name);
+  return firstStr(pick(m, "name"));
+}
+
+function contactEmails(p: Record<string, unknown>): string[] {
+  const m = ciMap(p);
+  const out = new Set<string>();
+  // Primary + secondary (the real abCard keys), then legacy list shapes.
+  for (const v of [pick(m, "PrimaryEmail", "email"), pick(m, "SecondEmail")]) {
+    emailValues(v).forEach((e) => out.add(e));
+  }
+  for (const v of [pick(m, "emailAddresses"), pick(m, "emails"), pick(m, "emailAddress")]) {
+    emailValues(v).forEach((e) => out.add(e));
+  }
+  return [...out];
+}
+
+function contactOrg(p: Record<string, unknown>): string | undefined {
+  const m = ciMap(p);
+  return firstStr(pick(m, "Company", "organization", "organizationName", "org", "company", "Department"));
 }
 
 function normalizeContact(c: browser.addressBooks.contacts.Contact): Record<string, unknown> {
   const p = (c.properties ?? {}) as Record<string, unknown>;
   const out: Record<string, unknown> = { id: c.cardKey ?? c.id };
   const name = contactName(p);
-  const emails = Array.from(
-    new Set([...emailValues(p.emailAddresses), ...emailValues(p.email), ...emailValues(p.emails)]),
-  );
-  const org = firstStr(p.organization) ?? firstStr(p.org) ?? firstStr(p.company) ?? firstStr(p.organizationName);
+  const emails = contactEmails(p);
+  const org = contactOrg(p);
   if (name) out.name = name;
   if (emails.length > 0) out.emails = emails;
   if (org) out.organization = org;
@@ -126,6 +167,55 @@ async function contactsGet(args: Record<string, unknown>): Promise<ContactsToolR
   return normalizeContact(c);
 }
 
+async function contactsList(args: Record<string, unknown>): Promise<ContactsToolResult> {
+  const filterRaw = typeof args.filter === "string" ? args.filter.trim().toLowerCase() : "";
+  const limit = clampInt(args, "limit", 1, MAX_CONTACT_LIMIT, DEFAULT_CONTACT_LIMIT);
+  const cursor =
+    typeof args.cursor === "number" && Number.isFinite(args.cursor) && args.cursor >= 0
+      ? Math.trunc(args.cursor)
+      : 0;
+
+  // Enumerate every address book, then every contact in it. (query() requires a
+  // non-empty search term, so listing-all goes through the book/card APIs.)
+  const books = await browser.addressBooks.list();
+  const all: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  for (const book of books) {
+    let cards: browser.addressBooks.contacts.Contact[] = [];
+    try {
+      cards = await browser.addressBooks.contacts.list(book.id);
+    } catch {
+      continue;
+    }
+    for (const c of cards) {
+      const norm = normalizeContact(c);
+      const id = String(norm.id);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      all.push(norm);
+    }
+  }
+
+  const filtered = filterRaw
+    ? all.filter((c) =>
+        `${c.name ?? ""} ${(c.emails as string[] ?? []).join(" ")} ${c.organization ?? ""}`
+          .toLowerCase()
+          .includes(filterRaw),
+      )
+    : all;
+
+  const total = filtered.length;
+  const page = filtered.slice(cursor, cursor + limit);
+  return {
+    count: page.length,
+    total,
+    cursor,
+    limit,
+    nextCursor: cursor + limit < total ? cursor + limit : null,
+    contacts: page,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -139,6 +229,8 @@ export async function dispatchContactsTool(
       return contactsSearch(args);
     case "contacts_get":
       return contactsGet(args);
+    case "contacts_list":
+      return contactsList(args);
     default:
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown contacts tool: ${tool}`);
   }

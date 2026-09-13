@@ -256,6 +256,16 @@ declare namespace browser.messages.tags {
  *  and is NOT registered in an MV3 add-on, so it is `undefined` at runtime. The MV3 path
  *  is `browser.addressBooks.contacts.*` (min_manifest_version: 3, $import: contacts). */
 declare namespace browser.addressBooks {
+  interface AddressBook {
+    /** The address book's id (pass to contacts.list). */
+    id: string;
+    name?: string;
+    readOnly?: boolean;
+    remote?: boolean;
+    [key: string]: unknown;
+  }
+  /** List all address books (id, name, readOnly, remote). */
+  function list(): Promise<AddressBook[]>;
   namespace contacts {
     interface Contact {
       /** The durable contact id (cardKey). */
@@ -274,6 +284,8 @@ declare namespace browser.addressBooks {
       includeReadWrite?: boolean;
       [key: string]: unknown;
     }
+    /** All contacts in one address book (by id). */
+    function list(parentId?: string): Promise<Contact[]>;
     /** Search contacts across the address books. */
     function query(queryInfo: QueryInfo): Promise<Contact[]>;
     /** Get one contact by its id (cardKey). */

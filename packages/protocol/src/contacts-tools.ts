@@ -38,6 +38,20 @@ export const CONTACTS_TOOLS: readonly ContactsToolDef[] = [
     readOnly: true,
   },
   {
+    name: "contacts_list",
+    description:
+      "List address-book contacts with optional filtering and pagination. Use for \"who's in my address book\" / browsing; contacts_search is a faster indexed lookup by term. Returns { contacts, count, total, cursor, nextCursor }.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        filter: { type: "string", description: "Only contacts whose name, email, or organization contains this (case-insensitive)." },
+        limit: { type: "number", description: "Maximum contacts per page (default 10, max 50)." },
+        cursor: { type: "number", description: "Offset into the full (filtered) list for pagination; pass the previous nextCursor." },
+      },
+    },
+    readOnly: true,
+  },
+  {
     name: "contacts_get",
     description:
       "Get a single contact by its id (from a contacts_search result). Returns the normalized contact (name, emails, organization, phone).",

@@ -60,20 +60,22 @@ Space tool cards for per-tool results. A tool that isn’t registered fails with
 ## Check 4 — T6 contacts
 1. Ensure the address book has a contact like “Sarah <name>, Acme” (Address Book → Personal
    or Collected Addresses).
-2. **Isolate the contacts API first:** “Who’s in my address book matching <a known name>?”. Pi
-   should call `contacts_search` and return normalized contacts (`name`, `emails`,
-   `organization`). This separates T6 from compose so a failure is unambiguous.
-3. **The full flow:** **“Draft a message to Sarah from Acme.”** Pi calls
+2. **List them (the key test):** “Who’s in my address book?” Pi calls `contacts_list` and returns
+   every contact (optionally filtered / paginated via `cursor`). This works even for a card that is
+   just an email (no name) — it shows up with its `emails`.
+3. **Isolate the search API:** “Find the contact <a known name or email>.” Pi calls
+   `contacts_search` and returns the normalized contact (`name`, `emails`, `organization`).
+4. **The full flow:** **“Draft a message to Sarah from Acme.”** Pi calls
    `contacts_search("Sarah Acme")` → normalized contact → `compose_prepare_new` with the
    recipient filled in; the compose window opens with Sarah addressed.
-4. **If it fails with `browser.contacts is undefined`:** that’s the MV2-namespace bug — the
-   add-on must use the MV3 path `browser.addressBooks.contacts.*` (already fixed; a stale xpi
-   or an un-reloaded temporary add-on would still show it). Reload `/tmp/pi-thunderbird-t46.xpi`.
-5. **If it fails / empty (contact comes back with the email but a blank name, or a raw blob):**
-   the variable is the vCard property key names. The dispatcher tries `displayName`/
-   `firstName+lastName`, `email`/`emailAddresses`, `organization`/`org`/`company`; if none match
-   it returns the raw `properties`. Paste the raw `properties` here and the normalization keys
-   can be corrected to match this build.
+5. **If `contacts_list` is empty but you know a contact exists:** the include-* flags / MV3 path
+   bug (already fixed) — a stale or un-reloaded add-on would still show it. Reload
+   `/tmp/pi-thunderbird-t46.xpi`.
+6. **If a contact comes back with a blank name but the right email:** that’s correct (the card has
+   no name). If *both* name and email are missing and you see a raw `properties` blob, the vCard
+   key names differ from this build — paste the raw `properties` and the normalization keys can be
+   corrected to match (the normalizer already handles the installed build’s CamelCase abCard names:
+   `DisplayName`, `PrimaryEmail`, `Company`).
 
 ## Recording results
 Paste a one-line result per check (pass/fail + any error signature). On pass for all

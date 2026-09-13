@@ -141,11 +141,12 @@ test("initialize: thunderbird mailModify + contacts capabilities register mutati
   });
   const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/mc", mcpServers: [] })) as { sessionId: string };
   const names = h.lastCreateTools.map((t) => (t as { name: string }).name);
-  // 11 mail + 6 compose + 4 mutation + 2 contacts = 23
-  assert.equal(names.length, 23);
+  // 11 mail + 6 compose + 4 mutation + 3 contacts = 24
+  assert.equal(names.length, 24);
   assert.ok(names.includes("mail_archive"), "mutation tool registered");
   assert.ok(names.includes("mail_set_tags"), "tag tool registered");
-  assert.ok(names.includes("contacts_search"), "contacts tool registered");
+  assert.ok(names.includes("contacts_search"), "contacts search tool registered");
+  assert.ok(names.includes("contacts_list"), "contacts list tool registered");
   assert.ok(!names.some((n) => n === "mail_delete" || n.endsWith("delete")), "no delete tool is exposed");
   await h.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
 });
