@@ -40,7 +40,7 @@ interface Part {
 
 interface Store {
   currentTab?: { tabId: number };
-  selectedFolders?: Array<{ id?: string; name?: string }>;
+  selectedFolders?: Array<{ id?: string; name?: string; isUnified?: boolean; isVirtual?: boolean; isTag?: boolean }>;
   selectedMessages?: MsgHeader[];
   displayedMessages?: MsgHeader[];
   headers: Record<number, MsgHeader>;
@@ -54,12 +54,14 @@ interface Store {
     identities: Array<Record<string, unknown>>;
     rootFolder?: { id?: string };
   }>;
-  folders: Array<{ id?: string; name?: string; path?: string; accountId?: string; isRoot?: boolean }>;
+  folders: Array<{ id?: string; name?: string; path?: string; accountId?: string; isRoot?: boolean; isUnified?: boolean; isVirtual?: boolean; isTag?: boolean }>;
+  lastList?: { folderId: string; options?: Record<string, unknown> };
   tags: Array<{ key: string; tag: string; color?: string }>;
   lastQuery?: Record<string, unknown>;
   search: MsgHeader[];
   searchByFolder?: Record<string, MsgHeader[]>;
-  searchCursor?: string | null;
+  searchCursor?: MsgHeader | MsgHeader[];
+  searchCursorId?: string | null;
 }
 
 function freshStore(): Store {
@@ -127,9 +129,31 @@ function installStub(): void {
         const pool = fid && store.searchByFolder?.[fid] ? store.searchByFolder[fid] : store.search;
         return { id: "list-1", messages: pool };
       },
+      // Emulates messages.list(): a server-side SORTED folder view.
+      async list(folderId: string, options?: Record<string, unknown>) {
+        store.lastList = { folderId, options };
+        const pool = (store.searchByFolder?.[folderId] ?? store.search).slice();
+        const st = typeof options?.sortType === "string" ? options.sortType : "date";
+        const dir = options?.sortOrder === "ascending" ? 1 : -1;
+        const val = (h: MsgHeader): string | number =>
+          st === "date"
+            ? (h.date ? Date.parse(String(h.date)) : Number.NaN)
+            : st === "author"
+              ? (h.author ?? "")
+              : (h.subject ?? "");
+        pool.sort((a, b) => {
+          const av = val(a);
+          const bv = val(b);
+          const c = typeof av === "string" ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+          return c === 0 ? 0 : c * dir;
+        });
+        return { id: "list-1", messages: pool as never[] };
+      },
       async continueList(listId: string) {
         assert.equal(listId, "list-1");
-        return { id: null, messages: store.searchCursor ? [store.searchCursor as never] : [] };
+        const cur = store.searchCursor;
+        const msgs: MsgHeader[] = cur ? (Array.isArray(cur) ? cur : [cur]) : [];
+        return { id: store.searchCursorId ?? null, messages: msgs as never[] };
       },
       tags: {
         async list() {
@@ -142,8 +166,9 @@ function installStub(): void {
       },
     },
     folders: {
-      async query() {
-        return store.folders;
+      async query(queryInfo?: { accountId?: string }) {
+        const all = store.folders;
+        return queryInfo?.accountId ? all.filter((f) => f.accountId === queryInfo.accountId) : all;
       },
     },
     accounts: {
@@ -309,11 +334,94 @@ test("mail_get_message_body: no text part yields empty note", async () => {
 // mail_search
 // ---------------------------------------------------------------------------
 
-test("mail_search: returns a page + a continuation cursor", async () => {
-  store.search = [{ id: 10, subject: "match one" }, { id: 11, subject: "match two" }];
+test("mail_search: returns a page + an opaque continuation cursor", async () => {
+  store.search = [
+    { id: 11, subject: "old", date: "2024-01-01T00:00:00Z" },
+    { id: 10, subject: "new", date: "2024-06-01T00:00:00Z" },
+  ];
   const res = await call("mail_search", { text: "match" });
-  assert.equal(res.messages.length, 2);
-  assert.equal(res.nextCursor, "list-1");
+  // Each page is date-desc by default, even when the backend returns another order.
+  assert.deepEqual(res.messages.map((m: any) => m.messageId), [10, 11]);
+  // The cursor is a short opaque registry token, not the raw list id and
+  // not an embedded payload (no more multi-KB base64 blobs in the LLM context).
+  assert.match(res.nextCursor, /^sc[0-9a-f]{16}$/);
+  assert.notEqual(res.nextCursor, "list-1");
+
+  // Continuing with the returned cursor resumes the same underlying list…
+  store.searchCursor = { id: 12, subject: "older", date: "2023-06-01T00:00:00Z" };
+  const cont = await call("mail_search", { cursor: res.nextCursor });
+  assert.equal(cont.messages.length, 1);
+  assert.equal(cont.messages[0].messageId, 12);
+  assert.equal(cont.nextCursor, null); // fake reports end of list
+});
+
+test("mail_search: sort settings are carried through the continuation cursor", async () => {
+  store.search = [{ id: 10, subject: "banana" }];
+  const res = await call("mail_search", { sort: "subject", order: "asc" });
+
+  store.searchCursor = [{ id: 12, subject: "cherry" }, { id: 13, subject: "avocado" }];
+  const cont = await call("mail_search", { cursor: res.nextCursor });
+  // The continuation page is sorted with the SAME settings, not the defaults.
+  assert.deepEqual(cont.messages.map((m: any) => m.messageId), [13, 12]);
+});
+
+test("mail_search: sort=subject orders by subject, missing subjects sink to the bottom", async () => {
+  store.search = [
+    { id: 10, subject: "banana" },
+    { id: 11, subject: "apple" },
+    { id: 12 },
+  ];
+  const res = await call("mail_search", { sort: "subject" });
+  // desc (default): reverse-alphabetical, the subject-less message last.
+  assert.deepEqual(res.messages.map((m: any) => m.messageId), [10, 11, 12]);
+
+  const asc = await call("mail_search", { sort: "subject", order: "asc" });
+  assert.deepEqual(asc.messages.map((m: any) => m.messageId), [11, 10, 12]);
+});
+
+test("mail_search: sort=from orders by author", async () => {
+  store.search = [
+    { id: 10, author: "Zed <zed@x>" },
+    { id: 11, author: "Ann <ann@x>" },
+  ];
+  const res = await call("mail_search", { sort: "from", order: "asc" });
+  assert.deepEqual(res.messages.map((m: any) => m.messageId), [11, 10]);
+});
+
+test("mail_search: invalid sort/order values are rejected", async () => {
+  store.search = [{ id: 10 }];
+  await assert.rejects(
+    call("mail_search", { sort: "size" }),
+    (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.INTERNAL,
+  );
+  await assert.rejects(
+    call("mail_search", { order: "upwards" }),
+    (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.INTERNAL,
+  );
+});
+
+test("mail_search: a bare (pre-sort) cursor still works with default ordering", async () => {
+  store.searchCursor = [{ id: 12, date: "2023-01-01T00:00:00Z" }, { id: 13, date: "2023-05-01T00:00:00Z" }];
+  const cont = await call("mail_search", { cursor: "list-1" });
+  assert.deepEqual(cont.messages.map((m: any) => m.messageId), [13, 12]);
+});
+
+test("mail_search: a legacy embedded (ps1.) cursor still decodes and continues", async () => {
+  store.search = [{ id: 10, subject: "banana" }];
+  const legacy = "ps1." + Buffer.from(
+    JSON.stringify({ id: "list-1", sort: "subject", order: "asc" }),
+  ).toString("base64");
+  store.searchCursor = [{ id: 12, subject: "cherry" }, { id: 13, subject: "avocado" }];
+  const cont = await call("mail_search", { cursor: legacy });
+  assert.deepEqual(cont.messages.map((m: any) => m.messageId), [13, 12]);
+});
+
+test("mail_search: an unknown/evicted registry token fails with a structured cursor-expired error", async () => {
+  await assert.rejects(
+    call("mail_search", { cursor: "scdeadbeefdeadbeef" }),
+    (e: unknown) =>
+      e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.MAIL_CURSOR_EXPIRED,
+  );
 });
 
 test("mail_search: unknown tool is rejected; empty store yields empty page", async () => {
@@ -353,9 +461,48 @@ test("mail_search: defaults to the account Inbox when no folderId is given", asy
   store.accounts = [
     { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
   ];
+  store.folders = [
+    { id: "acct1-inbox", name: "Inbox", path: "/INBOX", accountId: "a1" },
+  ];
   store.search = [{ id: 10 }];
   await call("mail_search", { text: "x" });
   assert.equal(store.lastQuery?.folderId, "acct1-inbox");
+});
+
+test("mail_search: the IMAP inbox is the /INBOX child, not the server root", async () => {
+  // Regression: resolving the account root as "the inbox" made default
+  // searches return [] for IMAP accounts, whose messages live in /INBOX.
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1://imap.work.example" } },
+  ];
+  store.folders = [
+    { id: "acct1://imap.work.example", name: "work.example", path: "/", accountId: "a1", isRoot: true },
+    { id: "acct1://INBOX", name: "Inbox", path: "/INBOX", accountId: "a1" },
+    { id: "acct1://Sent Messages", name: "Sent Messages", path: "/Sent Messages", accountId: "a1" },
+  ];
+  store.searchByFolder = { "acct1://INBOX": [{ id: 10, subject: "in the inbox" }] };
+  const res = await call("mail_search", {});
+  // A bare listing uses the folder's own sorted view (messages.list), not query.
+  assert.equal(store.lastList?.folderId, "acct1://INBOX");
+  assert.equal(store.lastQuery, undefined);
+  assert.deepEqual(store.lastList?.options, { sortType: "date", sortOrder: "descending" });
+  assert.equal(res.messages.length, 1);
+  assert.equal(res.messages[0].messageId, 10);
+});
+
+test("mail_search: an open mail tab does not change the default Inbox scope", async () => {
+  store.currentTab = { tabId: 7 };
+  store.selectedFolders = [{ id: "sent-1", name: "Sent" }];
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
+  ];
+  store.folders = [
+    { id: "acct1-inbox", name: "Inbox", path: "/INBOX", accountId: "a1" },
+  ];
+  store.search = [{ id: 10 }];
+  await call("mail_search", {});
+  // The default is always the account Inbox — never the selected/on-screen folder.
+  assert.equal(store.lastList?.folderId, "acct1-inbox");
 });
 
 test("mail_search: scope:'all' searches every folder", async () => {
@@ -371,13 +518,128 @@ test("mail_search: explicit folderId overrides scope", async () => {
     { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
   ];
   await call("mail_search", { folderId: "archive-99", scope: "all" });
-  assert.equal(store.lastQuery?.folderId, "archive-99");
+  assert.equal(store.lastList?.folderId, "archive-99");
+});
+
+test("mail_search: unfiltered sort=from order=asc maps to list sortType=author ascending", async () => {
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
+  ];
+  store.folders = [
+    { id: "acct1-inbox", name: "Inbox", path: "/INBOX", accountId: "a1" },
+  ];
+  store.searchByFolder = {
+    "acct1-inbox": [
+      { id: 10, author: "Zed <z@x>", date: "2024-01-01T00:00:00Z" },
+      { id: 11, author: "Ann <a@x>", date: "2024-06-01T00:00:00Z" },
+    ],
+  };
+  const res = await call("mail_search", { sort: "from", order: "asc" });
+  assert.deepEqual(store.lastList?.options, { sortType: "author", sortOrder: "ascending" });
+  assert.deepEqual(res.messages.map((m: any) => m.messageId), [11, 10]);
+});
+
+test("mail_search: a filtered search still uses messages.query with per-page sort", async () => {
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
+  ];
+  store.folders = [
+    { id: "acct1-inbox", name: "Inbox", path: "/INBOX", accountId: "a1" },
+  ];
+  store.search = [
+    { id: 11, date: "2024-01-01T00:00:00Z" },
+    { id: 10, date: "2024-06-01T00:00:00Z" },
+  ];
+  const res = await call("mail_search", { text: "x" });
+  assert.equal(store.lastList, undefined);
+  assert.equal(store.lastQuery?.fullText, "x");
+  assert.deepEqual(res.messages.map((m: any) => m.messageId), [10, 11]);
+});
+
+test("mail_search: list() continuation keeps the folder-view order via the cursor carry", async () => {
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
+  ];
+  store.folders = [
+    { id: "acct1-inbox", name: "Inbox", path: "/INBOX", accountId: "a1" },
+  ];
+  const d = (n: number) => `2024-01-0${n}T00:00:00Z`;
+  store.searchByFolder = {
+    "acct1-inbox": [1, 2, 3, 4, 5].map((n) => ({ id: n, date: d(n) })),
+  };
+  const p1 = await call("mail_search", { limit: 2 });
+  assert.deepEqual(p1.messages.map((m: any) => m.messageId), [5, 4]);
+  assert.ok(p1.nextCursor);
+  const p2 = await call("mail_search", { cursor: p1.nextCursor, limit: 2 });
+  // Served from the cursor carry — no continueList round-trip yet.
+  assert.deepEqual(p2.messages.map((m: any) => m.messageId), [3, 2]);
+  assert.ok(p2.nextCursor);
+  const p3 = await call("mail_search", { cursor: p2.nextCursor, limit: 2 });
+  // The carry ran out: the next server page is fetched (empty) and the last
+  // message is returned.
+  assert.deepEqual(p3.messages.map((m: any) => m.messageId), [1]);
+  assert.equal(p3.nextCursor, null);
+});
+
+test("mail_search: non-Latin1 message data round-trips through the cursor", async () => {
+  // btoa() throws on characters above Latin1; the cursor carry holds whole
+  // messages (subjects/authors with arbitrary Unicode).
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
+  ];
+  store.folders = [
+    { id: "acct1-inbox", name: "Inbox", path: "/INBOX", accountId: "a1" },
+  ];
+  store.searchByFolder = {
+    "acct1-inbox": [
+      { id: 1, subject: "café ☕ 日本語", author: "José Müller <j@x>", date: "2024-03-01T00:00:00Z" },
+      { id: 2, subject: "plain", date: "2024-02-01T00:00:00Z" },
+      { id: 3, subject: "émoji 👋", date: "2024-01-01T00:00:00Z" },
+    ],
+  };
+  const p1 = await call("mail_search", { limit: 2 });
+  assert.deepEqual(p1.messages.map((m: any) => m.messageId), [1, 2]);
+  assert.ok(p1.nextCursor);
+  const p2 = await call("mail_search", { cursor: p1.nextCursor, limit: 2 });
+  assert.equal(p2.messages.length, 1);
+  assert.equal(p2.messages[0].messageId, 3);
+  // The carried message survives the base64 round-trip intact.
+  assert.equal(p2.messages[0].subject, "émoji 👋");
+  assert.equal(p2.nextCursor, null);
+});
+
+test("mail_search: falls back to messages.query when list() is unavailable", async () => {
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
+  ];
+  store.folders = [
+    { id: "acct1-inbox", name: "Inbox", path: "/INBOX", accountId: "a1" },
+  ];
+  store.search = [
+    { id: 11, date: "2024-01-01T00:00:00Z" },
+    { id: 10, date: "2024-06-01T00:00:00Z" },
+  ];
+  const msgs = (globalThis as { browser?: { messages?: Record<string, unknown> } }).browser!.messages!;
+  const saved = msgs.list;
+  delete msgs.list;
+  try {
+    const res = await call("mail_search", {});
+    assert.equal(store.lastList, undefined);
+    assert.equal(store.lastQuery?.folderId, "acct1-inbox");
+    assert.deepEqual(res.messages.map((m: any) => m.messageId), [10, 11]); // client-side sorted
+  } finally {
+    if (saved) msgs.list = saved;
+  }
 });
 
 test("mail_search: multiple inboxes are merged date-desc and not paginated", async () => {
   store.accounts = [
     { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "in1" } },
     { id: "a2", name: "Home", type: "pop3", identities: [], rootFolder: { id: "in2" } },
+  ];
+  store.folders = [
+    { id: "in1", name: "Inbox", path: "/INBOX", accountId: "a1" },
+    { id: "in2", name: "Inbox", accountId: "a2", isRoot: true },
   ];
   store.searchByFolder = {
     in1: [{ id: 1, subject: "old work", date: "2024-01-01T00:00:00Z" }],

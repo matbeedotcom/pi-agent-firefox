@@ -94,8 +94,23 @@ const SCHEMAS: Record<string, TSchema> = {
           description: "How to combine multiple tags (default any: match at least one).",
         }),
       ),
+      sort: Type.Optional(
+        Type.Union([Type.Literal("date"), Type.Literal("subject"), Type.Literal("from")], {
+          description: "Sort key for the results (default date). 'from' sorts by author.",
+        }),
+      ),
+      order: Type.Optional(
+        Type.Union([Type.Literal("desc"), Type.Literal("asc")], {
+          description: "Sort direction (default desc: newest / last letter first).",
+        }),
+      ),
       limit: Type.Optional(Type.Number({ description: "Maximum number of results per page (default 25, max 100)." })),
-      cursor: Type.Optional(Type.String({ description: "Pagination cursor from a previous search result." })),
+      cursor: Type.Optional(
+        Type.String({
+          description:
+            "Short opaque pagination token from a previous search result's nextCursor; pass it back unchanged to continue. It expires if the extension is reloaded — re-run mail_search for a fresh first page.",
+        }),
+      ),
     },
     { additionalProperties: false },
   ),

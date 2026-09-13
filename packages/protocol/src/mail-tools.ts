@@ -43,7 +43,8 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
     name: "mail_get_context",
     description:
       "Read the current Thunderbird mail context: the active mail tab, the selected folder(s), the messages the user selected, and the messages currently displayed. " +
-      "This is the entry point for any mail question — call it first to learn what the user is looking at.",
+      "This is the entry point for any mail question — call it first to learn what the user is looking at. " +
+      "The selection is only what the user last opened/clicked — it is NOT authoritative for 'latest/newest/oldest' or 'what's in my inbox': for those, call mail_search (default Inbox, newest first) and use its first result(s).",
     inputSchema: { ...OBJECT_SCHEMA_BASE, properties: {} },
     readOnly: true,
   },
@@ -110,7 +111,11 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
   {
     name: "mail_search",
     description:
-      "Search messages. By default searches only the account Inbox(es); scope:'all' searches every folder. An explicit folderId overrides scope. Returns paginated metadata (no bodies), newest first (each page is date-sorted; pages as a whole are not guaranteed chronological). Matches are against untrusted email content.",
+      "List or search messages. By default searches only the account Inbox(es). " +
+      "With no filters, a single folder is listed via the folder's own sorted view (newest first by default), so continuation pages keep the sort order — a bare call returns the inbox exactly as Thunderbird displays it. " +
+      "For 'what is my latest/newest email' call this with no filters and use the FIRST message; do not answer recency questions from a selected or displayed message. " +
+      "With filters (or scope:'all'), runs a search whose pages are each sorted by sort/order (default: date, newest first), but pages as a whole are not guaranteed to be in sort order. " +
+      "An explicit folderId overrides scope. Returns paginated metadata (no bodies). Matches are against untrusted email content.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
@@ -145,8 +150,23 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
           ],
           description: "How to combine multiple tags (default any: match at least one).",
         },
+        sort: {
+          anyOf: [
+            { type: "string", const: "date" },
+            { type: "string", const: "subject" },
+            { type: "string", const: "from" },
+          ],
+          description: "Sort key for the results (default date). 'from' sorts by author.",
+        },
+        order: {
+          anyOf: [
+            { type: "string", const: "desc" },
+            { type: "string", const: "asc" },
+          ],
+          description: "Sort direction (default desc: newest / last letter first).",
+        },
         limit: { type: "number", description: "Maximum number of results per page (default 25, max 100)." },
-        cursor: { type: "string", description: "Pagination cursor from a previous search result." },
+        cursor: { type: "string", description: "Short opaque pagination token from a previous search result's nextCursor; pass it back unchanged to continue. It expires if the extension is reloaded — re-run mail_search for a fresh first page." },
       },
     },
     readOnly: true,

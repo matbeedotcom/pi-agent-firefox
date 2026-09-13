@@ -329,37 +329,224 @@ async function mailGetMessageBody(args: Record<string, unknown>): Promise<MailTo
   return { bodyText: truncated ? body.slice(0, maxChars) : body, truncated };
 }
 
-// Inbox resolution for the default search scope. In Thunderbird the root
-// folder of an IMAP/POP3/EWS account IS that account's Inbox; local-folders
-// and unified smart accounts are excluded.
+// Inbox resolution for the default search scope. The account's root folder is
+// NOT its inbox for IMAP/EWS: the root is the server root, and the Inbox is
+// its first child (path "/INBOX") — querying the root returns no messages.
+// For POP3 the root folder IS the inbox. Local-folders and unified smart
+// accounts are excluded.
 async function inboxFolderIds(): Promise<string[]> {
   const accounts = await browser.accounts.list(false);
-  return accounts
-    .filter((a) => a.type === "imap" || a.type === "pop3" || a.type === "ews")
-    .map((a) => a.rootFolder?.id)
-    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const ids: string[] = [];
+  for (const a of accounts) {
+    if (a.type !== "imap" && a.type !== "pop3" && a.type !== "ews") continue;
+    try {
+      const folders = await browser.folders.query({ accountId: a.id });
+      // Canonical inbox path first (IMAP "/INBOX", some backends "/inbox"),
+      // then a top-level "Inbox" folder (POP3 root, EWS).
+      const inbox =
+        folders.find((f) => f.path === "/INBOX" || f.path === "/inbox") ??
+        folders.find((f) => {
+          if (f.name !== "Inbox") return false;
+          if (f.isUnified || f.isVirtual || f.isTag) return false;
+          const depth = f.path ? f.path.split("/").filter(Boolean).length : 0;
+          return f.isRoot || depth <= 1;
+        });
+      if (inbox?.id) ids.push(inbox.id);
+    } catch {
+      /* unreadable account folders: skip this account */
+    }
+  }
+  return ids;
 }
 
-// messages.query() without a folderId merges results across folders in
-// arbitrary (per-folder index) order, not chronological. Re-sort each page by
-// date desc (messages lacking a date sink to the bottom) so callers can rely
-// on "newest first". Stable, so within-page relative order is otherwise kept.
-function byDateDesc(messages: MailMessageRef[]): MailMessageRef[] {
-  const rank = (m: MailMessageRef) => (m.date ? Date.parse(m.date) : Number.NEGATIVE_INFINITY);
-  return [...messages].sort((a, b) => rank(b) - rank(a));
+// messages.query() returns results in unspecified (per-folder index) order —
+// the live API docs guarantee no sort. For plain folder listings we therefore
+// use messages.list() with sortType/sortOrder (TB 148+), which returns the
+// folder's own sorted view (what the UI shows) and keeps continuation pages
+// in sort order. Filtered searches must use query(); each of its pages is
+// re-sorted with the caller's sort/order (default date desc; messages lacking
+// the sort value sink to the bottom). Pages of a query as a whole are not
+// guaranteed to be in sort order.
+type SortKey = "date" | "subject" | "from";
+type SortOrder = "asc" | "desc";
+
+// mail_search sort key → messages.list sortType.
+const LIST_SORT: Record<SortKey, "date" | "subject" | "author"> = {
+  date: "date",
+  subject: "subject",
+  from: "author",
+};
+
+function parseSort(args: Record<string, unknown>): { key: SortKey; order: SortOrder } {
+  const key = optStr(args.sort) ?? "date";
+  if (key !== "date" && key !== "subject" && key !== "from") {
+    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `sort must be 'date', 'subject', or 'from'`);
+  }
+  const order = optStr(args.order) ?? "desc";
+  if (order !== "asc" && order !== "desc") {
+    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `order must be 'asc' or 'desc'`);
+  }
+  return { key, order };
+}
+
+function bySort(messages: MailMessageRef[], key: SortKey, order: SortOrder): MailMessageRef[] {
+  const dir = order === "asc" ? 1 : -1;
+  // [missing, value]: records lacking the sort value always sink to the
+  // bottom, in both directions.
+  const sortValue = (m: MailMessageRef): [number, string | number] => {
+    if (key === "date") {
+      const t = m.date ? Date.parse(m.date) : NaN;
+      return [Number.isNaN(t) ? 1 : 0, t];
+    }
+    const s = (key === "subject" ? m.subject : m.author) ?? "";
+    return [s === "" ? 1 : 0, s];
+  };
+  return [...messages].sort((a, b) => {
+    const [am, av] = sortValue(a);
+    const [bm, bv] = sortValue(b);
+    if (am !== bm) return am - bm;
+    const c = typeof av === "string" ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+    return c === 0 ? 0 : c * dir;
+  });
+}
+
+// The continuation cursor is opaque to the agent and wraps Thunderbird's
+// list id together with the sort settings — and, for the messages.list() path
+// (whose server page size is larger than our limit), the not-yet-sent tail of
+// the current page, so no message is ever skipped.
+//
+// New cursors are SHORT tokens into an in-memory registry (the background is
+// a persistent event page, not a service worker, so state survives between
+// tool calls). Embedding the payload in the cursor (the legacy
+// "ps1." + base64(JSON) format, still decodable below) forced whole pages of
+// message headers through the LLM context on every continuation, so it is no
+// longer used. If a token is gone (extension reloaded) the call fails with a
+// structured "cursor expired" error instead.
+const SEARCH_CURSOR_PREFIX = "ps1.";
+const CURSOR_TOKEN_PREFIX = "sc";
+const MAX_ACTIVE_CURSORS = 64;
+
+interface SearchCursorState {
+  id: string;
+  key: SortKey;
+  order: SortOrder;
+  carry?: MailMessageRef[];
+}
+
+// btoa/atob only handle Latin1, but legacy cursor payloads carry whole
+// messages (subjects/authors with arbitrary Unicode) — round-trip through
+// UTF-8 bytes when decoding them.
+function fromBase64Utf8(b64: string): string {
+  const bin = atob(b64);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+// Live cursors: short token → state. Insertion order is used for eviction.
+const activeCursors = new Map<string, SearchCursorState>();
+
+function randomCursorToken(): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return CURSOR_TOKEN_PREFIX + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Register a cursor state and return the short token the agent sees. */
+function issueCursor(state: SearchCursorState): string {
+  while (activeCursors.size >= MAX_ACTIVE_CURSORS) {
+    const oldest = activeCursors.keys().next().value;
+    if (oldest === undefined) break;
+    activeCursors.delete(oldest);
+  }
+  const token = randomCursorToken();
+  activeCursors.set(token, state);
+  return token;
+}
+
+/**
+ * Resolve an inbound cursor: live token first, then legacy embedded formats.
+ * Returns null when the string is a cursor we issued (token) or once
+ * embedded ("ps1.") but its state is unrecoverable; anything else is treated
+ * as a bare Thunderbird list id (pre-cursor legacy input), inheriting the
+ * caller's sort settings.
+ */
+function lookupCursor(
+  cursor: string,
+  defaultKey: SortKey,
+  defaultOrder: SortOrder,
+): { state: SearchCursorState; token?: string } | null {
+  if (cursor.startsWith(CURSOR_TOKEN_PREFIX)) {
+    const state = activeCursors.get(cursor);
+    return state ? { state, token: cursor } : null;
+  }
+  if (cursor.startsWith(SEARCH_CURSOR_PREFIX)) {
+    const decoded = decodeSearchCursor(cursor);
+    return decoded ? { state: decoded } : null;
+  }
+  return { state: { id: cursor, key: defaultKey, order: defaultOrder } }; // bare list id
+}
+
+function decodeSearchCursor(cursor: string): SearchCursorState | null {
+  if (!cursor.startsWith(SEARCH_CURSOR_PREFIX)) return null;
+  try {
+    const raw: unknown = JSON.parse(fromBase64Utf8(cursor.slice(SEARCH_CURSOR_PREFIX.length)));
+    if (raw && typeof raw === "object" && typeof (raw as { id?: unknown }).id === "string") {
+      const r = raw as { id: string; sort?: unknown; order?: unknown; carry?: unknown };
+      return {
+        id: r.id,
+        key: r.sort === "subject" || r.sort === "from" ? r.sort : "date",
+        order: r.order === "asc" ? "asc" : "desc",
+        carry: Array.isArray(r.carry) ? (r.carry as MailMessageRef[]) : undefined,
+      };
+    }
+  } catch {
+    // fall through: not one of ours
+  }
+  return null;
 }
 
 async function mailSearch(args: Record<string, unknown>): Promise<MailToolResult> {
   const limit = clampInt(args.limit, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
   const cursor = optStr(args.cursor);
 
-  // Continuation: resume a previously returned list id.
+  const { key: sortKey, order: sortOrder } = parseSort(args);
+
+  // Continuation: resume a previously returned list id. The cursor carries
+  // the sort settings (and, for the list() path, the unsent tail of the
+  // current server page) so pages stay in the same order, nothing skipped.
   if (cursor) {
-    const list = await browser.messages.continueList(cursor);
-    const messages = byDateDesc(
-      (list && Array.isArray(list.messages) ? list.messages : []).map(normalizeHeader),
-    );
-    return { messages, nextCursor: list && list.id && messages.length > 0 ? list.id : null };
+    const resolved = lookupCursor(cursor, sortKey, sortOrder);
+    if (!resolved) {
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.MAIL_CURSOR_EXPIRED,
+        "search cursor expired (the extension was reloaded or the cursor evicted); re-run mail_search for a fresh first page",
+      );
+    }
+    const decoded = resolved.state;
+    if (resolved.token) activeCursors.delete(resolved.token); // consumed
+    const key = decoded.key;
+    const order = decoded.order;
+    // A cursor with a `carry` field came from the messages.list() path:
+    // its pages are already in folder-view order (keep them). A cursor
+    // without one came from the query() path: re-sort the page.
+    const isListPath = decoded.carry !== undefined;
+    let buf: MailMessageRef[] = decoded.carry ?? [];
+    let nextId: string | null = decoded.id || null;
+    if (buf.length < limit && nextId) {
+      const list = await browser.messages.continueList(nextId);
+      buf.push(...(list && Array.isArray(list.messages) ? list.messages : []).map(normalizeHeader));
+      nextId = list && list.id ? list.id : null;
+    }
+    const sorted = isListPath ? buf : bySort(buf, key, order);
+    const messages = sorted.slice(0, limit);
+    const carry = sorted.slice(limit);
+    const more = carry.length > 0 || (nextId !== null && messages.length === limit);
+    return {
+      messages,
+      nextCursor: more
+        ? issueCursor({ id: nextId ?? "", key, order, carry: isListPath ? carry : undefined })
+        : null,
+    };
   }
 
   const queryInfo: Record<string, unknown> = {
@@ -413,9 +600,21 @@ async function mailSearch(args: Record<string, unknown>): Promise<MailToolResult
     queryInfo.tags = { mode, tags: Object.fromEntries(keys.map((k) => [k, true])) };
   }
 
+  // Filtered searches go through messages.query(); a plain listing of one
+  // folder uses messages.list() with a server-side sort (the folder's own
+  // view, what the UI shows; pages continue in sort order).
+  const hasFilters = !!(
+    queryInfo.fullText || queryInfo.author || queryInfo.recipients || queryInfo.subject ||
+    queryInfo.fromDate || queryInfo.toDate ||
+    typeof queryInfo.attachment === "boolean" || typeof queryInfo.unread === "boolean" ||
+    queryInfo.tags
+  );
+
   // Default scope: the account Inbox(es), not all folders. An explicit
   // folderId takes precedence over scope; scope "all" is the legacy
-  // search-everything behavior.
+  // search-everything behavior. Default sort (date desc) matches the way
+  // Thunderbird displays the Inbox, so a bare request returns the inbox as
+  // the user sees it — without reading the UI.
   let note: string | undefined;
   let inboxes: string[] = [];
   if (!queryInfo.folderId && args.scope !== "all") {
@@ -428,15 +627,25 @@ async function mailSearch(args: Record<string, unknown>): Promise<MailToolResult
   }
 
   if (inboxes.length > 1) {
-    // Multiple real accounts: one query per inbox, merged date-desc.
-    // The combined page is not paginatable (continueList is per-query).
+    // Multiple real accounts: one listing per inbox, merged in the requested
+    // sort order. The combined page is not paginatable (continueList is per
+    // listing).
+    const useList = !hasFilters && typeof browser.messages.list === "function";
     const lists = await Promise.all(
-      inboxes.map((fid) => browser.messages.query({ ...queryInfo, folderId: fid })),
+      inboxes.map(async (fid) => {
+        const l = useList
+          ? await browser.messages.list(fid, {
+              sortType: LIST_SORT[sortKey],
+              sortOrder: sortOrder === "asc" ? "ascending" : "descending",
+            })
+          : await browser.messages.query({ ...queryInfo, folderId: fid });
+        return l && Array.isArray(l.messages) ? l.messages : [];
+      }),
     );
-    const messages = byDateDesc(
-      lists
-        .flatMap((l) => (l && Array.isArray(l.messages) ? l.messages : []))
-        .map(normalizeHeader),
+    const messages = bySort(
+      lists.flatMap((h) => h).map(normalizeHeader),
+      sortKey,
+      sortOrder,
     ).slice(0, limit);
     return {
       messages,
@@ -445,11 +654,39 @@ async function mailSearch(args: Record<string, unknown>): Promise<MailToolResult
     };
   }
 
+  // Plain listing of a single folder: the folder's own sorted view.
+  if (!hasFilters && queryInfo.folderId && typeof browser.messages.list === "function") {
+    const list = await browser.messages.list(queryInfo.folderId as string, {
+      sortType: LIST_SORT[sortKey],
+      sortOrder: sortOrder === "asc" ? "ascending" : "descending",
+    });
+    const buf = (list && Array.isArray(list.messages) ? list.messages : []).map(normalizeHeader);
+    const nextId = list && list.id ? list.id : null;
+    // Trust the server's folder-view order (it is the UI order) — no re-sort.
+    const messages = buf.slice(0, limit);
+    const carry = buf.slice(limit);
+    const more = carry.length > 0 || (nextId !== null && messages.length === limit);
+    const result: MailToolResult = {
+      messages,
+      // `carry` (possibly []) marks the cursor as list-path; query-path
+      // cursors use `undefined`.
+      nextCursor: more ? issueCursor({ id: nextId ?? "", key: sortKey, order: sortOrder, carry }) : null,
+    };
+    if (note) result.note = note;
+    return result;
+  }
+
+  // Filtered search (or no list() available): per-page client-side sort.
   const list = await browser.messages.query(queryInfo);
-  const messages = byDateDesc(
+  const messages = bySort(
     (list && Array.isArray(list.messages) ? list.messages : []).map(normalizeHeader),
+    sortKey,
+    sortOrder,
   );
-  const result: MailToolResult = { messages, nextCursor: list && list.id ? list.id : null };
+  const result: MailToolResult = {
+    messages,
+    nextCursor: list && list.id ? issueCursor({ id: list.id, key: sortKey, order: sortOrder }) : null,
+  };
   if (note) result.note = note;
   return result;
 }
