@@ -405,10 +405,6 @@ function renderConversation(): void {
   conv.scrollTop = conv.scrollHeight;
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 /** Minimal markdown: fenced code blocks, inline code, bold, headings. */
 function renderMarkdown(text: string): HTMLElement {
   const wrapper = document.createElement("div");
@@ -432,7 +428,10 @@ function renderMarkdown(text: string): HTMLElement {
 
 function renderInline(text: string): HTMLElement {
   const span = document.createElement("span");
-  const lines = escapeHtml(text).split("\n");
+  // No HTML escaping here: every value below is inserted as a text node
+  // (append(string)/textContent), which renders characters verbatim and is
+  // safe from HTML injection. Escaping would show entities like "&gt;" raw.
+  const lines = text.split("\n");
   lines.forEach((line, idx) => {
     if (idx > 0) span.append(document.createElement("br"));
     // headings
