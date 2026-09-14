@@ -1,13 +1,20 @@
 # Browser Use Pi ↔ Pi Browser: research & design
 
-Date: 2026-09-14. Status: research complete, not started.
+Date: 2026-09-14 (updated same day after owner decision). Status: research complete, not started.
 Upstream: https://github.com/browser-use/browser-use-pi (package `@browser_use/pi` v0.1.0, MIT).
 Research copy for this doc: `/tmp/browser-use-pi` (shallow clone; re-clone if gone).
 
-Goal: run the `@browser_use/pi` agent (Pi model loop + persistent V8 JavaScript
-REPL + browser primitives) so that its "browser" is **our** Firefox — controlled
-through our add-on (browser tools, content scripts, bindings) and our native
-host (the pi instance: ACP agent + tool transports). No Chrome, no Cloud.
+Goal: get the Browser-Use-style agent (Pi model loop + persistent V8 JavaScript
+REPL + browser primitives: `page`/`tabs`/`browser`, AX snapshots, screenshots,
+workspace artifacts) driving **our** Firefox — through our add-on (browser
+tools, content scripts, bindings) and our pi instance (the ACP agent in the
+native host).
+
+**Owner constraint (2026-09-14): no CDP-over-TCP server, whatsoever.**
+That eliminates the "unmodified SDK against a local CDP endpoint" path
+(Option A below) and leaves two viable shapes: **B — fork the SDK, transport
+over our broker socket** and **C — port the REPL primitive layer into our own
+pi agent**. This doc designs both and recommends C.
 
 ---
 
@@ -15,429 +22,429 @@ host (the pi instance: ACP agent + tool transports). No Chrome, no Cloud.
 
 Read: `src/index.ts`, `src/browser.ts`, `src/cdp.ts`, `src/runtime.ts`,
 `src/worker.ts`, `src/page.ts`, `src/prompt.ts`, `src/policy.ts`,
-`src/highlight.ts`.
+`src/highlight.ts`, `src/protocol.ts`.
 
-### 1.1 The browser seam is a CDP endpoint, nothing else
-
-```text
-BrowserUse.create(options)
-  └─ openBrowser(options.browser)          # src/browser.ts:180
-       ├─ kind:'cloud'    → Browser Use Cloud API → cdpUrl
-       ├─ kind:'chromium' → spawn Chrome, read DevToolsActivePort → ws://…
-       ├─ kind:'chrome'   → discover running Chrome's CDP → ws://…
-       └─ {cdpUrl}        → use as-is (ws/wss/http/https)
-       → { endpoint: string, close(): Promise<void> }
-```
-
-`Browser.cloud / .chromium / .chrome` are **data factories** (they return a
-plain `BrowserOptions` object). There is no `Browser` interface/class to
-implement, and `openBrowser` is not injectable — `BrowserUse.create` calls it
-directly (`src/index.ts:140`). Unknown `kind` values throw.
-
-The **only** seam is the `endpoint`: a CDP WebSocket (or HTTP URL for
-`/json/version` discovery). Passing `browser: { cdpUrl: 'ws://127.0.0.1:PORT/…' }`
-runs the unmodified SDK against any CDP-compatible endpoint. `targetId` is
-also accepted on the `cdpUrl` variant and pre-attaches the first page.
-
-### 1.2 Where things run
+### 1.1 Architecture
 
 ```text
-host process (your app)                  worker (forked Node ≥22.19)
+host process (your app)                  worker (forked Node ≥22.19, env {})
 ├─ model loop: pi-agent-core/pi-ai       ├─ V8 REPL realm via node:inspector
-│  (same packages & version 0.85.1 as    │  (name 'browser-use'), per-cell
-│   our native host)                     │  Runtime.evaluate in that realm
-├─ BrowserRuntime: cell queue, IPC,      ├─ CDP.lazy(endpoint)  ← the only
-│  timeouts, owned-target cleanup        │  browser connection in the worker
-└─ CDP.connect(endpoint) only at close   ├─ Page/Tabs wrapping CDP
-   (to close SDK-owned tabs)             └─ realm globals: page, tabs, browser,
-                                            artifact, checkpoint, reconnect, …
+│  (pi 0.85.1 — same version as our host)│  (context name 'browser-use'); each
+├─ BrowserRuntime: cell queue, IPC,      │  cell = one Runtime.evaluate in it
+│  timeouts, owned-target cleanup        ├─ realm globals: page, tabs, browser,
+└─ at close: CDP connect to close        │  screenshot/snapshot, artifact,
+   SDK-owned tabs                        │  checkpoint, reconnect, require, …
 ```
 
-Cells are the unit of work: one code string per cell, one active cell at a
-time; worker death / cell timeout = state loss; `reconnect()` re-creates
-`CDP.lazy(endpoint)`. The SDK's model loop is plain Pi — so "our pi instance"
-means: the same model registry, same provider env keys (e.g.
-`OPENROUTER_API_KEY`), and the same pi 0.85.1 our host already uses. `streamFn`
-and a custom `models` collection are injectable if we ever need our routing.
+Cells are the unit of work: one code string, one active cell at a time,
+top-level `await`/variables persist across cells. Worker death, cancellation
+or cell timeout **loses JS state** (that is the contract: a timeout can kill a
+synchronous infinite loop only because the REPL runs in a child process).
+`reconnect()` resets the browser connection while keeping Node state.
 
-### 1.3 CDP wire contract the client expects
+The `page`/`tabs`/`browser` primitives are thin wrappers over **one CDP
+WebSocket** (`CDP.lazy(endpoint)`). `Browser.{cloud,chromium,chrome}` are data
+factories; `openBrowser(options.browser)` returns `{ endpoint, close }`; the
+endpoint is the only browser seam in the unmodified SDK.
 
-One WebSocket, JSON:
+### 1.2 The CDP surface that actually gets exercised
 
-```text
-request  { id, method, params, sessionId? }
-response { id, result }  |  { id, error: { code, message } }
-event    { method, params, sessionId? }          # no id
-```
-
-`sessionId` present = scoped to an attached target (flattened sessions). The
-client (`src/cdp.ts`) tracks `Target.attachToTarget`/`detachFromTarget`/
-`closeTarget`/`getTargets` results itself for session→target bookkeeping and
-`Page.getFrameTree` for frame parents. It rejects on `error`, times out
-per-command at `operationTimeoutMs` (default 15 s), and caps 256 pending.
-
-### 1.4 The CDP surface that actually gets exercised
-
-Enumerated from all call sites + the system prompt the model receives
-(`src/prompt.ts`) + policy/highlight/recording modules:
+Enumerated from all call sites, the system prompt (`src/prompt.ts`) the model
+receives, and the opt-in modules:
 
 **Core (always used by `Page`/`Tabs`/worker):**
 
-| CDP command | params | result shape consumed |
-|---|---|---|
-| `Target.getTargets` | – | `{ targetInfos: [{ targetId, type, url, title, attached, openerId?, parentFrameId? }] }` |
-| `Target.createTarget` | `{ url }` | `{ targetId }` |
-| `Target.attachToTarget` | `{ targetId, flatten: true }` | `{ sessionId }` |
-| `Target.detachFromTarget` | `{ sessionId }` | – |
-| `Target.closeTarget` | `{ targetId }` | `{ success: true }` |
-| `Page.enable` / `Runtime.enable` | – (session) | `{}` |
-| `Page.navigate` | `{ url }` | `{ frameId?, loaderId?, errorText? }` |
-| `Runtime.evaluate` | `{ expression, awaitPromise, returnByValue, timeout?, userGesture?, contextId? }` | `{ result: { type, value?, objectId? }, exceptionDetails? }` |
-| `Accessibility.getFullAXTree` | – (session) | `{ nodes: AXNode[] }` — `ignored`, `backendDOMNodeId`, `role:{value}`, `name:{value}`, `value:{value}`, `properties:[{name, value:{value}}]` (checked/pressed/selected/expanded/disabled) |
-| `Input.dispatchMouseEvent` | `{ type: 'mouseMoved'|'mousePressed'|'mouseReleased', x, y, button, clickCount }` | – |
-| `Input.insertText` | `{ text }` (session) | – |
-| `Page.captureScreenshot` | `{ format, quality }` | `{ data: base64 }` |
-| `Page.getFrameTree` | – (session) | `{ frameTree }` |
-
-`page.goto` = `Page.navigate` + poll `Runtime.evaluate(() => document.readyState !== 'loading')` + `info()`; `page.waitFor(fn)` = poll `Runtime.evaluate` every 100 ms, **tolerating errors whose message matches** `/Execution context was destroyed|Cannot find context/`; `page.snapshot()` = `Accessibility.getFullAXTree` filtered to `!ignored && backendDOMNodeId`, mapping `id = backendDOMNodeId`.
-
-**Prompt-taught recipes (the model is instructed to use exactly these):**
-
-| recipe | CDP commands |
+| capability | CDP commands |
 |---|---|
-| AX → coordinates → click | `DOM.scrollIntoViewIfNeeded {backendNodeId}`, `DOM.getBoxModel {backendNodeId}` → `model.content[8]`, then `page.clickAt(x, y)` = 3× `Input.dispatchMouseEvent` |
-| typing | `DOM.focus {backendNodeId}`, `Input.dispatchKeyEvent {type:'rawKeyDown', key:'a', code:'KeyA', commands:['selectAll']}`, `Input.insertText {text}`, `Input.dispatchKeyEvent {type:'keyUp', key:'a'}` (Backspace for empty replacement) |
-| element at point | `DOM.getNodeForLocation {x, y}` → `{ backendNodeId }` |
-| uploads | `DOM.setFileInputFiles {backendNodeId, files}` |
-| in-process frames | `Page.getFrameTree`, `Page.createIsolatedWorld {frameId, worldName}` → `{ executionContextId }`, then `Runtime.evaluate { contextId }` |
-| cross-origin iframes | `Target.getTargets` (type `'iframe'`, `parentFrameId`), attach with `flatten: true`, scoped commands on that sessionId |
-| events | `browser.waitFor('Domain.event', { sessionId, timeoutMs, predicate })` — one-shot; register before triggering |
-
-**Opt-in modules (only if the app opts in):**
-
-| module | CDP used |
-|---|---|
-| domain policy (`allowedDomains`/`prohibitedDomains`) | `Fetch.enable/disable/continueRequest/failRequest/fulfillRequest`, events `Fetch.requestPaused`, `Target.attachedToTarget`, `Target.setAutoAttach`, `Target.autoAttachRelated`, `Target.sendMessageToTarget`, `Target.getTargetInfo`, `Runtime.runIfWaitingForDebugger` |
-| `highlightActions` | `DOM.getNodeForLocation`, `DOM.resolveNode {backendNodeId}` → objectId, `Runtime.callFunctionOn {objectId, functionDeclaration}`, `Runtime.releaseObject(Group)`, `DOM.focus` |
-| `recording` | separate CDP connection, screencast + `Page.captureScreenshot` taps (fails gracefully with a `warning` event if unavailable) |
-| worker close cleanup (host) | `Target.getTargets` + `Target.closeTarget` for SDK-owned targets |
+| tab list / open / close / attach | `Target.getTargets`, `Target.createTarget`, `Target.attachToTarget{flatten:true}`, `Target.detachFromTarget`, `Target.closeTarget` |
+| enable | `Page.enable`, `Runtime.enable` (per session) |
+| navigate | `Page.navigate {url}` → `{errorText?}`; then poll `Runtime.evaluate(() => document.readyState !== 'loading')` |
+| evaluate | `Runtime.evaluate {expression, awaitPromise, returnByValue, timeout, userGesture, contextId?}` — functions are stringified with the JSON arg inlined |
+| AX snapshot | `Accessibility.getFullAXTree` → nodes with `backendDOMNodeId`, `role/name/value:{value}`, `properties[]` (checked/pressed/selected/expanded/disabled) |
+| coords click | 3× `Input.dispatchMouseEvent` (moved/pressed/released, left) |
+| typing | `DOM.focus{backendNodeId}`, `Input.dispatchKeyEvent` (selectAll / backspace), `Input.insertText{text}` |
+| screenshot | `Page.captureScreenshot {format:'jpeg',quality}` → `{data:base64}` |
+| box model / scroll / hit-test | `DOM.getBoxModel{backendNodeId}` → `model.content[8]`, `DOM.scrollIntoViewIfNeeded`, `DOM.getNodeForLocation{x,y}` |
+| frames | `Page.getFrameTree`, `Page.createIsolatedWorld{frameId,worldName}` → `executionContextId`, scoped `Runtime.evaluate{contextId}` |
+| uploads | `DOM.setFileInputFiles{backendNodeId,files}` |
+| events | one-shot `waitFor('Domain.event',{sessionId,predicate})` (e.g. `Page.frameNavigated`) |
+| misc | `Emulation.setDeviceMetricsOverride`, `DOM.resolveNode`/`Runtime.callFunctionOn`/`releaseObject(Group)` (highlight), `Fetch.*` + `Target.setAutoAttach/autoAttachRelated/sendMessageToTarget` (domain policy), screencast (recording) |
 
 Everything else the model could send via `page.cdp(…)` is long tail; a clear
-CDP error (`-32601`) is a first-class outcome the model can react to.
+error is a first-class outcome. `page.waitFor(fn)` polls evaluate every 100 ms
+and **tolerates errors matching** `/Execution context was destroyed|Cannot find
+context/` — across navigations.
+
+### 1.3 Why this matters for our options
+
+The SDK's value is the **agent design**: persistent JS cells as the agent's
+main tool, AX-first discovery, screenshot evidence, workspace artifacts,
+checkpoint/partial delivery, and a prompt tuned for that loop — all on the pi
+model stack we already run. The CDP transport is incidental to that value,
+which is exactly why we can replace it (B) or stop using it (C).
 
 ---
 
 ## 2. What our stack already provides (and the gap)
 
-Our add-on already implements, as browser tools (see `packages/protocol/src/
-browser-tools.ts`, content scripts in `firefox/src/content/`):
+Add-on tools today (`packages/protocol/src/browser-tools.ts`, content scripts
+in `firefox/src/content/`):
 
-| need (CDP) | we have today |
+| capability (Browser-Use primitive) | we have today |
 |---|---|
-| `Page.navigate` | `browser_navigate {url}` (absolute URL validated; `tab_navigated` host notification invalidates refs) |
-| `Runtime.evaluate` (page world) | `browser_evaluate {expression, arg, frame}` — page world via MAIN-world helper, isolated-world fallback, 15 s deadline, JSON-safe result (20 KB cap), `{value, error, world}` |
-| `Accessibility.getFullAXTree` | `browser_get_accessibility_tree {maxNodes, maxDepth, frame}` — structured walker (roles, accessible names, refs, pruning, shadow-DOM traversal) — **but today it serializes to an indented text outline**; the bridge needs the structured node list |
-| `DOM.getBoxModel` / coords | `browser_get_dom` summaries (ref, role, name, rect-less) + `browser_element_at {x,y}` → ref — **no rect-per-ref, no scrollIntoView/focus-by-ref yet** |
-| `Input.dispatchMouseEvent` | `browser_click {ref}` (content-script `focus() + click()`) — **no atomic coordinate click** |
-| `Input.insertText` | `browser_type {ref, text, submit}` (value-setter + input/change, or `execCommand('insertText')`/InputEvent fallback) — **no focus-targeted insert** |
-| `Page.captureScreenshot` | `browser_screenshot {format: png|jpeg, quality}` via `captureVisibleTab` (viewport) — matches CDP semantics |
-| `Page.getFrameTree` | `webNavigation.getAllFrames` (already used for the `frame` param) + `browser_get_dom` `frames` list — bridge-side synthesis |
-| `Target.getTargets`/`createTarget`/`closeTarget` | bindings exist (sessionId→tabId) — **no "open new tab" / "close tab" tools** |
-| events | `tab_closed` / `tab_navigated` / `binding_changed` / `binding_removed` host notifications — **no `load` notification** (bridge can poll `readyState` instead) |
+| `page.goto` | `browser_navigate {url}` (absolute URL validated; `tab_navigated` host notification invalidates refs) |
+| `page.info` | `browser_get_page` |
+| `page.evaluate` (page world) | `browser_evaluate {expression, arg, frame}` — MAIN-world helper (real page globals), isolated-world fallback, 15 s deadline, JSON-safe `{value,error,world}`, 20 KB cap |
+| `page.snapshot` (AX) | `browser_get_accessibility_tree {maxNodes,maxDepth,frame}` — structured walker (roles, accessible names, **refs**, pruning, shadow-DOM traversal) — **serializes to a text outline today; we need the structured node list** |
+| `page.clickAt(x,y)` | `browser_click {ref}` (content `focus()+click()`), `browser_element_at {x,y}` → ref — **no atomic coordinate click** |
+| typing | `browser_type {ref,text,submit}` (value-setter + input/change; `execCommand('insertText')`/InputEvent fallback) — solid, ref-based |
+| `page.screenshot` | `browser_screenshot {format,quality}` via `captureVisibleTab` (viewport) — matches CDP semantics |
+| `page.waitFor` | `browser_wait_for {selector,state,timeoutMs}` (selector-based; predicate waiting is just an evaluate poll) |
+| `tabs.*` | bindings (sessionId→tabId) — **no open/close/list-tabs tools** |
+| frames | `frame` param (frameId or URL) on nine tools; `webNavigation.getAllFrames`; all-frames content scripts — strong |
+| events | `tab_closed`/`tab_navigated`/`binding_changed`/`binding_removed` host notifications — no load-event notification (readyState poll suffices) |
+| diagnostics | `browser_get_dom` (refs + stats/frames/note), `browser_get_console`, `browser_get_network`, `browser_get_selection` — beyond anything the SDK offers |
 
-The gap is small and mechanical: a handful of content-script commands and two
-tab tools. The *large* gap is the protocol: the SDK speaks CDP, we speak
-`browser_*` tools. The bridge's job is CDP ⇄ tool translation plus the CDP
-object model (numeric node ids ↔ our string refs, session ids, context ids).
-
----
-
-## 3. Options considered
-
-### Option A — CDP bridge inside the native host; SDK unmodified ✅ recommended
-
-A new module in `packages/pi-agent` (`src/browser-use/`) starts an opt-in
-WebSocket server on **127.0.0.1** with a per-startup random token
-(`ws://127.0.0.1:<port>/cdp/<token>`), writes `~/.pi/run/cdp-bridge.json`
-(0600: `{ port, token, pid, startedAt }`), and translates CDP commands into
-`x-pi-browser/tool` calls for a **bridge-owned ACP session** (created with the
-existing session/binding machinery; a tab bound to it, or a new tab opened by
-the bridge). The app then uses the SDK stock:
-
-```ts
-import { BrowserUse } from '@browser_use/pi';
-import { piBrowser } from '@pi-browser/client'; // new small package in this repo
-
-const agent = await BrowserUse.create({
-  model: 'openrouter/…',            // our pi model config / env keys
-  browser: await piBrowser(),       // → { cdpUrl: 'ws://127.0.0.1:PORT/cdp/TOKEN', targetId?: 'pi:bound' }
-  workspace: './work',
-  log: 'pretty',
-});
-```
-
-Pros:
-- Zero SDK modification; we track upstream releases as normal dependencies.
-- Reuses our entire existing pipeline per tool call: binding (sessionId→tabId),
-  timeouts, structured error codes, screenshot permission prompts (the bridge
-  session is a normal session — §38/§49 rules apply unchanged).
-- The bridge is a reusable asset: any CDP client (Playwright, Chrome-based
-  tooling, future `Browser.custom` upstream API) can target our Firefox later.
-- Fits "our addon and our pi instance": the model loop is the same Pi
-  (0.85.1, same registry/credentials as our host), the browser is ours.
-
-Cons:
-- Implements a CDP subset (~25–30 commands + ~6 events) with exact result
-  shapes; long tail returns `-32601` (the model copes — the prompt teaches
-  only the recipes we do support).
-- Deviation from security invariant 9 ("no localhost TCP port required"):
-  mitigated — opt-in (off by default; `PI_BROWSER_CDP_BRIDGE=1`), loopback
-  only, random token in the URL path, 0600 state file, same user. Needs an
-  explicit §49/§50 amendment (proposed wording below).
-- Node ≥ 22.19 requirement for the SDK worker (`BROWSER_USE_NODE` or PATH —
-  our env has 23.10.0; our host already requires it via undici 8.9.0).
-
-### Option B — fork `@browser_use/pi`, add a non-CDP transport
-
-Fork the SDK (MIT, ~4.5k lines), replace `CDP` with a `PiConnection` speaking
-our protocol over the broker UDS socket, add `kind: 'pi'` to `BrowserOptions`,
-extend `WorkerConfig` with a transport descriptor. No TCP anywhere (invariant 9
-stays intact). The worker would get our native primitives (refs, console,
-network) directly.
-
-Pros: no TCP, richest primitive surface, first-class errors.
-Cons: permanent fork maintenance (upstream is at 0.1.0 and moving fast —
-prompt/worker/policy churn); the worker is a forked child that only receives
-`WorkerConfig` — plumbing a UDS socket path there is a real patch; we re-derive
-upstream behavior tests against our fork; two codebases to keep in sync with
-the pi 0.85.x line.
-
-Verdict: only if (a) the TCP deviation is unacceptable even opt-in, or
-(b) we decide our product should *replace* the SDK rather than host it.
-
-### Option C — port the primitive layer into our own pi agent (no SDK)
-
-Skip `@browser_use/pi` entirely: add the persistent JS-REPL `javascript` tool
-(page/tabs/browser primitives over `browser_*` tools) to our ACP agent in the
-native host, porting the worker/realm/prompt design from the SDK (MIT) with
-attribution. "Our pi instance" then *is* the Browser Use-style agent.
-
-Pros: no CDP emulation, no fork, no TCP, full control of prompt/tools;
-deepens the existing product instead of adding an external driver.
-Cons: it is a port + permanent re-implementation of ~1k lines of
-deliberately-evolving upstream design (cells, compaction, finish/finish_from_js,
-checkpoint/partial, images pipeline); the user-facing deliverable of *this*
-task ("implement our own Browser **for** browser-use-pi") is not served; we
-lose upstream compatibility for free.
-
-Verdict: strong follow-up / possible end-state if the SDK integration
-proves constraining; note it here to decide once, not by drift.
-
-### Recommendation
-
-**Option A now.** It is the smallest surface that delivers the stated goal
-("use Browser Use to control our Firefox using our addon and our pi instance"),
-keeps the SDK stock, and concentrates all new logic in one testable module in
-our repo. Option C stays in the backlog; Option B only if the invariant 9
-amendment is rejected.
+Gap: **tab lifecycle tools** (open/close/list) + **structured a11y nodes**
+(+ optionally `rect`) + an **atomic coordinate click**. Small and mechanical.
+No new permissions needed.
 
 ---
 
-## 4. Bridge design (Option A)
+## 3. Option A — CDP bridge over a local TCP WebSocket — REJECTED
 
-### 4.1 Components
+Design was completed in the first revision of this doc (bridge in the native
+host, loopback + random token + 0600 state file, SDK stock via `{cdpUrl}`).
+Rejected 2026-09-14: **no CDP/TCP server at all.** It is also the only option
+that deviates from security invariant 9 (§49 "no localhost TCP port required"),
+which is now a non-issue: both surviving options stay entirely inside the
+existing UDS/native-messaging trust boundary.
+
+---
+
+## 4. Option C — the REPL becomes a tool of OUR pi agent (recommended)
+
+Port the SDK's worker/realm design into the native host so that **our ACP
+agent** gets a `javascript` tool: a persistent V8 REPL whose `page`/`tabs`
+primitives run through our existing browser-tool transport. "Our pi instance"
+then *is* the Browser-Use-style agent — model loop, session, sidebar,
+permissions, all ours; no fork, no network, no CDP.
+
+### 4.1 Shape
 
 ```text
-packages/pi-agent/src/browser-use/
-  cdp-bridge.ts     WS server (127.0.0.1, token path), JSON CDP dispatch,
-                    id/timeout bookkeeping, event emitter
-  commands.ts       CDP command → tool call mapper (pure, table-driven, unit-testable)
-  id-registry.ts    backendNodeId ⇄ ref map, sessionId map, executionContextId map
-  events.ts         tab_navigated/tab_closed/readyState-poll → CDP events
-  session-owner.ts  bridge session: session/new + bind (or open new tab),
-                    tool calls via the existing transport, teardown
-packages/pi-agent/src/native-host/main.ts   start bridge when PI_BROWSER_CDP_BRIDGE=1
-packages/pi-browser-client/                 new workspace: piBrowser() discovery helper
-firefox/…                                     new content commands + 2 tab tools (4.3)
+Firefox add-on  ◄── native messaging ──►  native host
+                                              ├─ ACP agent (pi 0.85.1, as today)
+                                              │    tools: browser_* , control, mail, …
+                                              │    + javascript { code, timeoutMs? }   ← new ToolSpec
+                                              └─ ReplRuntime (per ACP session)
+                                                   └─ forked ReplWorker child (Node, env {})
+                                                        ├─ V8 realm via node:inspector (same trick as the SDK)
+                                                        ├─ cells: one Runtime.evaluate per cell, output capture,
+                                                        │  redaction, image collection, 1 MB/16 KB limits
+                                                        ├─ realm globals: page, tabs, workspace, screenshot(),
+                                                        │  snapshot(), artifact(), checkpoint(), reconnect()
+                                                        └─ tool calls over IPC to the host
+                                                             host → existing transport → add-on → content scripts
 ```
 
-Discovery: host writes `~/.pi/run/cdp-bridge.json` (same 0700 run dir as the
-broker state; 0600). `piBrowser()` reads it and returns
-`{ cdpUrl, targetId }`; missing file → actionable error ("add-on host not
-running or bridge disabled").
+The ReplWorker is a **dumb JS sandbox** (exactly the SDK's own split): it
+cannot reach the network-protocol layer itself; every primitive becomes an
+IPC request `{type:'tool', tool, args}` answered by the host through the
+*existing* `BrowserToolTransport.call(sessionId, tool, args)`. Consequences:
 
-Session ownership: the bridge acts exactly like our e2e harness's client —
-it creates an ACP session and binds a tab via the existing control flow, then
-issues `x-pi-browser/tool` calls with that sessionId. It never prompts that
-session; teardown unbinds/closes bridge-opened tabs. (Design detail to nail in
-Phase 0: whether binding uses `pi_bind_current_tab` semantics or a new
-explicit `pi_bind_tab { tabId }` — the bridge must not hijack the user's
-active-tab binding.)
+- the host stays the only ACP client (no new broker client category);
+- screenshot permission prompts flow through the existing
+  `request_permission` → add-on UI path, unmodified;
+- binding rules (sessionId→tabId, no active-tab fallback) hold by construction;
+- cell timeout/cancellation = SIGKILL the child (same state-loss contract as
+  the SDK — a synchronous infinite loop dies, host survives).
 
-### 4.2 Command mapping (v1)
+### 4.2 Primitive → tool mapping (native shapes, no CDP emulation)
 
-| CDP (session) | bridge implementation |
+| primitive | implementation |
 |---|---|
-| `Target.getTargets` | bound target `{ targetId: 'pi:<tabId>', type:'page', url, title, attached:true }` (+ `openerId` chain for SDK-owned cleanup) |
-| `Target.createTarget {url}` | **new tool `browser_open_tab {url}`** → `{ targetId: 'pi:<tabId>' }`; bridge marks it owned (SDK closes owned targets at close — maps to `browser_close_tab`) |
-| `Target.attachToTarget {targetId, flatten}` | registry: `{ sessionId: 'sess-<n>' }`; emit `Target.attachedToTarget` |
-| `Target.detachFromTarget` / `closeTarget` | session cleanup / **new tool `browser_close_tab {tabId}`** → `{ success: true }` |
-| `Page.enable` / `Runtime.enable` | no-op `{}` |
-| `Page.navigate {url}` | `browser_navigate`; on success: start readyState poll (see events), return `{ frameId: targetId, loaderId: uuid }`; invalid URL → `{ errorText: '…' }` (SDK throws on errorText) |
-| `Runtime.evaluate {expression, …}` | `browser_evaluate {expression, frame? (via contextId)}` — the SDK already inlines function+JSON arg into the expression string, so it maps 1:1. Result → `{ result: { type, value } }`; `error` → `exceptionDetails: { text, exception: { description } }`. If the tab just navigated (context destroyed) the error text MUST contain `Execution context was destroyed` (feeds `page.waitFor`'s tolerance path). 20 KB result cap → CDP error `-32000 'result exceeded 20 KB; chunk the extraction'` (model self-corrects; large data belongs in workspace files) |
-| `Accessibility.getFullAXTree` | **new structured mode of the a11y walker** (today text-only): nodes → `{ ignored:false, backendDOMNodeId: idFor(ref), role:{value}, name:{value}, value?, properties:[…checked/pressed/selected/expanded/disabled] }`; `idFor(ref)` = stable numeric from registry (e.g. 1000+seq) |
-| `DOM.getBoxModel {backendNodeId}` | registry → ref → **new content cmd `pi:rect`** (getBoundingClientRect) → `{ model: { content: [x1,y1,…,x4,y4] } }` |
-| `DOM.scrollIntoViewIfNeeded` | **new content cmd `pi:scroll`** (scrollIntoView({block:'center'})) |
-| `DOM.focus` | **new content cmd `pi:focus`** |
-| `DOM.getNodeForLocation {x,y}` | `browser_element_at` → ref → `{ backendNodeId: idFor(ref) }` |
-| `DOM.setFileInputFiles {backendNodeId, files}` | **new content cmd `pi:setFiles`** (DataTransfer + File from base64 + change event; works in Firefox) |
-| `Input.dispatchMouseEvent` | coalesce moved+pressed+released (left) → **new content cmd `pi:clickAt {x,y}`** (elementFromPoint + focus + click, atomic in one content-script run — better than an element_at→click round trip); wheel/hover → best-effort `browser_evaluate` scroll/no-op |
-| `Input.insertText {text}` | **new content cmd `pi:typeFocused`** (reuse the proven `browser_type` typing path on `document.activeElement`) |
-| `Input.dispatchKeyEvent` (selectAll/backspace/copy/paste/cut) | **new content cmd `pi:key`** against `document.activeElement` (select()/deleteContent/backwards etc.) |
-| `Page.captureScreenshot {format, quality}` | `browser_screenshot` → `{ data }` (permission prompt applies — user sees it, by design) |
-| `Page.getFrameTree` | synthesize from `webNavigation.getAllFrames` (bridge owns the frame registry; frame ids = numeric frameIds as strings) |
-| `Page.createIsolatedWorld {frameId, worldName}` | registry: fake `executionContextId` ↔ frameId; then `Runtime.evaluate {contextId}` → `browser_evaluate {frame: frameId}` (our content-script world *is* the isolated world) |
-| `Emulation.setDeviceMetricsOverride` | no-op ack + one-time warning (desktop Firefox window not resized) |
-| `Browser.*`, `Fetch.*`, `Network.*`, anything else | CDP `-32601 { message: 'not implemented by pi-browser bridge: <method>' }` — except when `allowedDomains`/`prohibitedDomains` were configured: then **fail fast at create** ("domain policy needs Fetch interception, unsupported on pi-browser; run without domain policy") |
+| `page.goto(url)` | `browser_navigate`; then poll `browser_evaluate(() => document.readyState !== 'loading')`; return `{url,title}` from `browser_get_page` |
+| `page.info()` | `browser_get_page` |
+| `page.evaluate(fn, arg)` | `browser_evaluate` (fn + JSON arg — same inlining the SDK does); map our `{error}` into a thrown Error (and include `Execution context was destroyed` in the text on mid-navigation errors so `page.waitFor`'s tolerance path works) |
+| `page.waitFor(fn, arg, {timeoutMs})` | host/worker-side poll of `browser_evaluate` (100 ms), same tolerance regex as the SDK |
+| `page.snapshot()` / `snapshot()` | **structured a11y mode**: `{url,title,nodes:[{id: ref, role, name, value?, checked?, disabled?, expanded?, selected?, href?, type?, level?, rect?}]}` — our native shape with **refs as ids** (the agent learns refs, not backendNodeIds); budget flags `truncated`/`note` pass through |
+| `page.clickAt(x,y)` | **new `browser_click_at {x,y,frame?}`** → content cmd `pi:clickAt` (elementFromPoint + focus + click, atomic in one content-script run; result says what was hit — the "coordinates can hit an overlay" warning stays true) |
+| `page.click(ref)` / `page.type(ref, text, {submit})` | `browser_click` / `browser_type` (existing) — exposed as extra primitives; the ref recipe replaces the SDK's box-model recipe |
+| `page.typeFocused(text)` | `browser_type` on the active element — new content cmd `pi:typeFocused` (reuses the proven typing path) — or skip in v1 (agent focuses via `page.focus(ref)` = new `pi:focus`) |
+| `page.screenshot()` / `screenshot()` | `browser_screenshot {format:'jpeg', quality:70}` → image into the cell result (max 4 per cell, 8 MB — SDK's limits) |
+| `page.cdp(...)` | **absent by design** — replaced by the honest surface; unknown calls are a clear Error naming the closest primitive |
+| `tabs.list()` | **new `browser_list_tabs`** (open tabs: id, url, title, bound?) → `[{targetId:'tab:<id>', …}]` |
+| `tabs.open(url)` | **new `browser_open_tab {url}`** → child tab of the session; host tracks ownership; `page = await tabs.open(url)` rebinds the session's REPL page (the session's *primary* tab stays the bound one; opened tabs are REPL-owned and closed at session end — mirrors the SDK's owned-target cleanup) |
+| `tabs.get(id)` | attach (validate id; page handle switches) |
+| `page.close()` / close owned tabs at session end | **new `browser_close_tab {tabId}`** |
+| frames | `frame` param on the primitives (maps to the tool param); cross-origin frames already work via all-frames content scripts |
+| `artifact(name,data)` / `checkpoint(name,value,{partial})` | ported from the SDK worker (workspace files, atomic rename, partials over IPC) — per-session workspace dir |
+| `reconnect()` | reset the tool channel state (host-side: nothing to reconnect — the transport persists; the REPL clears page handles + ref registry note "inspect before acting") |
+| `finish` / `finish_from_js` | **not needed**: our ACP agent ends the turn naturally; the schema-validated delivery contract is a property of the SDK's standalone run, not of the tool. (Port later if we add structured run delivery.) |
 
-### 4.3 Add-on deltas (small, all content-script-level unless noted)
+Add-on deltas for C (all existing permissions):
 
-1. `pi:rect {ref}` → bounding box (or add `rect` to `browser_get_dom`/a11y nodes — prefer the dedicated cmd, keeps tool payloads lean).
-2. `pi:scroll {ref}`, `pi:focus {ref}`.
-3. `pi:typeFocused {text}` — refactor the existing `type()` body to accept a resolved element.
-4. `pi:clickAt {x,y}` — atomic hit-test + click (overlay behavior matches `browser_element_at` semantics; result says what was hit).
-5. `pi:key {key, commands?}` — selectAll/cut/copy/paste/backspace on `document.activeElement`.
-6. `pi:setFiles {ref, files:[{name, type, base64}]}`.
-7. a11y walker: structured node output mode (shared with the text outline; same walk, two serializers).
-8. (background, new protocol tools) `browser_open_tab {url}` → `{ tabId }`, `browser_close_tab {tabId}`.
-9. `browserToolVersion` 3 → 4; new tools into `BROWSER_TOOLS` + TypeBox schemas (sync test enforced).
+1. a11y walker: **structured nodes mode** (same walk as the text outline; add `rect` via getBoundingClientRect on matched nodes).
+2. `pi:clickAt {x,y}` content cmd (atomic hit-test + click).
+3. `pi:focus {ref}`, `pi:scroll {ref}` (cheap, used by the typing/visibility recipes).
+4. `pi:typeFocused {text}` (optional in v1).
+5. (background) `browser_open_tab {url}` → `{tabId}`, `browser_close_tab {tabId}`, `browser_list_tabs` → `{tabs}`.
+6. `browserToolVersion` 3 → 4; new tools into `BROWSER_TOOLS` + TypeBox (sync test).
 
-No new permissions: everything is in-page scripting on the bound tab plus
-`tabs.create/close` (covered by existing `tabs` permission).
+### 4.3 The `javascript` ToolSpec
 
-### 4.4 Events the bridge emits
+```ts
+// packages/protocol: name "javascript", readOnly: false
+{ name: "javascript",
+  description: "Persistent JavaScript REPL for the bound tab: top-level await,
+    variables and functions survive calls. Primitives: page.goto/info/evaluate/
+    waitFor/snapshot/click/clickAt/type/focus/screenshot, tabs.list/open/get,
+    artifact/checkpoint/reconnect. … (recipe text, ref-based)",
+  parameters: Type.Object({ code: Type.String(),
+    timeoutMs: Type.Optional(Type.Number()) }),
+  execute: (id, args, signal) => replRuntime.call(sessionId, args, signal) }
+```
 
-| CDP event | source |
-|---|---|
-| `Page.frameNavigated { frame: { id, url } }` | `tab_navigated` host notification (status 'loading'/url change) |
-| `Page.loadEventFired` | bridge-side poll after navigate: `browser_evaluate` until `document.readyState === 'complete'` (no add-on change needed) |
-| `Runtime.executionContextDestroyed` | on `tab_navigated` (so `page.waitFor` across navigation keeps working) |
-| `Target.attachedToTarget` / `detachedFromTarget` | bridge attach/detach |
-| `Target.targetDestroyed` | `tab_closed` |
+`execute` returns `BackendToolResult` with `content: [text, …images]` (our
+`BackendToolResult` already carries images; ACP `promptCapabilities.image`
+is already true) — screenshots in the REPL flow to both the model and the
+sidebar like `browser_screenshot` does today.
 
-### 4.5 Fidelity notes (to document in the bridge README + PRODUCT.md)
+Session lifecycle: one ReplRuntime per ACP session, created lazily on first
+cell; killed on session close; on `binding_changed`/`binding_removed` the
+host invalidates page handles + ref registry and injects a note into the next
+cell's preamble ("binding changed: inspect page before acting"); a session
+with no bound tab gets a structured `BROWSER_NOT_BOUND` error.
 
-- Input is **untrusted** (content-script dispatch), not CDP's trusted input:
-  equivalent for ~all web content; sites inspecting `event.isTrusted`
-  (some CAPTCHAs/payments) will differ — same class of limitation our
-  existing `browser_click` has.
-- `Runtime.evaluate` runs in the page world via the MAIN-world helper (real
-  page globals) with isolated-world fallback; 20 KB result cap (see 4.2).
-- AX tree is our walker's approximation (roles/names/properties), not Chrome's
-  AX pipeline; `backendDOMNodeId` values are bridge-assigned, valid until
-  navigation (same invalidation as our refs; `tab_navigated` clears the
-  registry).
-- Screenshots are viewport (`captureVisibleTab`) — matches CDP default.
-- Cross-origin iframe *targets* (attach on `type:'iframe'`) are v2; in-process
-  and cross-origin *frames* via `frame`-param commands are v1 (the content
-  scripts already run in all frames).
-- v1 non-goals: `Fetch` domain policy, recording/screencast, downloads
-  (`Browser.setDownloadBehavior` — check `browser.downloads` availability in
-  FF MV3 first), `Page.createIsolatedWorld` for main frame beyond 4.2's shim.
+Prompt strategy: the tool *description* carries the primitive recipes (adapt
+from `src/prompt.ts`, ref-based instead of box-model-based); the existing
+`browser_*` tools remain available alongside — hybrid surface, agent picks per
+step (REPL for multi-step scripting/stateful extraction; single tool calls for
+one-offs). The SDK prompt's guardrails copy over almost verbatim (page content
+is untrusted; verify outcomes; don't replay uncertain mutations; large data to
+workspace files).
+
+### 4.4 What we deliberately do NOT port in v1
+
+- `fetch` domain policy, recording/screencast, `highlightActions`,
+  `sensitiveData`/`fillSecret` (all CDP-specific or Chrome-specific; revisit).
+- `require` in the realm: the SDK allows Node libraries in cells. For v1 give
+  the realm the curated globals (page/tabs/fetch/Buffer/URL/…) **without**
+  `require` (smaller trust surface inside our host); revisit if the workflow
+  needs it — the SDK's "worker is not a sandbox" disclosure applies either way.
 
 ---
 
-## 5. Security analysis vs PRODUCT.md §49
+## 5. Option B — fork `@browser_use/pi`, broker-UDS transport (fallback)
 
-| invariant | impact |
+Run the **actual** `@browser_use/pi` agent (its exact prompt, cell machinery,
+history format, future features) with `browser: Browser.pi()`, where the fork's
+worker talks to us over the **broker Unix socket** instead of a CDP endpoint.
+Verified feasible: the broker's handshake admits any same-user process as a
+full ACP client (the Thunderbird relay does exactly this today; e2e even
+covers relay re-attach and lifecycle).
+
+### 5.1 Shape
+
+```text
+user app
+└─ BrowserUse.create({ model, browser: Browser.pi(), workspace })
+   ├─ model loop (SDK, in the app process)
+   └─ worker (forked, env {})
+      ├─ V8 realm + cells            (SDK, unmodified behavior)
+      ├─ PiConnection                (fork: drop-in for CDP — same method
+      │    send(method, params, sessionId?) / waitFor / close / observers)
+      │    = CDP-shaped adapter over:
+      └─ broker UDS: connect ~/.pi/run/agent-broker.sock
+           → frame {type: PI_BROKER.handshake, token}   (token from 0600 state file)
+           → {type: handshakeAck} → full ACP client channel (native framing)
+           → initialize (piBrowser meta) → session/new → bind tab
+           → x-pi-browser/tool calls (CDP method → tool, table below)
+           → request_permission round-trips for screenshots (add-on UI)
+           → tab_navigated/tab_closed/binding_* notifications
+```
+
+### 5.2 Fork surface (what changes in the SDK)
+
+| file | change |
 |---|---|
-| 1. allowed_extensions = production id | unchanged (no new native host) |
-| 2. native stdout = protocol data only | unchanged |
-| 3. page content untrusted | unchanged — bridge never executes page code outside the content scripts; CDP errors/results pass through our normal sanitization paths |
-| 4. page cannot initiate ACP prompt | unchanged |
-| 5. tools target explicit session-bound tabs | unchanged — bridge session is bound like any other; no active-tab fallback |
-| 6–8. Pi owns execution; schemas; bounded inputs | unchanged — every CDP command lands as a schema-validated tool call |
-| **9. no localhost TCP port required** | **deviation, opt-in**: loopback-only listener, random token in URL path, 0600 state file, enabled only via `PI_BROWSER_CDP_BRIDGE=1`. Core product path (native messaging) still needs no TCP. Proposed amendment wording: *"9. No localhost TCP port is required for the core path. The opt-in Browser Use CDP bridge listens on 127.0.0.1 only, with a per-startup random token and a 0600 state file; it is disabled by default."* |
-| 10. no separately downloaded bridge | unchanged (bridge ships in the existing host package) |
+| `src/browser.ts` | `kind:'pi'` option; `openBrowser` returns `{endpoint:'pi://…', close}` (close = broker-client teardown, not browser kill) |
+| `src/protocol.ts` | `WorkerConfig.transport?: {kind:'pi', socketPath?}` (socketPath optional: default `~/.pi/run`; token read by the worker from the 0600 state file — config travels over fork IPC, never argv/env, same as `endpoint` today) |
+| `src/pi-connection.ts` (new) | `PiConnection` implementing the exact `CDP` method surface the worker/Page/Tabs/policy/highlight use: `send`, `waitFor`, `close`, `lazy`, `observeCommand/observeResponse/observeEvent`, `targetForSession`, `observationTargetId`, `activity` bookkeeping (session↔target, frame parents) |
+| `src/worker.ts` | select `PiConnection` vs `CDP` from `config.transport`; `reconnect()` re-creates it |
+| `src/runtime.ts` | host-side close cleanup: replace the `CDP.connect` owned-target sweep with `PiConnection`'s (same getTargets/closeTarget semantics) |
+| `src/policy.ts` | `Fetch.*` interception unsupported → **fail fast at create** when `allowedDomains`/`prohibitedDomains` are set (clear error) |
+| `src/highlight.ts` | map onto `DOM.getNodeForLocation`→`browser_element_at`, `resolveNode/callFunctionOn`→ new content cmd `pi:evalRef {ref, functionDeclaration}` (element-targeted evaluate) — or disable with a warning |
+| `src/recording.ts` | unsupported → the SDK already degrades gracefully (warning event) |
 
-Additional risk: the SDK's JS worker is by design **not** a sandbox (agent
-code can `require`/`fetch`/write its workspace; `researchTools` adds read/
-write/edit/bash). That is the SDK's stated contract, and our invariant 6
-(Firefox cannot invoke shell commands) is not touched — the worker runs in
-the user's app process, outside the add-on. Document for users enabling this.
+### 5.3 CDP-shaped mapping (the fork keeps the SDK's CDP semantics)
+
+Same translation core as the rejected Option A, but the response **shapes stay
+CDP** (`backendDOMNodeId`, `AXNode`, `model.content[8]`, `exceptionDetails`…)
+because the unmodified SDK worker consumes them. Concretely: numeric node-id
+registry (ref↔id), `Accessibility.getFullAXTree` from the structured a11y mode,
+`DOM.getBoxModel/scrollIntoViewIfNeeded/focus/getNodeForLocation` from
+`rect`/`pi:scroll`/`pi:focus`/`browser_element_at`, `Input.dispatchMouseEvent`
+triple → `browser_click_at`, `Input.insertText` → `pi:typeFocused`,
+`Input.dispatchKeyEvent` → `pi:key`, `Page.navigate` → `browser_navigate`
+(+readyState poll → `Page.loadEventFired`, `tab_navigated` →
+`Page.frameNavigated` + `Runtime.executionContextDestroyed`), `Page.captureScreenshot`
+→ `browser_screenshot`, `Target.*` → tab tools + session registry,
+`Page.createIsolatedWorld{frameId}` → contextId registry → `browser_evaluate{frame}`.
+Long tail → CDP error `-32601 'not implemented by pi-browser: <method>'`.
+
+Add-on deltas: the Option-A set (structured a11y, `pi:rect`/`pi:scroll`/
+`pi:focus`/`pi:typeFocused`/`pi:clickAt`/`pi:key`/`pi:setFiles`,
+`browser_open_tab`/`browser_close_tab`) — **larger than C's**, because CDP
+shapes force the ref↔id indirection and the CDP-shaped commands.
+
+### 5.4 Protocol addition: client roles
+
+Today the broker treats every authenticated relay as an app host (Firefox /
+Thunderbird). The REPL worker would be a **third client category**. Add an
+optional role to the handshake: `{type: handshake, token, role?: 'repl-worker'}`
+— the broker tags the client and can restrict its advertised capability surface
+(browser tools only; no mail/compose/contacts; no creating sessions that other
+apps see in listings). Same token auth, same 0600/0700 files; no new network
+surface.
+
+### 5.5 Costs specific to B
+
+- Permanent fork maintenance of a 0.1.0 package that ships fast (prompt,
+  worker, compaction, image pipeline churn) — every upstream release is a
+  re-merge against our seam.
+- The worker becomes an ACP client: it must implement `initialize`/hello,
+  session lifecycle, notification handling, and the permission round-trip —
+  i.e. a slim re-implementation of our host's client side, in the fork.
+- Two codebases in flight (fork + repo) with the mapping duplicated between
+  them (fork's PiConnection vs. repo's add-on deltas).
+- The app process (user's) holds the broker token path; every `BrowserUse`
+  instance spawns a worker that opens a broker client — fine, but it is a new
+  consumer profile the broker has not had (mitigated by 5.4 role tagging).
 
 ---
 
-## 6. Implementation plan
+## 6. B vs C — decision
 
-### Phase 0 — spike (0.5–1 day)
-Hand-rolled CDP WS stub (~150 lines) implementing just: getTargets,
-attachToTarget, Page.enable, Runtime.enable, Page.navigate, Runtime.evaluate,
-Accessibility.getFullAXTree, Input.dispatchMouseEvent, Page.captureScreenshot —
-backed by the **existing e2e FakeTabs + real McpServer** from `tests/`.
-Install `@browser_use/pi` as a devDependency of `tests/`; supply a fake
-`models` collection whose `streamSimple` emits scripted `javascript` cells
-(`await page.goto('…'); page.info(); page.snapshot()`) then `finish`.
-**Exit criteria**: unmodified SDK completes a run end-to-end against the stub;
-worker cells, screenshots-as-images and finish delivery all observable.
-This de-risks everything (WS contract, worker bootstrap on Node 23,
-`BROWSER_USE_NODE`, model injection) before writing the real bridge.
+| dimension | C (in-product REPL) | B (SDK fork) |
+|---|---|---|
+| no CDP/TCP (owner constraint) | ✅ none | ✅ none (UDS) |
+| invariant 9 & security surface | ✅ zero deviation; host stays sole ACP client | ✅ no TCP; + new broker client role, token exposure to app/worker |
+| product fit | the capability **is** our product: every pi session (sidebar) gets Browser-Use-style scripting; diagnostics (console/network) already there | a third-party agent app uses our stack as a backend |
+| "our pi instance" | literally: the ACP agent is the model loop | the SDK's own pi (in the app process) is the loop; our pi instance = tool executor |
+| SDK identity / evals / history format | ✗ we run our agent (same design, our prompt) | ✅ the real `@browser_use/pi` |
+| maintenance | one-time ~1 k-line port (MIT, attributed) into our repo, our test pyramid; upstream = reference | permanent fork re-merges of a fast-moving 0.1.0 |
+| add-on deltas | small (structured a11y+rect, clickAt, focus/scroll, typeFocused?, open/close/list tabs) | larger (same + CDP-shape commands: key, setFiles, evalRef, rect-by-id) |
+| e2e testability | direct: `PI_BROWSER_MOCK_SCRIPT` already scripts tool calls — a scripted model can drive `javascript` cells through the real host today's harness style | needs broker-third-client e2e + the SDK as a test dependency + scripted `models` collection |
+| effort (v1) | ~2 weeks | ~2.5–3 weeks + ongoing |
+| future upstream seam | irrelevant | if upstream ever adds a non-CDP transport, the fork pain ends |
 
-### Phase 1 — bridge core (3–5 days)
-`cdp-bridge.ts` + `commands.ts` + `id-registry.ts` + session-owner; full
-4.2 core rows (navigate/evaluate/a11y-structured/boxmodel+rect/scroll/focus/
-clickAt/typeFocused/key/screenshot/getFrameTree); tab tools `browser_open_tab`
-/ `browser_close_tab`; a11y structured mode; state file + `piBrowser()`
-helper package. Unit tests for the command mapper (pure table); e2e extended
-to drive the **real SDK** (scripted model) against the **real host + bridge**
-over the fake add-on.
+**Recommendation: C.** It satisfies the constraint with the smallest surface,
+fits the product (the sidebar agent *gains* the capability instead of our
+stack becoming a backend for a driver app), and is fully inside our test
+pyramid. **B is the fallback if "the actual `@browser_use/pi` agent"
+matters** — e.g. we want to run their evals/benchmarks/history against our
+Firefox, or we expect to adopt upstream releases as-is. The decision question
+is one: *do we need SDK identity (evals/history/prompt fidelity), or the
+capability inside our sessions?* Answer "capability" → C. Answer "identity" → B.
 
-### Phase 2 — prompt-recipe surface (2–3 days)
-`pi:setFiles`, cross-origin frame param paths, `createIsolatedWorld`/
-contextId shim, `Emulation` no-op, event set (4.4), error-shape fidelity
-(`Execution context was destroyed`), 20 KB cap error, policy fail-fast.
-Live-Firefox pass on the SDK's own quickstart task ("Find the top story on
-Hacker News") — recorded in `docs/VERIFICATION.md` per our usual table.
+Note the two are not mutually exclusive long-term: C's mapping layer
+(primitive→tool) and B's (CDP→tool) share ~70% of the add-on deltas; starting
+with C keeps B cheap to bolt on later (the fork would reuse our
+`pi:clickAt`/structured-a11y/tab tools).
+
+---
+
+## 7. Security analysis (both options)
+
+| invariant (§49) | C | B |
+|---|---|---|
+| 1 allowed_extensions; 2 stdout protocol-only; 10 no separate bridge | ✅ unchanged | ✅ unchanged |
+| 3 page content untrusted | ✅ cells execute page data only via content-script results (same as today's tools) | ✅ same |
+| 4 page cannot initiate ACP prompt | ✅ | ✅ |
+| 5 explicit session-bound tabs | ✅ by construction (ReplRuntime is per-session) | ✅ worker owns one session, bound explicitly; + role tagging (5.4) keeps its surface browser-only |
+| 6–8 Pi owns execution / schemas / bounded inputs | ✅ `javascript` is a schema'd tool; cells bounded by timeout + child kill | ✅ same + SDK's own worker sandbox caveats apply (agent code can `require`/`fetch` in the app's worker — SDK-stated contract; document for users) |
+| 9 no localhost TCP | ✅ | ✅ (UDS only) |
+
+New disclosure for C's README/PRODUCT.md: the REPL cell runs in a child
+process with Node globals (minus `require` in v1) and a per-session workspace
+directory — same class as the SDK's worker ("not a security sandbox"), now
+inside our host.
+
+---
+
+## 8. Implementation plan (Option C; B fallback in parens)
+
+### Phase 0 — REPL child prototype (0.5–1 day)
+Bare ReplWorker child (node:inspector realm, one cell, curated globals) +
+host-side runtime (spawn/IPC/timeout-kill) + a stub tool backend.
+**Exit**: a cell with top-level await + `require`-less globals + synchronous
+infinite loop killed by timeout without killing the host; state persists
+across cells. (B: instead, prove a broker third-client handshake from a
+standalone script — ~1 h.)
+
+### Phase 1 — `javascript` tool end-to-end (4–6 days)
+Protocol: `javascript` ToolSpec + `browserToolVersion` bump. Host: ReplRuntime
+per session (port of `src/runtime.ts` cell discipline: one cell at a time,
+output file, 1 MB capture, maxOutputChars, redaction, images ≤4/8 MB, partials).
+Worker: port of `src/worker.ts` realm/output/`artifact`/`checkpoint`/
+`reconnect` (~350 lines, MIT attribution in header) with `page/tabs` stubbed
+to IPC tool calls. Tests: unit (runtime cell discipline), e2e through the real
+host with the mock backend scripting `javascript` cells (`PI_BROWSER_MOCK_SCRIPT`)
+against the fake add-on.
+
+### Phase 2 — primitives + add-on deltas (4–5 days)
+`page.*`/`tabs.*` per §4.2; add-on: structured a11y nodes (+rect),
+`pi:clickAt`/`pi:focus`/`pi:scroll`/`pi:typeFocused`, `browser_open_tab`/
+`browser_close_tab`/`browser_list_tabs`; tool description with ref-based
+recipes (adapted from the SDK prompt, incl. its guardrail paragraphs).
+Live-Firefox pass: "scrape + interact across a multi-step flow using the
+javascript tool", recorded in `docs/VERIFICATION.md`.
 
 ### Phase 3 — hardening + docs (2–3 days)
-`reconnect()` semantics (registry reset, re-attach), owned-target cleanup at
-SDK close, multi-cell concurrency is already serialized by the SDK (verify),
-timeout matrix (operationTimeoutMs vs our tool timeouts), PRODUCT.md section
-(§50 amendment + new §"Browser Use CDP bridge"), README quickstart,
-VERIFICATION.md live table, e2e stability (flaky-timer audit).
+rebind/unbind handling + stale-handle notes; timeout matrix; multi-session
+isolation (two REPLs, two tabs, A/B test); cancellation; image pipeline caps;
+workspace dir lifecycle; PRODUCT.md section (new §"Browser-Use-style REPL" +
+§50 entry) and README quickstart; VERIFICATION.md live table.
 
-**Total: ~2 weeks to a solid v1** (one engineer, parallelizing with live
-Firefox verification as the long pole — the usual pattern).
+**Total ≈ 2 weeks to v1.** (B fallback: Phase 0 handshake proof → fork plumbing
+(browser.ts/protocol.ts/runtime.ts/worker.ts) → `pi-connection.ts` with the
+§5.3 mapping → broker role tagging → add-on deltas (A-set) → e2e with the real
+SDK + scripted `models` collection → live pass. ≈ 2.5–3 weeks + fork upkeep.)
 
-### Tests (mirrors docs/VERIFICATION.md structure)
+### Test pyramid (C)
 
 | layer | evidence |
 |---|---|
-| command mapper (pure) | unit: each CDP row → exact tool call + result/error shape |
-| id/session registries | unit: ref⇄id stability across navigations, contextId⇄frame, detach cleanup |
-| host e2e (fake add-on, real host+bridge, **real SDK + scripted model**) | run/followUp/finish, screenshot image in agent_event, owned-target cleanup, policy fail-fast |
-| live Firefox | quickstart task + typing/upload/iframe/console follow-ups; VERIFICATION.md session ids |
+| ReplRuntime (cell discipline, kill-on-timeout, redaction, image caps) | unit, node:test |
+| `javascript` ToolSpec + session binding (no tab → structured error; rebind invalidation) | unit + addon.test.ts style |
+| add-on: structured a11y shape, clickAt atomicity, tab tools | smoke-content-dom.mjs style (real bundles) + dispatcher tests |
+| e2e: scripted model drives `javascript` cells through the real host + fake add-on (navigate → evaluate → screenshot image in result → checkpoint file) | tests/src/e2e.test.mjs extension |
+| live Firefox | quickstart-style task + multi-step flow; VERIFICATION.md session ids |
 
 ---
 
-## 7. Open questions
+## 9. Open questions
 
-1. **Binding UX**: does the bridge bind the *current* tab (user intent:
-   "control what I'm looking at") or always open its own tab (clean
-   isolation)? Recommendation: bind current tab by default, `browser_open_tab`
-   for SDK `tabs.open` calls; make it a `piBrowser({ tab: 'current' | 'new' })`
-   option. Needs one control-tool addition (`pi_bind_tab {tabId}`) if we
-   don't want to touch the active-tab concept.
-2. **Bridge enablement**: default-on while host runs vs env-flag. Flag wins
-   for invariant 9 optics; default-on is friendlier. Decide at Phase 1.
-3. **20 KB evaluate cap**: raise the cap on bridge-scoped calls (param) or
-   keep + chunk. Leaning: keep, error message teaches chunking.
-4. **Upstream**: propose (or wait for) an official `Browser.custom({ connect })`
-   / `kind:'cdp-proxy'` seam in browser-use-pi — if accepted, the bridge
-   plugs in unchanged and the state-file helper can move upstream-adjacent.
-   The `cdpUrl` path works today regardless; this is hygiene, not a blocker.
-5. **Node pinning**: SDK worker needs ≥22.19 (undici 8.9.0). Our test env
-   already runs 23.10.0; document `BROWSER_USE_NODE` in the quickstart.
-6. **`targetId` pre-attach**: pass the bound tab's id from `piBrowser()` so
-   the worker's first `page.*` hits the bound tab without a `tabs.open`
-   round trip (verify against worker's `deferredPage` behavior in Phase 0).
+1. **C vs B identity call** (§6) — needs the owner's one-line answer:
+   capability in our sessions (C) vs. running the real SDK (B).
+   Default assumption in this plan: C.
+2. **`javascript` availability**: always (with `BROWSER_NOT_BOUND` errors) vs.
+   only when the session has a bound tab. Leaning: always — the tool can
+   explain what's missing; sessions often bind late.
+3. **Realm `require`**: v1 without (decided above); revisit on first real
+   workflow that needs libraries (the SDK allows it; our disclosure differs).
+4. **REPL-owned tabs**: `tabs.open` creates session-owned tabs closed at
+   session end (SDK parity) — confirm the add-on's tab-ownership model can
+   track "repl-owned" vs "user-bound" (a `store` flag in the binding store;
+   small).
+5. **Prompt placement**: tool description (always visible, costs tokens every
+   turn) vs. config-option/first-use preamble. Leaning: terse description +
+   full recipe on first call result (the SDK teaches in its system prompt;
+   we can teach in the first cell's preamble, cheaper).
+6. **Node pinning**: the ReplWorker child runs on the host's Node (already
+   ≥22.19 in our env — undici 8.9.0); no new requirement beyond the host's.
+   (B would document `BROWSER_USE_NODE` for the SDK worker instead.)
+7. **Upstream**: if we ever pick B, propose the non-CDP transport seam
+   (transport descriptor in WorkerConfig) upstream so the fork thins over time.
