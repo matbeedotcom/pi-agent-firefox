@@ -7,6 +7,9 @@ import {
   getBrowserTool,
   isBrowserTool,
   isMutatingBrowserTool,
+  REPL_TOOLS,
+  REPL_TOOL_NAMES,
+  isReplTool,
 } from "../src/browser-tools.js";
 import {
   CONTROL_TOOLS,
@@ -181,6 +184,20 @@ test("browser tool input schemas are JSON Schema objects", () => {
   }
 });
 
+test("repl tool registry: host-side javascript tool (never on the add-on surface)", () => {
+  assert.deepEqual([...REPL_TOOL_NAMES], ["javascript"]);
+  const js = REPL_TOOLS[0];
+  assert.equal(js.name, "javascript");
+  assert.equal(js.readOnly, false);
+  assert.equal(js.inputSchema.type, "object");
+  assert.equal(js.inputSchema.additionalProperties, false);
+  assert.deepEqual([...(js.inputSchema.required as string[])].sort(), ["code"]);
+  assert.ok(typeof js.description === "string" && js.description.length > 10);
+  assert.ok(isReplTool("javascript"));
+  assert.ok(!isReplTool("browser_click"));
+  assert.ok(!isBrowserTool("javascript"), "REPL tool stays out of the add-on tool surface");
+});
+
 test("error codes map to unique reserved JSON-RPC codes", () => {
   const numeric = [...PI_BROWSER_ERROR_CODES.values()];
   assert.equal(new Set(numeric).size, numeric.length);
@@ -201,7 +218,7 @@ test("integration metadata is stable and complete", () => {
   assert.equal(PI_BROWSER.nativeHost, "dev.pi.browser");
   assert.equal(PI_BROWSER.extensionId, "pi-agent-firefox@matbee.com");
   assert.equal(PI_BROWSER_META.protocolVersion, 2);
-  assert.equal(PI_BROWSER_META.browserToolVersion, 3);
+  assert.equal(PI_BROWSER_META.browserToolVersion, 4);
   assert.equal(X_PI_BROWSER.tool, "x-pi-browser/tool");
 });
 

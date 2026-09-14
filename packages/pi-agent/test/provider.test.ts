@@ -6,6 +6,8 @@ import { createMemoryTransportPair, type Dispatcher } from "../src/native-host/t
 import { CapabilityToolProvider, LegacyBrowserCallbackTransport, NativeMcpOverAcpTransport } from "../src/browser/provider.js";
 import {
   BROWSER_TOOLS,
+  REPL_TOOLS,
+  REPL_TOOL_NAMES,
   CLIENT_METHODS,
   COMPOSE_TOOL_NAMES,
   CONTACTS_TOOL_NAMES,
@@ -66,15 +68,18 @@ test("selectMode: legacy by default, mcp-acp when client declares acp server", (
   assert.equal(provider.selectMode([{ name: "firefox-browser", type: "acp", serverId: "s1" }]), "mcp-acp");
 });
 
-test("createTools: MCP-compatible browser tools (one per protocol tool)", () => {
+test("createTools: MCP-compatible browser tools (one per protocol tool) + host REPL tool", () => {
   const { provider } = setupFakeFirefox();
   const tools = provider.createTools({ id: "s1" }, "legacy");
-  assert.equal(tools.length, BROWSER_TOOLS.length);
+  assert.equal(tools.length, BROWSER_TOOLS.length + REPL_TOOLS.length);
   for (const tool of tools) {
     const def = BROWSER_TOOLS.find((d) => d.name === tool.name);
-    assert.ok(def, `tool ${tool.name} missing from protocol registry`);
-    assert.equal(tool.description, def.description);
+    const replDef = REPL_TOOLS.find((d) => d.name === tool.name);
+    assert.ok(def ?? replDef, `tool ${tool.name} missing from protocol registries`);
+    assert.equal(tool.description, (def ?? replDef)!.description);
   }
+  const js = tools.find((t) => t.name === "javascript");
+  assert.ok(js, "javascript REPL tool registered for browser sessions");
 });
 
 test("createTools: mail capability registers the read-only mail tools, no browser tools", () => {
@@ -89,11 +94,12 @@ test("createTools: mail capability registers the read-only mail tools, no browse
   assert.ok(tools.every((t) => t.name.startsWith("mail_")), "mail client gets only mail tools");
 });
 
-test("createTools: browser capability registers only browser tools (no mail)", () => {
+test("createTools: browser capability registers only browser + repl tools (no mail)", () => {
   const { provider } = setupFakeFirefox();
   const tools = provider.createTools({ id: "s1" }, "legacy", undefined, ["browser"]);
-  assert.equal(tools.length, BROWSER_TOOLS.length);
-  assert.ok(tools.every((t) => t.name.startsWith("browser_")), "browser client gets no mail tools");
+  assert.equal(tools.length, BROWSER_TOOLS.length + REPL_TOOLS.length);
+  const nonBrowser = tools.filter((t) => !t.name.startsWith("browser_")).map((t) => t.name);
+  assert.deepEqual(nonBrowser, [...REPL_TOOL_NAMES], "only the host REPL tools are non-browser_ named");
 });
 
 test("createTools: empty capabilities register no tools", () => {
@@ -101,13 +107,14 @@ test("createTools: empty capabilities register no tools", () => {
   assert.equal(provider.createTools({ id: "s1" }, "legacy", undefined, []).length, 0);
 });
 
-test("createTools: both capabilities register browser + mail tools", () => {
+test("createTools: both capabilities register browser + mail + repl tools", () => {
   const { provider } = setupFakeFirefox();
   const tools = provider.createTools({ id: "s1" }, "legacy", undefined, ["browser", "mail"]);
   const names = tools.map((t) => t.name);
-  assert.equal(names.length, BROWSER_TOOLS.length + MAIL_TOOLS.length);
+  assert.equal(names.length, BROWSER_TOOLS.length + MAIL_TOOLS.length + REPL_TOOLS.length);
   assert.ok(names.some((n) => n.startsWith("browser_")));
   assert.ok(names.some((n) => n.startsWith("mail_")));
+  assert.ok(names.includes("javascript"));
 });
 
 test("legacy transport: mail tool call round-trip over x-pi-browser/tool", async () => {
@@ -515,4 +522,177 @@ test("provider: x-pi-browser/notify is accepted without error", async () => {
   ff.provider.handleNotify({ sessionId: "s1", event: "tab_navigated", data: { url: "http://x" } });
   // No throw, no state requirement: nothing to assert beyond survival.
   assert.ok(true);
+});
+
+// ---------------------------------------------------------------------------
+// Host-side `javascript` REPL (BROWSER-USE-REPL-PLAN.md, Phase 1)
+// ---------------------------------------------------------------------------
+
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+interface ReplFake {
+  provider: CapabilityToolProvider;
+  behavior: {
+    error?: JsonRpcErrorObject;
+    byTool: Record<string, unknown>;
+  };
+  toolCalls: Array<{ sessionId: string; tool: string; args: unknown }>;
+}
+
+/** Fake add-on with per-tool controllable responses. */
+function setupReplFake(): ReplFake {
+  const { a, b } = createMemoryTransportPair(quiet, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet);
+  const behavior: ReplFake["behavior"] = {
+    byTool: {},
+  };
+  const toolCalls: ReplFake["toolCalls"] = [];
+  a.transport.onRequest = (method, params, id) => {
+    if (method === X_PI_BROWSER.tool) {
+      const p = params as { sessionId: string; tool: string; arguments: unknown };
+      toolCalls.push({ sessionId: p.sessionId, tool: p.tool, args: p.arguments });
+      if (behavior.error) {
+        a.transport.respondError(id, behavior.error);
+      } else if (behavior.byTool[p.tool] !== undefined) {
+        const custom = behavior.byTool[p.tool];
+        if (typeof custom === "object" && custom !== null && "content" in custom) {
+          a.transport.respond(id, custom as { content: unknown[] });
+        } else {
+          a.transport.respond(id, { content: [{ type: "text", text: JSON.stringify(custom) }] });
+        }
+      } else {
+        a.transport.respond(id, {
+          content: [{ type: "text", text: JSON.stringify({ url: "https://example.test/", title: "Fake Page" }) }],
+        });
+      }
+      return;
+    }
+    if (method === CLIENT_METHODS.session_request_permission) {
+      // The fake "user" auto-approves (like the e2e harness default).
+      a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
+      return;
+    }
+    a.transport.respondError(id, { code: -32601, message: `fake firefox: unknown ${method}` });
+  };
+  return { provider, behavior, toolCalls };
+}
+
+async function replSession(fake: ReplFake, sessionId: string) {
+  const idRef = { id: sessionId };
+  const tools = fake.provider.createTools(idRef, "legacy", undefined, ["browser"]);
+  const js = tools.find((t) => t.name === "javascript");
+  assert.ok(js, "javascript tool registered");
+  return js;
+}
+
+test("javascript: no bound tab surfaces BROWSER_NOT_BOUND as a cell error (not a throw)", async () => {
+  const fake = setupReplFake();
+  const ws = await mkdtemp(path.join(tmpdir(), "pi-repl-prov-"));
+  process.env.PI_BROWSER_REPL_DIR = ws;
+  try {
+    fake.behavior.error = toErrorObject(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "session s-nb has no bound tab");
+    const js = await replSession(fake, "s-nb");
+    const result = await js.execute("tc", { code: "await page.info()" }, undefined);
+    const text = result.content.map((c) => (c.type === "text" ? c.text : "")).join("\n");
+    assert.match(text, /BROWSER_NOT_BOUND: session s-nb has no bound tab/);
+    assert.ok(!("message" in (result as object)), "cell outcome is content, not a thrown error");
+    await fake.provider.disposeSession("s-nb");
+  } finally {
+    delete process.env.PI_BROWSER_REPL_DIR;
+    await rm(ws, { recursive: true, force: true });
+  }
+});
+
+test("javascript: lazy runtime, state persists, workspace 0700", async () => {
+  const fake = setupReplFake();
+  const ws = await mkdtemp(path.join(tmpdir(), "pi-repl-prov-"));
+  process.env.PI_BROWSER_REPL_DIR = ws;
+  try {
+    const js = await replSession(fake, "s-lazy");
+    assert.equal(fake.provider.childPidFor("s-lazy"), undefined, "no child before the first cell");
+    await js.execute("tc1", { code: "x = 41;" }, undefined);
+    assert.ok(typeof fake.provider.childPidFor("s-lazy") === "number", "child started on first cell");
+    assert.equal(fake.toolCalls.length, 0, "cell without page.* touches no browser tool");
+    const second = await js.execute("tc2", { code: "x + 1" }, undefined);
+    const text = second.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+    assert.match(text, /42/);
+    const st = await stat(path.join(ws, "s-lazy"));
+    assert.equal(st.mode & 0o777, 0o700, "per-session workspace is 0700");
+    await fake.provider.disposeSession("s-lazy");
+    assert.equal(fake.provider.childPidFor("s-lazy"), undefined, "dispose reaps the child");
+  } finally {
+    delete process.env.PI_BROWSER_REPL_DIR;
+    await rm(ws, { recursive: true, force: true });
+  }
+});
+
+test("javascript: page.info() round-trips; screenshot in a cell attaches an image", async () => {
+  const fake = setupReplFake();
+  const ws = await mkdtemp(path.join(tmpdir(), "pi-repl-prov-"));
+  process.env.PI_BROWSER_REPL_DIR = ws;
+  try {
+    const js = await replSession(fake, "s-rt");
+    const info = await js.execute("tc", { code: "const i = await page.info(); i.title" }, undefined);
+    const text = info.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+    assert.match(text, /Fake Page/);
+    assert.equal(fake.toolCalls.length, 1);
+    assert.equal(fake.toolCalls[0].tool, "browser_get_page");
+    assert.equal(fake.toolCalls[0].sessionId, "s-rt");
+    // Screenshot: the add-on returns a single image part; the cell result must
+    // carry it as image content.
+    fake.behavior.byTool.browser_screenshot = {
+      content: [{ type: "image", data: Buffer.from("jpeg").toString("base64"), mimeType: "image/jpeg" }],
+    };
+    const shot = await js.execute("tc2", { code: "await screenshot()" }, undefined);
+    assert.ok(shot.content.some((c) => c.type === "image" && c.mimeType === "image/jpeg"), "image content attached");
+    await fake.provider.disposeSession("s-rt");
+  } finally {
+    delete process.env.PI_BROWSER_REPL_DIR;
+    await rm(ws, { recursive: true, force: true });
+  }
+});
+
+test("javascript: binding_changed notifies the next cell with an inspect-first note", async () => {
+  const fake = setupReplFake();
+  const ws = await mkdtemp(path.join(tmpdir(), "pi-repl-prov-"));
+  process.env.PI_BROWSER_REPL_DIR = ws;
+  try {
+    const js = await replSession(fake, "s-ntf");
+    await js.execute("tc1", { code: "'before'" }, undefined);
+    fake.provider.handleNotify({ sessionId: "s-ntf", event: "binding_changed", data: { tabId: 2 } });
+    const after = await js.execute("tc2", { code: "'after'" }, undefined);
+    const text = after.content.map((c) => (c.type === "text" ? c.text : "")).join("\n");
+    assert.match(text, /\[repl\] The session's tab binding changed/);
+    const again = await js.execute("tc3", { code: "'again'" }, undefined);
+    const text2 = again.content.map((c) => (c.type === "text" ? c.text : "")).join("\n");
+    assert.doesNotMatch(text2, /\[repl\] The session's tab binding changed/);
+    await fake.provider.disposeSession("s-ntf");
+  } finally {
+    delete process.env.PI_BROWSER_REPL_DIR;
+    await rm(ws, { recursive: true, force: true });
+  }
+});
+
+test("javascript: cell timeout kills the child; the tool reports a reset, host survives", async () => {
+  const fake = setupReplFake();
+  const ws = await mkdtemp(path.join(tmpdir(), "pi-repl-prov-"));
+  process.env.PI_BROWSER_REPL_DIR = ws;
+  try {
+    const js = await replSession(fake, "s-to");
+    const res = await js.execute("tc", { code: "for (;;) {}", timeoutMs: 1500 }, undefined);
+    const text = res.content.map((c) => (c.type === "text" ? c.text : "")).join("\n");
+    assert.match(text, /cell aborted/);
+    assert.match(text, /exceeded 1500 ms/);
+    assert.match(text, /state was reset/i);
+    // Next cell runs fresh on a new child.
+    const next = await js.execute("tc2", { code: "'fresh'" }, undefined);
+    const text2 = next.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+    assert.match(text2, /fresh/);
+    await fake.provider.disposeSession("s-to");
+  } finally {
+    delete process.env.PI_BROWSER_REPL_DIR;
+    await rm(ws, { recursive: true, force: true });
+  }
 });

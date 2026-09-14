@@ -8,8 +8,9 @@ import {
   COMPOSE_TOOLS,
   MAIL_MUTATION_TOOLS,
   CONTACTS_TOOLS,
+  REPL_TOOLS,
 } from "@pi-browser/protocol";
-import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS } from "../src/browser/schemas.js";
+import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS, REPL_TOOL_SCHEMAS } from "../src/browser/schemas.js";
 import { MAIL_TOOL_SCHEMAS } from "../src/mail/schemas.js";
 import { COMPOSE_TOOL_SCHEMAS } from "../src/compose/schemas.js";
 import { MAIL_MUTATION_TOOL_SCHEMAS } from "../src/mutation/schemas.js";
@@ -106,5 +107,6 @@ test("TypeBox schemas match the protocol JSON schemas", () => {
   allDiffs.push(...checkSync(COMPOSE_TOOLS, COMPOSE_TOOL_SCHEMAS, "compose tools"));
   allDiffs.push(...checkSync(MAIL_MUTATION_TOOLS, MAIL_MUTATION_TOOL_SCHEMAS, "mail mutation tools"));
   allDiffs.push(...checkSync(CONTACTS_TOOLS, CONTACTS_TOOL_SCHEMAS, "contacts tools"));
+  allDiffs.push(...checkSync(REPL_TOOLS, REPL_TOOL_SCHEMAS, "repl tools"));
   assert.deepEqual(allDiffs, [], allDiffs.join("\n"));
 });

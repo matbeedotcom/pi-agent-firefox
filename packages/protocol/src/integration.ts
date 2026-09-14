@@ -27,8 +27,12 @@ export const PI_BROWSER = {
    * v3 = 2026-09-12: frame targeting (optional `frame` parameter on the nine
    * content-frame tools), browser_get_dom now traverses open shadow roots and
    * reports iframes/stats; new BROWSER_FRAME_NOT_FOUND error.
+   * v4 = 2026-09-12: host-side `javascript` REPL tool (BROWSER-USE-REPL-PLAN.md,
+   * option C) — a persistent V8 cell interpreter; `page.*`/`tabs.*` primitives
+   * execute the existing browser tools against the session's current tab. The
+   * tool is hosted by the native host, not by the add-on (see REPL_TOOLS).
    */
-  browserToolVersion: 3,
+  browserToolVersion: 4,
   /** Stable Firefox Native Messaging host name (manifest `name`). */
   nativeHost: "dev.pi.browser",
   /** Stable Firefox add-on ID (gecko.id). Must match allowed_extensions. */

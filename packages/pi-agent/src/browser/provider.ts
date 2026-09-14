@@ -46,6 +46,7 @@ import { MAIL_MUTATION_TOOL_SCHEMAS, type MailMutationToolSchema } from "../muta
 import { CONTACTS_TOOL_SCHEMAS, type ContactsToolSchema } from "../contacts/schemas.js";
 import { McpAcpClient } from "./mcp-acp-client.js";
 import type { CapabilityRegistry } from "../capability-registry.js";
+import { ReplProvider, type ReplToolExecutor } from "../repl/provider.js";
 
 export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
 import { TransportClosedError, TransportTimeoutError } from "../native-host/transport.js";
@@ -248,6 +249,8 @@ export class CapabilityToolProvider {
    * session id. Cleared when the session is disposed.
    */
   private readonly sessionAllowed = new Map<string, Set<string>>();
+  /** The host-side `javascript` REPL (BROWSER-USE-REPL-PLAN.md, option C). */
+  private readonly repl = new ReplProvider({ log: (line) => this.log.debug(line) });
 
   constructor(
     /**
@@ -333,7 +336,7 @@ export class CapabilityToolProvider {
     if (hasContacts) {
       schemas.push(...CONTACTS_TOOL_SCHEMAS);
     }
-    return schemas.map((entry) => ({
+    const specs: ToolSpec[] = schemas.map((entry) => ({
       name: entry.name,
       label: entry.name,
       description: entry.description,
@@ -343,64 +346,113 @@ export class CapabilityToolProvider {
         if (!sessionId) {
           throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser tool invoked before session id assigned");
         }
-        // Route to the connected client that provides this tool (owner
-        // first; cross-app peer otherwise, plan §29). In legacy (no
-        // registry) mode there is a single client — it is always the target.
-        const target = this.registry
-          ? this.registry.resolveTarget(ownerClientId, entry.name)
-          : undefined;
-        const targetTransport = target ? target.transport : this.legacyTransport();
-        const isOwnerPath = !target || target.clientId === ownerClientId;
-        // Tools the policy marks as approval-gated (browser_screenshot on
-        // Firefox; every mail-surface tool on Thunderbird) require explicit
-        // user approval before they run. The policy is keyed on the
-        // application of the client that EXECUTES the tool — the routed
-        // target in broker mode, the owner otherwise.
-        const executingApp = target ? target.application : ownerApplication;
-        if (toolRequiresApproval(executingApp, entry.name)) {
-          // Cross-app: the prompt shows in ANOTHER app than the one the user
-          // is watching. Tell the session owner so its UI can point the user
-          // at the mail/browser client (display-only; the executing client
-          // owns the actual session/request_permission round-trip). In broker
-          // mode the registry is authoritative for the owner's application
-          // (the createTools parameter is only the legacy-mode default).
-          if (this.willPrompt(sessionId, entry.name)) {
-            const ownerApp =
-              this.registry && ownerClientId !== undefined
-                ? this.registry.get(ownerClientId)?.application ?? ownerApplication
-                : ownerApplication;
-            this.announceRemotePrompt({
-              ownerClientId,
-              ownerApplication: ownerApp,
-              executingApp,
-              sessionId,
-              toolCallId,
-              toolName: entry.name,
-            });
-          }
-          await this.requestPermission(sessionId, toolCallId, entry.name, targetTransport);
-        }
-        const state = this.ensureState(sessionId, mode, mcpServerId, isOwnerPath ? targetTransport : undefined);
-        // The session's own MCP-over-ACP connection is used only for the
-        // owner's own tools; cross-app tools always go over the target
-        // client's legacy x-pi-browser/tool callback.
-        const useOwnerMcp = isOwnerPath && state.mode === "mcp-acp" && state.mcp !== undefined;
-        const transport = useOwnerMcp
-          ? (state.mcp as NativeMcpOverAcpTransport)
-          : new LegacyBrowserCallbackTransport(targetTransport);
-        const result = await transport.call(sessionId, entry.name, args as Record<string, unknown>);
-        if (result.isError) {
-          const text = result.content
-            .filter((c) => c.type === "text")
-            .map((c) => (c as { text: string }).text)
-            .join("\n");
-          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, text || "browser tool failed", {
-            tool: entry.name,
-          });
-        }
+        const result = await this.routeTool(
+          sessionId,
+          toolCallId,
+          entry.name,
+          args as Record<string, unknown>,
+          mode,
+          mcpServerId,
+          ownerClientId,
+          ownerApplication,
+        );
         return { content: result.content, details: { piBrowser: true, tool: entry.name } };
       },
     }));
+    // The host-side REPL (BROWSER-USE-REPL-PLAN.md): one `javascript` tool per
+    // browser session; its cells' page.*/tabs.* primitives reuse the exact
+    // routing (and permission prompts) of the regular browser tools.
+    if (hasBrowser) {
+      specs.push(this.replToolSpec(idRef, mode, mcpServerId, ownerClientId, ownerApplication));
+    }
+    return specs;
+  }
+
+  /** The session's REPL worker child pid (undefined when not running). */
+  childPidFor(sessionId: string): number | undefined {
+    return this.repl.childPidFor(sessionId);
+  }
+
+  /** The `javascript` ToolSpec, with cells' tool calls routed like any other. */
+  private replToolSpec(
+    idRef: { id?: string },
+    mode: BrowserMode,
+    mcpServerId: string | undefined,
+    ownerClientId: string | undefined,
+    ownerApplication: AgentApplication,
+  ): ToolSpec {
+    const executor: ReplToolExecutor = (sessionId, tool, args) =>
+      this.routeTool(sessionId, `repl:${tool}`, tool, args, mode, mcpServerId, ownerClientId, ownerApplication);
+    return this.repl.toolSpec(idRef, executor);
+  }
+
+  /**
+   * Route one tool call to the connected client that provides it (owner
+   * first; cross-app peer otherwise, plan §29) and apply the approval
+   * policy. Shared by the regular tool specs and the REPL's cell tool calls.
+   */
+  private async routeTool(
+    sessionId: string,
+    toolCallId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    mode: BrowserMode,
+    mcpServerId: string | undefined,
+    ownerClientId: string | undefined,
+    ownerApplication: AgentApplication,
+  ): Promise<NormalizedToolResult> {
+    // In legacy (no registry) mode there is a single client — always the target.
+    const target = this.registry ? this.registry.resolveTarget(ownerClientId, toolName) : undefined;
+    const targetTransport = target ? target.transport : this.legacyTransport();
+    const isOwnerPath = !target || target.clientId === ownerClientId;
+    // Tools the policy marks as approval-gated (browser_screenshot on
+    // Firefox; every mail-surface tool on Thunderbird) require explicit
+    // user approval before they run. The policy is keyed on the application
+    // of the client that EXECUTES the tool — the routed target in broker
+    // mode, the owner otherwise.
+    const executingApp = target ? target.application : ownerApplication;
+    if (toolRequiresApproval(executingApp, toolName)) {
+      // Cross-app: the prompt shows in ANOTHER app than the one the user is
+      // watching. Tell the session owner so its UI can point the user at the
+      // mail/browser client (display-only; the executing client owns the
+      // actual session/request_permission round-trip). In broker mode the
+      // registry is authoritative for the owner's application (the
+      // createTools parameter is only the legacy-mode default).
+      if (this.willPrompt(sessionId, toolName)) {
+        const ownerApp =
+          this.registry && ownerClientId !== undefined
+            ? this.registry.get(ownerClientId)?.application ?? ownerApplication
+            : ownerApplication;
+        this.announceRemotePrompt({
+          ownerClientId,
+          ownerApplication: ownerApp,
+          executingApp,
+          sessionId,
+          toolCallId,
+          toolName,
+        });
+      }
+      await this.requestPermission(sessionId, toolCallId, toolName, targetTransport);
+    }
+    const state = this.ensureState(sessionId, mode, mcpServerId, isOwnerPath ? targetTransport : undefined);
+    // The session's own MCP-over-ACP connection is used only for the owner's
+    // own tools; cross-app tools always go over the target client's legacy
+    // x-pi-browser/tool callback.
+    const useOwnerMcp = isOwnerPath && state.mode === "mcp-acp" && state.mcp !== undefined;
+    const transport = useOwnerMcp
+      ? (state.mcp as NativeMcpOverAcpTransport)
+      : new LegacyBrowserCallbackTransport(targetTransport);
+    const result = await transport.call(sessionId, toolName, args);
+    if (result.isError) {
+      const text = result.content
+        .filter((c) => c.type === "text")
+        .map((c) => (c as { text: string }).text)
+        .join("\n");
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, text || "browser tool failed", {
+        tool: toolName,
+      });
+    }
+    return result;
   }
 
   /**
@@ -535,7 +587,7 @@ export class CapabilityToolProvider {
   handleNotify(params: BrowserNotifyParams): void {
     this.log.debug(`x-pi-browser/notify ${params.event} session=${params.sessionId}`);
     // Element references are owned by the content script and validated at
-    // use time (isConnected). No host-side state to invalidate today; the
+    // use time (isConnected). No host-side ref state to invalidate today; the
     // hook exists so future transports can react (e.g. drop MCP connections
     // when the bound tab closes).
     if (params.event === "tab_closed") {
@@ -545,18 +597,34 @@ export class CapabilityToolProvider {
         // bound later, and reconnecting is cheap. Log only.
       }
     }
+    // The REPL's page handle (active tab) and element refs are stale after
+    // any of these events; the next cell starts with a warning note.
+    const replNotes: Record<BrowserNotifyParams["event"], string> = {
+      binding_changed: "The session's tab binding changed — inspect the page (snapshot) before acting.",
+      binding_removed: "The session's tab binding was removed — page.* calls will fail with BROWSER_NOT_BOUND until re-bound.",
+      tab_closed: "The bound tab was closed — page.* calls will fail with BROWSER_TAB_CLOSED until re-bound.",
+      tab_navigated: "The bound tab navigated — element refs are stale; snapshot again before acting.",
+    };
+    this.repl.invalidate(params.sessionId, replNotes[params.event]);
   }
 
   /** Release per-session state (session/close or host shutdown). */
   async disposeSession(sessionId: string): Promise<void> {
     this.sessionAllowed.delete(sessionId);
     const state = this.sessions.get(sessionId);
-    if (!state) return;
-    this.sessions.delete(sessionId);
-    if (state.mcp) await state.mcp.dispose();
+    if (state) {
+      this.sessions.delete(sessionId);
+      if (state.mcp) await state.mcp.dispose();
+    }
+    // Reap the session's REPL worker child (no orphan processes). A session
+    // may have a runtime without browser state (cells that never touched a
+    // browser tool), so this runs unconditionally and is idempotent.
+    await this.repl.disposeSession(sessionId);
   }
 
   async shutdown(): Promise<void> {
     for (const id of [...this.sessions.keys()]) await this.disposeSession(id);
+    // Runtimes of sessions with no browser state are reaped here.
+    await this.repl.shutdown();
   }
 }

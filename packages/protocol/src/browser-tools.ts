@@ -298,3 +298,53 @@ export function isMutatingBrowserTool(name: string): boolean {
 }
 
 export const BROWSER_TOOL_NAMES: readonly string[] = BROWSER_TOOLS.map((t) => t.name);
+
+// ---------------------------------------------------------------------------
+// Host-side REPL tools (BROWSER-USE-REPL-PLAN.md, option C)
+//
+// These tools are EXECUTED BY THE NATIVE HOST, not by the add-on: the
+// `javascript` tool runs a persistent V8 cell interpreter (one child process
+// per session) whose `page.*`/`tabs.*` primitives execute the regular browser
+// tools against the session's current tab over the same transports. They are
+// kept in a separate export so the add-on's MCP surface does not advertise a
+// tool it cannot execute.
+// ---------------------------------------------------------------------------
+
+export const REPL_TOOLS: readonly BrowserToolDef[] = [
+  {
+    name: "javascript",
+    description:
+      "Run JavaScript in a persistent REPL that controls the session's current Firefox tab (default: the bound tab). " +
+      "State (variables, helpers) persists across calls; top-level await is supported; the last expression is printed. " +
+      "Primitives: page.goto(url), page.info(), page.evaluate(fn|expr, arg?), page.waitFor(fn, arg?, {timeoutMs?}), " +
+      "page.snapshot() -> {url,title,nodes:[{ref,role,name,...}]}, page.click(ref), page.clickAt(x,y), page.type(ref,text), " +
+      "page.typeFocused(text), page.focus(ref), page.scroll(ref), page.close(), tabs.list(), tabs.open(url), tabs.get(targetId), " +
+      "screenshot(), snapshot(), artifact(name, data), checkpoint(name, value), reconnect(). " +
+      "Inspect the page (snapshot/screenshot) before acting; refs go stale after navigation. " +
+      "A cell that runs too long is killed and its state reset — inspect before retrying actions.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        code: {
+          type: "string",
+          description:
+            "JavaScript to run as one REPL cell. Top-level await allowed. Example: " +
+            "`const s = await page.snapshot(); await page.click(s.nodes.find(n => n.name === 'Go').ref)`",
+        },
+        timeoutMs: {
+          type: "number",
+          description: "Kill the cell after this many milliseconds (default 30000, max 120000).",
+        },
+      },
+      required: ["code"],
+    },
+    readOnly: false,
+  },
+];
+
+export const REPL_TOOL_NAMES: readonly string[] = REPL_TOOLS.map((t) => t.name);
+
+/** True for tools executed by the host REPL (never routed to the add-on). */
+export function isReplTool(name: string): boolean {
+  return REPL_TOOL_NAMES.includes(name);
+}

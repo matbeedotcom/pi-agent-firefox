@@ -9,6 +9,7 @@ import { MockBackend, MockSession } from "./mock-backend.js";
 import {
   AGENT_METHODS,
   BROWSER_TOOLS,
+  REPL_TOOLS,
   CLIENT_METHODS,
   JSONRPC_ERROR,
   codeFromErrorObject,
@@ -92,7 +93,7 @@ test("initialize: capabilities + piBrowser metadata", async () => {
   assert.ok(caps.sessionCapabilities.close);
   assert.equal(caps.mcpCapabilities.acp, true);
   assert.equal(res._meta.piBrowser.protocolVersion, 2);
-  assert.equal(res._meta.piBrowser.browserToolVersion, 3);
+  assert.equal(res._meta.piBrowser.browserToolVersion, 4);
   assert.equal(res.agentInfo.name, "test-agent");
 });
 
@@ -196,9 +197,13 @@ test("session/new: three independent sessions over one connection", async () => 
   assert.equal(modelOpt.type, "select");
   assert.equal(modelOpt.currentValue, "mock/model-a");
   assert.ok(modelOpt.options.some((o) => "value" in o && o.value === "mock/model-b"));
-  // Browser tools registered on the backend session (one per protocol tool).
-  assert.equal(h.lastCreateTools.length, BROWSER_TOOLS.length);
-  assert.ok(h.lastCreateTools.every((t) => (t as { name: string }).name.startsWith("browser_")));
+  // Browser tools (one per protocol tool) + the host-side javascript REPL tool.
+  assert.equal(h.lastCreateTools.length, BROWSER_TOOLS.length + REPL_TOOLS.length);
+  assert.ok(
+    h.lastCreateTools.every(
+      (t) => (t as { name: string }).name.startsWith("browser_") || (t as { name: string }).name === "javascript",
+    ),
+  );
 });
 
 test("session/prompt: streaming updates route to the right session", async () => {

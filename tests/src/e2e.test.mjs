@@ -1441,3 +1441,103 @@ test("thunderbird T4/T6 client: mailModify + contacts tools registered and round
     await shutdown(host);
   }
 });
+
+// ---------------------------------------------------------------------------
+// javascript REPL (legacy transport) — BROWSER-USE-REPL-PLAN.md Phase 1
+// ---------------------------------------------------------------------------
+
+test("javascript REPL (legacy transport): persistent cells, image content, timeout kill, reap on close", async () => {
+  const tabs = new FakeTabs();
+  const fakeFirefox = makeFakeFirefox(tabs);
+  const replDir = path.join(tmpRoot ?? (tmpRoot = mkdtempSync(path.join(tmpdir(), "pi-browser-e2e-"))), "repl");
+  const script = writeScript([
+    { match: "repl-init", toolCalls: [{ toolName: "javascript", args: { code: "x = 41; x + 1" } }] },
+    { match: "repl-persist", toolCalls: [{ toolName: "javascript", args: { code: "x" } }] },
+    { match: "repl-shot", toolCalls: [{ toolName: "javascript", args: { code: "await screenshot()" } }] },
+    { match: "repl-hang", toolCalls: [{ toolName: "javascript", args: { code: "for (;;) {}", timeoutMs: 1500 } }] },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir });
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+    const tab = tabs.addTab("http://a.test/repl", "REPL Page");
+    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl" });
+    tabs.bind(s.sessionId, tab);
+
+    const cellUpdates = (mark) =>
+      host.notifications
+        .slice(mark)
+        .filter((m) => m.method === "session/update" && m.params?.sessionId === s.sessionId);
+    const cellEnds = (mark) =>
+      cellUpdates(mark).filter((u) => u.params.update?.sessionUpdate === "tool_call_update");
+
+    // Cell 1: x = 41; x + 1 -> 42
+    let mark = host.notifications.length;
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: s.sessionId, prompt: [{ type: "text", text: "repl-init" }] },
+      60_000,
+    );
+    const starts1 = cellUpdates(mark).filter((u) => u.params.update?.sessionUpdate === "tool_call");
+    assert.ok(starts1.some((u) => u.params.update?.title?.includes("javascript")), "javascript tool call streamed");
+    let outs = cellEnds(mark).map((u) => JSON.stringify(u.params.update?.rawOutput ?? "")).join("\n");
+    assert.ok(outs.includes("42"), "cell printed 42");
+    assert.equal(tabs.calls.filter((c) => c.sessionId === s.sessionId).length, 0, "plain cells never touch the add-on");
+
+    // Cell 2: x persists (41) — same runtime, same realm.
+    mark = host.notifications.length;
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: s.sessionId, prompt: [{ type: "text", text: "repl-persist" }] },
+      60_000,
+    );
+    outs = cellEnds(mark).map((u) => JSON.stringify(u.params.update?.rawOutput ?? "")).join("\n");
+    assert.ok(outs.includes("41"), "x persisted across cells");
+
+    // Cell 3: screenshot() — the cell's tool call goes through the SAME
+    // permission gate as a direct browser_screenshot call.
+    mark = host.notifications.length;
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: s.sessionId, prompt: [{ type: "text", text: "repl-shot" }] },
+      60_000,
+    );
+    const shotEnds = cellEnds(mark);
+    const shotRaw = shotEnds.map((u) => JSON.stringify(u.params.update?.rawOutput ?? "")).join("\n");
+    assert.ok(shotRaw.includes('"type":"image"') || shotRaw.includes('"type": "image"'), "image content attached to the cell result");
+    assert.ok(shotRaw.includes("image/png"), "fake tab screenshot mime type carried");
+    assert.ok(
+      (tabs.permissionLog ?? []).some((p) => JSON.stringify(p._meta ?? {}).includes("browser_screenshot")),
+      "screenshot from inside a cell was approval-gated",
+    );
+    assert.ok(tabs.calls.some((c) => c.sessionId === s.sessionId && c.tool === "browser_screenshot"), "screenshot routed to the bound tab");
+
+    // Cell 4: sync infinite loop — killed at 1.5s, state reset, host alive.
+    mark = host.notifications.length;
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: s.sessionId, prompt: [{ type: "text", text: "repl-hang" }] },
+      60_000,
+    );
+    const hangEnds = cellEnds(mark);
+    const hangRaw = hangEnds.map((u) => JSON.stringify(u.params.update ?? "")).join("\n");
+    assert.ok(hangRaw.includes("cell aborted"), "timeout surfaced as a reset notice");
+    assert.ok(hangRaw.includes("exceeded 1500 ms"), "cell timeout message carries the budget");
+    assert.ok(host.alive, "host survived the killed cell");
+
+    // Close the session: the worker child is reaped (no orphan processes).
+    await host.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
+    const { execSync } = await import("node:child_process");
+    let orphans = "";
+    for (let i = 0; i < 25; i++) {
+      await sleep(200);
+      orphans = execSync(`pgrep -P ${host.child.pid} -f "repl/worker.js" || true`, { encoding: "utf8" }).trim();
+      if (!orphans) break;
+    }
+    assert.equal(orphans, "", `session close reaps the REPL worker (orphans: ${orphans})`);
+
+    assert.ok(host.alive);
+  } finally {
+    await shutdown(host);
+  }
+});

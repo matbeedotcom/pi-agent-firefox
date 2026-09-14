@@ -7,7 +7,7 @@
  * test/tool-schemas.test.ts enforces the sync.
  */
 import { Type, type TSchema } from "typebox";
-import { BROWSER_FRAME_DESCRIPTION, BROWSER_TOOLS, CONTROL_TOOLS } from "@pi-browser/protocol";
+import { BROWSER_FRAME_DESCRIPTION, BROWSER_TOOLS, CONTROL_TOOLS, REPL_TOOLS } from "@pi-browser/protocol";
 
 const empty = () => Type.Object({}, { additionalProperties: false });
 
@@ -166,6 +166,33 @@ export interface BrowserToolSchema {
 export const BROWSER_TOOL_SCHEMAS: readonly BrowserToolSchema[] = BROWSER_TOOLS.map((def) => {
   const parameters = SCHEMAS[def.name];
   if (!parameters) throw new Error(`missing TypeBox schema for tool ${def.name}`);
+  return { name: def.name, description: def.description, parameters, readOnly: def.readOnly };
+});
+
+// ---------------------------------------------------------------------------
+// Host-side REPL tools (executed by the native host, never the add-on)
+// ---------------------------------------------------------------------------
+
+const REPL_SCHEMAS: Record<string, TSchema> = {
+  javascript: Type.Object(
+    {
+      code: Type.String({
+        description:
+          "JavaScript to run as one REPL cell. Top-level await allowed. Example: " +
+          "`const s = await page.snapshot(); await page.click(s.nodes.find(n => n.name === 'Go').ref)`",
+      }),
+      timeoutMs: Type.Optional(Type.Number({
+        description: "Kill the cell after this many milliseconds (default 30000, max 120000).",
+      })),
+    },
+    { additionalProperties: false, required: ["code"] },
+  ),
+};
+
+/** One entry per protocol REPL tool, with its TypeBox parameter schema. */
+export const REPL_TOOL_SCHEMAS: readonly BrowserToolSchema[] = REPL_TOOLS.map((def) => {
+  const parameters = REPL_SCHEMAS[def.name];
+  if (!parameters) throw new Error(`missing TypeBox schema for repl tool ${def.name}`);
   return { name: def.name, description: def.description, parameters, readOnly: def.readOnly };
 });
 
