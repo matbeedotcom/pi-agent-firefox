@@ -26,10 +26,22 @@ export interface Binding {
   windowId?: number;
   /** Human-readable label for the UI. */
   label?: string;
+  /**
+   * Firefox: who owns the bound tab (BROWSER-USE-REPL-PLAN.md Phase 2).
+   * "bound" = the user bound it (sidebar); "repl" = opened by the session's
+   * javascript REPL (tabs.open) — closed automatically when the session
+   * unbinds or ends. Absent (legacy) = "bound".
+   */
+  owner?: "bound" | "repl";
   /** @deprecated legacy Firefox tab id (=== refId for tabs). */
   tabId?: number;
   /** @deprecated legacy Firefox tab title (=== label for tabs). */
   tabTitle?: string;
+}
+
+/** "bound" unless the binding says otherwise (legacy bindings have no flag). */
+export function bindingOwner(b: Binding): "bound" | "repl" {
+  return b.owner === "repl" ? "repl" : "bound";
 }
 
 /** The numeric handle a binding refers to (refId, falling back to legacy tabId). */

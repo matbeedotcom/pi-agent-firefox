@@ -73,6 +73,7 @@ function el(tag, attrs = {}, opts = {}) {
   node.placeholder = attrs.placeholder ?? "";
   node.disabled = false;
   node.className = attrs.class ?? "";
+  node.isConnected = true;
   node.isContentEditable = false;
   node._hidden = opts.hidden ?? false;
   node._top = opts.top ?? false;
@@ -108,6 +109,12 @@ function el(tag, attrs = {}, opts = {}) {
     node.clicked = true;
   };
   node.form = null;
+  node.dispatchEvent = (e) => {
+    node.events = [...(node.events ?? []), e];
+  };
+  node.scrollIntoView = (opts) => {
+    node.scrolled = opts;
+  };
   return node;
 }
 
@@ -176,6 +183,8 @@ const document = {
   querySelectorAll: (sel) =>
     sel === "*" ? allElements : allElements.filter((n) => n.matches(sel)),
   elementFromPoint: () => loginButton,
+  activeElement: null,
+  execCommand: undefined,
 };
 
 // ---------------------------------------------------------------------------
@@ -229,6 +238,15 @@ const browser = {
   },
 };
 
+class FakeEvent {
+  constructor(type, opts = {}) {
+    this.type = type;
+    this.data = opts.data;
+  }
+}
+
+class FakeInputEvent extends FakeEvent {}
+
 const context = {
   browser,
   window,
@@ -239,6 +257,8 @@ const context = {
   HTMLTextAreaElement,
   HTMLIFrameElement,
   CSS,
+  Event: FakeEvent,
+  InputEvent: FakeInputEvent,
   console,
   // Node globals the bundles expect from the browser runtime
   setTimeout,
@@ -354,12 +374,16 @@ const tick = () => new Promise((r) => setTimeout(r, 25));
   assert.equal(res.data.truncated, false);
   assert.ok(res.data.nodeCount >= 12, `nodeCount sane: ${res.data.nodeCount}`);
 
-  // depth budget
+  // depth budget: maxNodes is clamped to a minimum of 10; a partial
+  // outline must be emitted (never an empty tree) with truncated=true.
   const shallow = await call({ type: "pi:a11y", maxNodes: 4 });
   assert.equal(shallow.ok, true);
   assert.equal(shallow.data.truncated, true, "budget overrun flagged");
-  assert.ok(shallow.data.tree.split("\n").length <= 5, "budget respected");
-  process.stdout.write(`ok pi:a11y (${res.data.nodeCount} nodes)\n`);
+  if (process.env.DEBUG) console.log("DEBUG a11y shallow lines:", shallow.data.tree.split("\n").length, shallow.data.tree);
+  const shallowLines = shallow.data.tree.split("\n").length;
+  assert.ok(shallowLines > 2, `partial outline emitted (got ${shallowLines} lines)`);
+  assert.ok(shallowLines <= 13, `budget respected (got ${shallowLines} lines)`);
+  process.stdout.write(`ok pi:a11y (${res.data.nodeCount} nodes, partial budget ok)\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +484,169 @@ const tick = () => new Promise((r) => setTimeout(r, 25));
   assert.equal(after.data.messages.length, 0, `buffer cleared: ${JSON.stringify(after.data)}`);
   assert.equal(after.data.cleared, false, "no clear requested on the follow-up read");
   process.stdout.write(`ok pi:console (captured=${all.data.total}, cleared)\n`);
+}
+
+// ---------------------------------------------------------------------------
+// pi:a11yNodes — structured snapshot (REPL page.snapshot())
+// ---------------------------------------------------------------------------
+
+{
+  const res = await call({ type: "pi:a11yNodes", maxNodes: 200 });
+  assert.equal(res.ok, true, `a11yNodes ok: ${JSON.stringify(res)}`);
+  const { nodes } = res.data;
+
+  const byRole = (r) => nodes.filter((n) => n.role === r);
+
+  // Heading with level
+  const h = byRole("heading")[0];
+  assert.equal(h.name, "Salvage Rush");
+  assert.equal(h.level, 1);
+
+  // Labelled textbox: ref, type, name, rect
+  const textbox = byRole("textbox").find((n) => n.name === "Email");
+  assert.ok(textbox, `textbox node: ${JSON.stringify(byRole("textbox"))}`);
+  assert.match(textbox.ref, /^el-\d+$/);
+  assert.equal(textbox.type, "email");
+  assert.ok(textbox.rect && textbox.rect.width > 0, "interactive node carries a rect");
+
+  // Checkbox with checked state + ref
+  const sub = byRole("checkbox")[0];
+  assert.equal(sub.checked, true);
+  assert.ok(sub.ref, "checkbox ref");
+
+  // Button with ref
+  const btn = byRole("button").find((n) => n.name === "Login");
+  assert.ok(btn && btn.ref, "button with ref");
+
+  // Icon link: name via img alt + href
+  const link = byRole("link")[0];
+  assert.equal(link.name, "Pilot logo");
+  assert.equal(link.href, "/");
+
+  // Text fallback for the unnamed div
+  const hero = nodes.find((n) => n.role === "text" && n.name === "Hero text");
+  assert.ok(hero, `div collapsed to text node: ${JSON.stringify(nodes)}`);
+
+  // Shadow-root traversal
+  const shadowBtn = byRole("button").find((n) => n.name === "Shadow Action");
+  assert.ok(shadowBtn && shadowBtn.ref, `shadow button node: ${JSON.stringify(byRole("button"))}`);
+
+  // Iframe leaf with src as name
+  const frame = byRole("iframe")[0];
+  assert.equal(frame.name, "https://embed.test/app?x=1");
+
+  // Hidden subtree pruned
+  assert.ok(!nodes.some((n) => n.name === "Hidden"), "display:none pruned");
+
+  // Budget: clamped to a minimum of 10; partial nodes + truncated=true
+  const shallow = await call({ type: "pi:a11yNodes", maxNodes: 4 });
+  assert.equal(shallow.ok, true);
+  if (process.env.DEBUG) console.log("DEBUG a11yNodes shallow:", shallow.data.nodes.length, shallow.data.truncated, JSON.stringify(shallow.data.nodes.map(n => n.role)));
+  assert.ok(shallow.data.nodes.length > 0, "partial nodes emitted");
+  assert.ok(shallow.data.nodes.length <= 10, `budget: ${shallow.data.nodes.length} nodes`);
+  assert.equal(shallow.data.truncated, true, "truncated flagged");
+  process.stdout.write(`ok pi:a11yNodes (${nodes.length} nodes, refs + rects, shadow + iframe, budgets)\n`);
+}
+
+// ---------------------------------------------------------------------------
+// pi:clickAt — atomic elementFromPoint + focus + click
+// ---------------------------------------------------------------------------
+
+{
+  // Default: elementFromPoint -> Login button
+  const res = await call({ type: "pi:clickAt", x: 50, y: 20 });
+  assert.equal(res.ok, true, `clickAt ok: ${JSON.stringify(res)}`);
+  assert.equal(res.data.found, true);
+  assert.equal(res.data.clicked.text, "Login");
+  assert.match(res.data.clicked.ref, /^el-\d+$/);
+  assert.equal(loginButton.clicked, true, "the hit element was clicked");
+
+  // Overlay case: a floating element covers the button — the OVERLAY is hit
+  const overlay = el("div", { class: "overlay" }, { textContent: "overlay" });
+  document.elementFromPoint = () => overlay;
+  const overlayRes = await call({ type: "pi:clickAt", x: 50, y: 20 });
+  assert.equal(overlayRes.ok, true);
+  assert.equal(overlayRes.data.found, true);
+  assert.equal(overlayRes.data.clicked.text, "overlay", "overlay captured the click");
+  assert.equal(loginButton.clicked, true, "button NOT clicked through the overlay");
+  assert.equal(overlay.clicked, true, "overlay itself clicked");
+  document.elementFromPoint = () => loginButton;
+
+  // Miss: nothing at the point
+  document.elementFromPoint = () => null;
+  const miss = await call({ type: "pi:clickAt", x: 1, y: 1 });
+  assert.equal(miss.ok, true);
+  assert.equal(miss.data.found, false, "empty hit reported, not an error");
+  document.elementFromPoint = () => loginButton;
+
+  // Invalid coordinates
+  const bad = await call({ type: "pi:clickAt", x: "50", y: 20 });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, "INTERNAL");
+  process.stdout.write("ok pi:clickAt (atomic hit, overlay wins, miss + bad coords)\n");
+}
+
+// ---------------------------------------------------------------------------
+// pi:focus / pi:scroll — ref-based view + focus primitives
+// ---------------------------------------------------------------------------
+
+{
+  // Refs for focus/scroll come from the a11y ref table (assignRef),
+  // not from pi:dom's element refs.
+  const snap = await call({ type: "pi:a11yNodes" });
+  const btn = snap.data.nodes.find((n) => n.role === "button" && n.name === "Login");
+  assert.ok(btn && btn.ref, `login button ref: ${JSON.stringify(snap.data.nodes)}`);
+
+  const focusRes = await call({ type: "pi:focus", ref: btn.ref });
+  assert.equal(focusRes.ok, true, `focus ok: ${JSON.stringify(focusRes)}`);
+  assert.equal(focusRes.data.focused.tag, "button");
+
+  const scrollRes = await call({ type: "pi:scroll", ref: btn.ref });
+  assert.equal(scrollRes.ok, true);
+  assert.equal(scrollRes.data.scrolled.tag, "button");
+  assert.equal(loginButton.scrolled?.block, "center", "scrollIntoView centered");
+
+  const stale = await call({ type: "pi:focus", ref: "el-9999" });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.error.code, "BROWSER_ELEMENT_STALE");
+  process.stdout.write("ok pi:focus / pi:scroll (stale ref rejected)\n");
+}
+
+// ---------------------------------------------------------------------------
+// pi:typeFocused — proven typing path on document.activeElement
+// ---------------------------------------------------------------------------
+
+{
+  // 1) activeElement is an input: value-setter path + input/change events
+  document.activeElement = emailInput;
+  const inputRes = await call({ type: "pi:typeFocused", text: "pilot@example.com" });
+  assert.equal(inputRes.ok, true, `typeFocused ok: ${JSON.stringify(inputRes)}`);
+  assert.equal(emailInput.value, "pilot@example.com", "input value set");
+  const evTypes = emailInput.events.map((e) => e.type);
+  assert.ok(evTypes.includes("input"), `input event fired: ${evTypes}`);
+  assert.ok(evTypes.includes("change"), `change event fired: ${evTypes}`);
+
+  // 2) activeElement is a contenteditable: insertText/InputEvent path
+  const editable = el("div", { "contenteditable": "true" });
+  document.activeElement = editable;
+  const ceRes = await call({ type: "pi:typeFocused", text: "notes" });
+  assert.equal(ceRes.ok, true);
+  const ceEvents = editable.events.map((e) => e.type);
+  assert.ok(ceEvents.includes("input"), `contenteditable input event: ${ceEvents}`);
+
+  // 3) nothing focused -> actionable error
+  document.activeElement = null;
+  const none = await call({ type: "pi:typeFocused", text: "x" });
+  assert.equal(none.ok, false);
+  assert.equal(none.error.code, "BROWSER_ELEMENT_STALE");
+  assert.match(none.error.message, /no focused element/);
+
+  // 4) body focused (never typeable)
+  document.activeElement = document.body;
+  const bodyRes = await call({ type: "pi:typeFocused", text: "x" });
+  assert.equal(bodyRes.ok, false, "body is not a type target");
+  process.stdout.write("ok pi:typeFocused (input, contenteditable, no-focus error)\n");
+  document.activeElement = null;
 }
 
 process.stdout.write("\nsmoke-content-dom: all fake-DOM probes passed\n");

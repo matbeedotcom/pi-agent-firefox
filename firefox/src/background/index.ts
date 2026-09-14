@@ -24,13 +24,39 @@ import { AcpClient, bindingRefId, fetchPiTheme, notifyHost, SessionStore, type H
 import { ToolDispatcher } from "./tool-dispatcher.js";
 import { McpServer, type ControlHandler } from "./mcp-server.js";
 import { networkLog } from "./network-log.js";
+import { ReplTabs } from "./repl-tabs.js";
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
 const store = new SessionStore();
-const dispatcher = new ToolDispatcher(store);
+/** REPL-owned tabs (javascript tool, BROWSER-USE-REPL-PLAN.md P2.3). */
+const replTabs = new ReplTabs();
+const dispatcher = new ToolDispatcher(store, replTabs);
+
+/**
+ * A REPL-owned tab was closed (by the user or browser_close_tab). Restore
+ * the user's home tab if the session's binding pointed at it; otherwise
+ * just unbind (the original tab_closed behavior).
+ */
+async function restoreAfterReplTabClosed(sessionId: string, tabId: number): Promise<void> {
+  const binding = store.getBinding(sessionId);
+  if (binding && bindingRefId(binding) === tabId) {
+    const home = replTabs.takeHome(sessionId);
+    if (home) store.bind(sessionId, home);
+    else store.unbind(sessionId);
+  } else {
+    store.unbind(sessionId);
+  }
+}
+
+/** Close every REPL-owned tab of the session (session unbinds / ends). */
+async function closeReplTabs(sessionId: string): Promise<void> {
+  for (const tabId of replTabs.clear(sessionId)) {
+    await browser.tabs.remove(tabId).catch(() => {}); // may already be gone
+  }
+}
 
 /**
  * Control tools (pi_*) served over the MCP channel (PRODUCT.md §26, Phase 5).
@@ -346,11 +372,24 @@ async function bootstrap(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 browser.tabs.onRemoved.addListener((tabId) => {
-  const sessionId = store.sessionForRef(tabId);
-  if (!sessionId) return;
-  store.unbind(sessionId);
-  notifyHost(client, { sessionId, event: "tab_closed", data: { tabId } });
-  pushState();
+  const boundSession = store.sessionForRef(tabId);
+  if (boundSession) {
+    const wasReplOwned = replTabs.has(boundSession, tabId);
+    replTabs.close(boundSession, tabId);
+    if (wasReplOwned) {
+      // The REPL tab the session was bound to went away: restore the
+      // user's home tab (or unbind when there is none).
+      void restoreAfterReplTabClosed(boundSession, tabId);
+    } else {
+      store.unbind(boundSession);
+    }
+    notifyHost(client, { sessionId: boundSession, event: "tab_closed", data: { tabId } });
+    pushState();
+    return;
+  }
+  // Not the bound tab: it may be an ORPHANED REPL-owned auxiliary tab.
+  const owner = replTabs.ownerOf(tabId);
+  if (owner) replTabs.close(owner, tabId);
 });
 
 browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -467,16 +506,21 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
         refId: tab.id,
         label: tab.title,
         windowId: tab.windowId ?? 0,
+        owner: "bound",
         // legacy fields kept so persisted state + the sidebar's inline type stay valid
         tabId: tab.id,
         tabTitle: tab.title,
       });
+      // An explicit user bind becomes the restore point for REPL tabs.
+      replTabs.rememberHome(sessionId, store.getBinding(sessionId)!);
       pushState();
       return {};
     }
     case "unbind": {
       const sessionId = String(payload.sessionId);
       store.unbind(sessionId);
+      // The REPL's auxiliary tabs are owned by the session: unbind reaps them.
+      await closeReplTabs(sessionId);
       pushState();
       return {};
     }

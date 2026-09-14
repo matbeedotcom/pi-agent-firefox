@@ -16,8 +16,9 @@ import {
   getBrowserTool,
   type BrowserToolCallParams,
 } from "@pi-browser/protocol";
-import { bindingRefId, type SessionStore } from "@pi-browser/webext";
+import { bindingOwner, bindingRefId, type SessionStore } from "@pi-browser/webext";
 import { networkLog } from "./network-log.js";
+import { ReplTabs } from "./repl-tabs.js";
 
 interface ContentResult {
   ok: boolean;
@@ -45,7 +46,75 @@ export class ToolDispatcher {
   /** Last capture error (from captureTab) so the fallback path can report it. */
   private lastCaptureError: unknown;
 
-  constructor(private readonly store: SessionStore) {}
+  constructor(
+    private readonly store: SessionStore,
+    private readonly replTabs: ReplTabs = new ReplTabs(),
+  ) {}
+
+  private async openTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
+    const url = args?.url;
+    if (typeof url !== "string" || !url.trim()) {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_open_tab requires a url string");
+    }
+    const current = this.store.getBinding(sessionId);
+    // The user's tab is the restore point; re-binding to a REPL tab (or
+    // back to the user's tab) keeps the FIRST user binding as home.
+    if (current && bindingOwner(current) === "bound") this.replTabs.rememberHome(sessionId, current);
+    const created = await browser.tabs.create({ url, active: true });
+    const tabId = created.id as number;
+    this.replTabs.open(sessionId, tabId);
+    this.store.bind(sessionId, {
+      ref: tabId,
+      refId: tabId,
+      label: url,
+      windowId: created.windowId ?? 0,
+      owner: "repl",
+      tabId,
+      tabTitle: url,
+    });
+    return textResult({ tabId, url });
+  }
+
+  private async closeTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
+    const tabId = args?.tabId;
+    if (typeof tabId !== "number" || !Number.isInteger(tabId) || tabId <= 0) {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_close_tab requires a tabId number");
+    }
+    if (!this.replTabs.has(sessionId, tabId)) {
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+        `tab ${tabId} is not owned by this session's REPL — the bound tab is released by unbinding in the sidebar`,
+      );
+    }
+    await browser.tabs.remove(tabId);
+    this.replTabs.close(sessionId, tabId);
+    // If the session's binding pointed at the closed tab, restore the
+    // user's home tab (or unbind when there is none).
+    const binding = this.store.getBinding(sessionId);
+    if (binding && bindingRefId(binding) === tabId) {
+      const home = this.replTabs.takeHome(sessionId);
+      if (home) this.store.bind(sessionId, home);
+      else this.store.unbind(sessionId);
+    }
+    return textResult({ closed: tabId });
+  }
+
+  private async listTabs(sessionId: string): Promise<unknown> {
+    const binding = this.store.getBinding(sessionId);
+    const boundId = binding ? bindingRefId(binding) : undefined;
+    const tabs = await browser.tabs.query({});
+    return textResult({
+      tabs: tabs
+        .filter((t) => typeof t.id === "number")
+        .map((t) => ({
+          id: t.id as number,
+          url: t.url ?? "",
+          title: t.title ?? "",
+          bound: t.id === boundId,
+          ...(t.windowId !== undefined ? { windowId: t.windowId } : {}),
+        })),
+    });
+  }
 
   /** Entry point for x-pi-browser/tool requests from the host. */
   async handleToolCall(params: BrowserToolCallParams): Promise<unknown> {
@@ -140,15 +209,42 @@ export class ToolDispatcher {
       }
       case "browser_get_accessibility_tree": {
         const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        // format "nodes" (REPL page.snapshot()) returns structured nodes;
+        // the default "text" outline is unchanged.
+        const format = args?.format === "nodes" ? "nodes" : "text";
         return textResult(
           (
             await this.content(
               tab,
-              { type: "pi:a11y", maxNodes: args?.maxNodes, maxDepth: args?.maxDepth },
+              {
+                type: format === "nodes" ? "pi:a11yNodes" : "pi:a11y",
+                maxNodes: args?.maxNodes,
+                maxDepth: args?.maxDepth,
+              },
               timeoutMs,
               frameId,
             )
           ).data,
+        );
+      }
+      case "browser_click_at": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult(
+          (await this.content(tab, { type: "pi:clickAt", x: args?.x, y: args?.y }, timeoutMs, frameId)).data,
+        );
+      }
+      case "browser_focus": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult((await this.content(tab, { type: "pi:focus", ref: args?.ref }, timeoutMs, frameId)).data);
+      }
+      case "browser_scroll": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult((await this.content(tab, { type: "pi:scroll", ref: args?.ref }, timeoutMs, frameId)).data);
+      }
+      case "browser_type_focused": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult(
+          (await this.content(tab, { type: "pi:typeFocused", text: args?.text }, timeoutMs, frameId)).data,
         );
       }
       case "browser_get_console": {
@@ -181,6 +277,12 @@ export class ToolDispatcher {
       }
       case "browser_navigate":
         return this.navigate(tab, args);
+      case "browser_open_tab":
+        return this.openTab(sessionId, args);
+      case "browser_close_tab":
+        return this.closeTab(sessionId, args);
+      case "browser_list_tabs":
+        return this.listTabs(sessionId);
       default:
         throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `no handler for ${tool}`);
     }

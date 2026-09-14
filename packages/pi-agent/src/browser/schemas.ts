@@ -95,6 +95,10 @@ const SCHEMAS: Record<string, TSchema> = {
 
   browser_get_accessibility_tree: Type.Object(
     {
+      format: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("nodes")], {
+        description:
+          '\"text\" (default) = the indented outline; \"nodes\" = structured node objects with refs and rects.',
+      })),
       maxNodes: Type.Optional(Type.Number({
         description: "Maximum outline nodes to return (default 300, hard cap 2000).",
       })),
@@ -153,6 +157,55 @@ const SCHEMAS: Record<string, TSchema> = {
     },
     { additionalProperties: false, required: ["url"] },
   ),
+
+  browser_click_at: Type.Object(
+    {
+      x: Type.Number({ description: "X coordinate in CSS pixels from the viewport's left edge." }),
+      y: Type.Number({ description: "Y coordinate in CSS pixels from the viewport's top edge." }),
+      frame: Type.Optional(frame()),
+    },
+    { additionalProperties: false, required: ["x", "y"] },
+  ),
+
+  browser_focus: Type.Object(
+    {
+      ref: Type.String({ description: "Element reference, e.g. el-183." }),
+      frame: Type.Optional(frame()),
+    },
+    { additionalProperties: false, required: ["ref"] },
+  ),
+
+  browser_scroll: Type.Object(
+    {
+      ref: Type.String({ description: "Element reference, e.g. el-183." }),
+      frame: Type.Optional(frame()),
+    },
+    { additionalProperties: false, required: ["ref"] },
+  ),
+
+  browser_type_focused: Type.Object(
+    {
+      text: Type.String({ description: "Text to type into the focused element." }),
+      frame: Type.Optional(frame()),
+    },
+    { additionalProperties: false, required: ["text"] },
+  ),
+
+  browser_open_tab: Type.Object(
+    {
+      url: Type.String({ description: 'URL for the new tab (default about:blank), e.g. "https://example.com".' }),
+    },
+    { additionalProperties: false, required: ["url"] },
+  ),
+
+  browser_close_tab: Type.Object(
+    {
+      tabId: Type.Number({ description: "Firefox tab id (from browser_list_tabs / browser_open_tab)." }),
+    },
+    { additionalProperties: false, required: ["tabId"] },
+  ),
+
+  browser_list_tabs: empty(),
 };
 
 export interface BrowserToolSchema {

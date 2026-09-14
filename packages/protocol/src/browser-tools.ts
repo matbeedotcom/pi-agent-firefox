@@ -186,10 +186,17 @@ export const BROWSER_TOOLS: readonly BrowserToolDef[] = [
       "and hierarchy. More compact than browser_get_dom and better for understanding page structure; interactive nodes " +
       "carry stable refs usable with browser_click and browser_type. Open web-component shadow roots are traversed; " +
       "iframes appear as leaf lines with their src — if the outline is thin, the content likely lives in a child frame: " +
-      "re-run with the frame parameter (see the frames list in browser_get_dom).",
+      "re-run with the frame parameter (see the frames list in browser_get_dom). " +
+      "format \"nodes\" returns the same walk as structured node objects ({ref, role, name, rect, ...}) — used by the " +
+      "javascript REPL's page.snapshot().",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
+        format: {
+          anyOf: [{ const: "text" }, { const: "nodes" }],
+          description:
+            '\"text\" (default) = the indented outline; \"nodes\" = structured node objects with refs and rects.',
+        },
         maxNodes: {
           type: "number",
           description: "Maximum outline nodes to return (default 300, hard cap 2000).",
@@ -279,6 +286,103 @@ export const BROWSER_TOOLS: readonly BrowserToolDef[] = [
       required: ["url"],
     },
     readOnly: false,
+  },
+  // ---------------------------------------------------------------------
+  // REPL interaction primitives (BROWSER-USE-REPL-PLAN.md Phase 2).
+  // Atomic content-script operations behind the javascript tool's page.*
+  // primitives; the REPL is their only v1 consumer.
+  // ---------------------------------------------------------------------
+  {
+    name: "browser_click_at",
+    description:
+      "Click at viewport coordinates in the bound tab: elementFromPoint + focus + click in ONE atomic run (an overlay " +
+      "that appears between inspect and click still gets the click). Returns what was hit, with a stable ref.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        x: { type: "number", description: "X coordinate in CSS pixels from the viewport's left edge." },
+        y: { type: "number", description: "Y coordinate in CSS pixels from the viewport's top edge." },
+        frame: { ...FRAME_PROPERTY },
+      },
+      required: ["x", "y"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "browser_focus",
+    description: "Focus an element by ref (from browser_get_dom / the a11y tree) in the bound tab.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        ref: { type: "string", description: "Element reference, e.g. el-183." },
+        frame: { ...FRAME_PROPERTY },
+      },
+      required: ["ref"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "browser_scroll",
+    description: "Scroll an element by ref into view (centered) in the bound tab.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        ref: { type: "string", description: "Element reference, e.g. el-183." },
+        frame: { ...FRAME_PROPERTY },
+      },
+      required: ["ref"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "browser_type_focused",
+    description:
+      "Type text into the currently focused element of the bound tab (no ref needed) — the same proven typing path as " +
+      "browser_type (value-setter + input/change events, insertText fallback).",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        text: { type: "string", description: "Text to type into the focused element." },
+        frame: { ...FRAME_PROPERTY },
+      },
+      required: ["text"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "browser_open_tab",
+    description:
+      "Open a new tab (REPL-owned) and rebind the session to it. The previously bound tab stays open and is restored " +
+      "when the REPL tab is closed or the session unbinds. REPL-owned tabs are closed automatically at session unbind.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        url: { type: "string", description: 'URL for the new tab (default about:blank), e.g. "https://example.com".' },
+      },
+      required: ["url"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "browser_close_tab",
+    description:
+      "Close a REPL-owned tab (one opened via browser_open_tab). Closing the currently bound REPL tab restores the " +
+      "session's previous (user-bound) tab. Non-REPL tabs are rejected — unbind in the sidebar instead.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        tabId: { type: "number", description: "Firefox tab id (from browser_list_tabs / browser_open_tab)." },
+      },
+      required: ["tabId"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "browser_list_tabs",
+    description:
+      "List all open tabs of the browser: {tabs: [{id, url, title, bound}]} — bound marks the session's current tab.",
+    inputSchema: { ...OBJECT_SCHEMA_BASE, properties: {} },
+    readOnly: true,
   },
 ];
 

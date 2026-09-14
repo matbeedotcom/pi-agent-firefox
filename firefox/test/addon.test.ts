@@ -6,8 +6,9 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { BROWSER_TOOLS, CONTROL_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
-import { AcpClient, SessionStore } from "@pi-browser/webext";
+import { AcpClient, SessionStore, bindingOwner, bindingRefId } from "@pi-browser/webext";
 import { ToolDispatcher } from "../src/background/tool-dispatcher.js";
+import { ReplTabs } from "../src/background/repl-tabs.js";
 import { McpServer } from "../src/background/mcp-server.js";
 import { networkLog } from "../src/background/network-log.js";
 
@@ -21,6 +22,9 @@ interface StubTabs {
   captureVisibleTab: (windowIdOrOpts: number | { format?: string }, maybeOpts?: unknown) => Promise<string>;
   reload: (tabId: number) => Promise<void>;
   update: (tabId: number, props: { active?: boolean; url?: string }) => Promise<any>;
+  create: (props: { url?: string; active?: boolean }) => Promise<any>;
+  remove: (tabId: number) => Promise<void>;
+  query: (props: Record<string, unknown>) => Promise<any[]>;
   sendMessage: (tabId: number, message: { type: string }, options?: { frameId?: number }) => Promise<unknown>;
   onRemoved: ListenerHub;
 }
@@ -86,6 +90,25 @@ const stub: {
         { tabId, props },
       ];
       return { id: tabId, ...props };
+    },
+    async create(props: { url?: string; active?: boolean }) {
+      const id = ((globalThis as { __nextTabId?: number }).__nextTabId ??= 1000) + 1;
+      (globalThis as { __nextTabId?: number }).__nextTabId = id;
+      const created = { id, url: props.url, title: props.url, windowId: 1 };
+      (globalThis as { __createdTabs?: unknown[] }).__createdTabs = [
+        ...((globalThis as { __createdTabs?: unknown[] }).__createdTabs ?? []),
+        created,
+      ];
+      return created;
+    },
+    async remove(tabId: number) {
+      (globalThis as { __removedTabs?: number[] }).__removedTabs = [
+        ...((globalThis as { __removedTabs?: number[] }).__removedTabs ?? []),
+        tabId,
+      ];
+    },
+    async query() {
+      return (globalThis as { __tabsList?: any[] }).__tabsList ?? [];
     },
     async sendMessage(tabId: number, message: { type: string }, options?: { frameId?: number }) {
       (globalThis as { __lastContentMsg?: unknown }).__lastContentMsg = { tabId, message, options };
@@ -584,6 +607,153 @@ test("ToolDispatcher: browser_navigate rejects non-http(s)/file URLs", async () 
   }
   assert.equal((globalThis as { __tabUpdates?: unknown[] }).__tabUpdates?.length, 0, "no tab update on rejected URLs");
   delete (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates;
+});
+
+test("ToolDispatcher: browser_get_accessibility_tree format=nodes routes to pi:a11yNodes", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 6, windowId: 1 });
+  stub.tabs.get = async () => tab(6);
+  (globalThis as { __contentReply?: unknown }).__contentReply = {
+    ok: true,
+    data: { nodes: [{ ref: "el-1", role: "button", name: "Go", rect: { x: 9, y: 9, width: 8, height: 2 } }], nodeCount: 1, truncated: false },
+  };
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_get_accessibility_tree",
+    arguments: { format: "nodes" },
+  })) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { nodes: Array<Record<string, unknown>> };
+  assert.equal(parsed.nodes[0]?.role, "button");
+  const sent = (globalThis as { __lastContentMsg?: { message: Record<string, unknown> } }).__lastContentMsg;
+  assert.equal(sent?.message.type, "pi:a11yNodes");
+  delete (globalThis as { __contentReply?: unknown }).__contentReply;
+});
+
+test("ToolDispatcher: interaction tools route to their content commands", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 6, windowId: 1 });
+  stub.tabs.get = async () => tab(6);
+  (globalThis as { __contentReply?: unknown }).__contentReply = { ok: true, data: { routed: true } };
+  const d = new ToolDispatcher(store);
+  const cases: Array<[string, Record<string, unknown>, string]> = [
+    ["browser_click_at", { x: 10, y: 20 }, "pi:clickAt"],
+    ["browser_focus", { ref: "el-2" }, "pi:focus"],
+    ["browser_scroll", { ref: "el-3" }, "pi:scroll"],
+    ["browser_type_focused", { text: "hi" }, "pi:typeFocused"],
+  ];
+  for (const [tool, args, cmd] of cases) {
+    (globalThis as { __lastContentMsg?: unknown }).__lastContentMsg = undefined;
+    await d.handleToolCall({ sessionId: "s1", tool, arguments: args });
+    const sent = (globalThis as { __lastContentMsg?: { message: Record<string, unknown> } }).__lastContentMsg;
+    assert.equal(sent?.message.type, cmd, `${tool} -> ${cmd}`);
+  }
+  delete (globalThis as { __contentReply?: unknown }).__contentReply;
+});
+
+test("ToolDispatcher: browser_open_tab creates a REPL-owned tab and rebinds", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 11, windowId: 1, tabTitle: "User Tab" });
+  stub.tabs.get = async () => tab(11);
+  (globalThis as { __nextTabId?: number }).__nextTabId = 2000;
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_open_tab",
+    arguments: { url: "https://aux.test/page" },
+  })) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { tabId: number; url: string };
+  assert.equal(parsed.tabId, 2001);
+  assert.equal(parsed.url, "https://aux.test/page");
+  // The session now binds the REPL tab (owner "repl"); the user tab is home.
+  const binding = store.getBinding("s1");
+  assert.equal(binding?.refId, 2001);
+  assert.equal(bindingOwner(binding!), "repl");
+  assert.equal((globalThis as { __createdTabs?: unknown[] }).__createdTabs?.length, 1);
+});
+
+test("ToolDispatcher: browser_close_tab closes a REPL tab and restores the home tab", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 11, windowId: 1, tabTitle: "User Tab" });
+  stub.tabs.get = async () => tab(11);
+  (globalThis as { __nextTabId?: number }).__nextTabId = 2000;
+  (globalThis as { __removedTabs?: number[] }).__removedTabs = [];
+  const d = new ToolDispatcher(store);
+  await d.handleToolCall({ sessionId: "s1", tool: "browser_open_tab", arguments: { url: "https://aux.test" } });
+  await d.handleToolCall({ sessionId: "s1", tool: "browser_close_tab", arguments: { tabId: 2001 } });
+  assert.deepEqual((globalThis as { __removedTabs?: number[] }).__removedTabs, [2001]);
+  // Binding restored to the user's tab (owner "bound"). The home binding is
+  // the ORIGINAL binding object (legacy tabId field), so use bindingRefId.
+  const binding = store.getBinding("s1");
+  assert.equal(bindingRefId(binding!), 11);
+  assert.equal(bindingOwner(binding!), "bound");
+});
+
+test("ToolDispatcher: browser_close_tab rejects non-REPL tabs (close-unbound-tab error)", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 11, windowId: 1, tabTitle: "User Tab" });
+  stub.tabs.get = async () => tab(11);
+  (globalThis as { __removedTabs?: number[] }).__removedTabs = [];
+  const d = new ToolDispatcher(store);
+  await assert.rejects(
+    d.handleToolCall({ sessionId: "s1", tool: "browser_close_tab", arguments: { tabId: 11 } }),
+    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+  );
+  assert.equal((globalThis as { __removedTabs?: number[] }).__removedTabs?.length, 0, "user tab never closed");
+});
+
+test("ToolDispatcher: browser_list_tabs marks the bound tab", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 11, windowId: 1, tabTitle: "User Tab" });
+  stub.tabs.get = async () => tab(11);
+  (globalThis as { __tabsList?: any[] }).__tabsList = [
+    tab(11, "http://a.test", "A"),
+    tab(12, "http://b.test", "B"),
+  ];
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({ sessionId: "s1", tool: "browser_list_tabs", arguments: {} })) as {
+    content: Array<{ text: string }>;
+  };
+  const parsed = JSON.parse(result.content[0].text) as { tabs: Array<{ id: number; bound: boolean }> };
+  assert.deepEqual(
+    parsed.tabs.map((t) => [t.id, t.bound]),
+    [
+      [11, true],
+      [12, false],
+    ],
+  );
+  delete (globalThis as { __tabsList?: any[] }).__tabsList;
+});
+
+test("ReplTabs: ownership registry (open/has/close/clear/ownerOf)", () => {
+  const r = new ReplTabs();
+  r.open("s1", 101);
+  r.open("s1", 102);
+  r.open("s2", 103);
+  assert.ok(r.has("s1", 101));
+  assert.ok(r.has("s1", 102));
+  assert.ok(!r.has("s1", 103));
+  assert.equal(r.ownerOf(103), "s2");
+  assert.equal(r.ownerOf(999), undefined);
+  r.close("s1", 101);
+  assert.ok(!r.has("s1", 101));
+  assert.deepEqual(r.clear("s1"), [102]);
+  assert.deepEqual(r.all("s1"), []);
+});
+
+test("ReplTabs: home binding survives REPL rebinds and is taken once", () => {
+  const r = new ReplTabs();
+  r.rememberHome("s1", { tabId: 11, windowId: 1, owner: "bound" });
+  r.rememberHome("s1", { tabId: 11, windowId: 1, owner: "bound" }); // idempotent restore point
+  const first = r.takeHome("s1");
+  assert.equal(first?.tabId, 11);
+  assert.equal(r.takeHome("s1"), undefined, "home is consumed on restore");
 });
 
 test("NetworkLog: per-tab capture, filters, newest-first, closed-tab cleanup", () => {

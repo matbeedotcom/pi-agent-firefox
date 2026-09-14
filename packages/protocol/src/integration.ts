@@ -31,8 +31,13 @@ export const PI_BROWSER = {
    * option C) — a persistent V8 cell interpreter; `page.*`/`tabs.*` primitives
    * execute the existing browser tools against the session's current tab. The
    * tool is hosted by the native host, not by the add-on (see REPL_TOOLS).
+   * v5 = 2026-09-12: REPL add-on deltas — browser_click_at, browser_focus,
+   * browser_scroll, browser_type_focused (content-script interaction),
+   * browser_open_tab / browser_close_tab / browser_list_tabs (REPL-owned
+   * auxiliary tabs, closed at session unbind), and browser_get_accessibility_tree
+   * `format: "nodes"` (structured snapshot for page.snapshot()).
    */
-  browserToolVersion: 4,
+  browserToolVersion: 5,
   /** Stable Firefox Native Messaging host name (manifest `name`). */
   nativeHost: "dev.pi.browser",
   /** Stable Firefox add-on ID (gecko.id). Must match allowed_extensions. */

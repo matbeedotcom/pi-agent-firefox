@@ -392,10 +392,8 @@ function click(ref: unknown): { clicked: { tag: string; role: string; text: stri
   return { clicked: describe(el) };
 }
 
-function type(ref: unknown, text: unknown, submit?: boolean): { typed: { tag: string; role: string }; chars: number; submitted: boolean } {
-  const el = refOf(ref);
-  if (!el || !el.isConnected) stale(String(ref));
-  if (typeof text !== "string") throw new ContentError("INTERNAL", "type requires a text string");
+/** The proven typing path (value-setter + input/change, else insertText). */
+function typeInto(el: Element, text: string): { typed: { tag: string; role: string }; chars: number } {
   const html = el as HTMLElement;
 
   const isTextInput =
@@ -428,6 +426,14 @@ function type(ref: unknown, text: unknown, submit?: boolean): { typed: { tag: st
       html.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
     }
   }
+  return { typed: describe(el), chars: text.length };
+}
+
+function type(ref: unknown, text: unknown, submit?: boolean): { typed: { tag: string; role: string }; chars: number; submitted: boolean } {
+  const el = refOf(ref);
+  if (!el || !el.isConnected) stale(String(ref));
+  if (typeof text !== "string") throw new ContentError("INTERNAL", "type requires a text string");
+  const result = typeInto(el, text);
 
   let submitted = false;
   if (submit) {
@@ -442,7 +448,67 @@ function type(ref: unknown, text: unknown, submit?: boolean): { typed: { tag: st
       }
     }
   }
-  return { typed: describe(el), chars: text.length, submitted };
+  return { ...result, submitted };
+}
+
+/** Type into the currently focused element (no ref needed). */
+function typeFocused(text: unknown): { typed: { tag: string; role: string }; chars: number } {
+  if (typeof text !== "string") throw new ContentError("INTERNAL", "typeFocused requires a text string");
+  const el = document.activeElement;
+  if (!el || el === document.body) {
+    throw new ContentError("BROWSER_ELEMENT_STALE", "no focused element — focus an input first (page.focus(ref) or click it)");
+  }
+  if (!el.isConnected) {
+    throw new ContentError("BROWSER_ELEMENT_STALE", "the focused element is no longer in the document");
+  }
+  return typeInto(el, text);
+}
+
+/** Focus an element by ref. */
+function focus(ref: unknown): { focused: { tag: string; role: string } } {
+  const el = refOf(ref);
+  if (!el || !el.isConnected) stale(String(ref));
+  (el as HTMLElement).focus?.();
+  return { focused: describe(el) };
+}
+
+/** Scroll an element by ref into view (centered). */
+function scrollInto(ref: unknown): { scrolled: { tag: string; role: string } } {
+  const el = refOf(ref);
+  if (!el || !el.isConnected) stale(String(ref));
+  try {
+    (el as HTMLElement).scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior });
+  } catch {
+    (el as HTMLElement).scrollIntoView?.({ block: "center" });
+  }
+  return { scrolled: describe(el) };
+}
+
+/**
+ * Real (content-script) click at viewport coordinates: elementFromPoint +
+ * focus + click in ONE run, so an overlay that appears between the agent's
+ * inspection and the click still gets the click it deserves. Returns what
+ * was hit (with a stable ref for follow-up actions).
+ */
+function clickAt(x: unknown, y: unknown): {
+  found: boolean;
+  x: number;
+  y: number;
+  clicked?: ElementSummary & { ref: string };
+} {
+  if (typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new ContentError("INTERNAL", "clickAt requires numeric x and y (viewport CSS pixels)");
+  }
+  const el = document.elementFromPoint(x, y);
+  if (!el) return { found: false, x, y };
+  const html = el as HTMLElement;
+  try {
+    html.focus?.({ preventScroll: false });
+    html.click();
+  } catch (err) {
+    throw new ContentError("BROWSER_PERMISSION_DENIED", `clickAt failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return { found: true, x, y, clicked: { ...summarize(el), ref: assignRef(el) } };
 }
 
 function waitFor(selector: unknown, state: unknown, timeoutMs: unknown): Promise<{ found: boolean; waitedMs: number; state: string }> {
@@ -850,12 +916,17 @@ function a11yTree(
     }
 
     if (own !== undefined) {
+      // The own line is always emitted together with the children already
+      // collected: dropping a full block when the budget ran out mid-tree
+      // would turn "partial outline" into "empty outline" (the children were
+      // already counted, so the own line is a 1-node overage, and
+      // `truncated` signals the cut).
       if (budget.left > 0) {
         budget.left--;
-        return [own, ...childLines];
+      } else {
+        budget.truncated = true;
       }
-      budget.truncated = true;
-      return [];
+      return [own, ...childLines];
     }
     // No own line: promote the children's block up one indentation level.
     return childLines.map((l) => (l.startsWith("  ") ? l.slice(2) : l));
@@ -872,6 +943,207 @@ function a11yTree(
       "re-run with the frame parameter (a frameId or URL substring from the frames list in browser_get_dom)";
   }
   return { tree, nodeCount, truncated: budget.truncated, ...(note ? { note } : {}) };
+}
+
+// ---------------------------------------------------------------------------
+// browser_get_accessibility_tree (structured nodes) — REPL snapshot()
+// ---------------------------------------------------------------------------
+
+export interface A11yNode {
+  /** Stable element ref (valid until the page navigates) — click/type by this. */
+  ref?: string;
+  role: string;
+  name?: string;
+  /** input/textarea: the current value. */
+  value?: string;
+  checked?: boolean;
+  disabled?: boolean;
+  expanded?: boolean;
+  selected?: boolean;
+  href?: string;
+  /** input element: the exact `type` (text, password, ...). */
+  type?: string;
+  /** h1–h6: heading level. */
+  level?: number;
+  /** Viewport CSS-pixel rect (interactive nodes) — for clickAt. */
+  rect?: { x: number; y: number; width: number; height: number };
+}
+
+function nodeRect(el: Element): { x: number; y: number; width: number; height: number } | undefined {
+  try {
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.round(r.x * 10) / 10,
+      y: Math.round(r.y * 10) / 10,
+      width: Math.round(r.width * 10) / 10,
+      height: Math.round(r.height * 10) / 10,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Structured twin of a11yTree: the SAME walk (pruning, roles, names, ref
+ * assignment, budgets) but emitting A11yNode objects instead of text lines.
+ * Used by page.snapshot() in the javascript REPL; the text outline is
+ * unchanged.
+ */
+function a11yNodes(maxNodes?: number, maxDepth?: number): {
+  nodes: A11yNode[];
+  nodeCount: number;
+  truncated: boolean;
+  note?: string;
+} {
+  const maxN = Math.min(Math.max(typeof maxNodes === "number" ? maxNodes : 300, 10), 2000);
+  const maxD = Math.min(Math.max(typeof maxDepth === "number" ? maxDepth : 16, 1), 40);
+  const budget = { left: maxN, truncated: false };
+  let sawIframe = false;
+  const nodes: A11yNode[] = [];
+
+  /** Consume budget for one node; returns false (and marks truncation) when out. */
+  const withinBudget = (): boolean => {
+    if (budget.left <= 0) {
+      budget.truncated = true;
+      return false;
+    }
+    budget.left--;
+    return true;
+  };
+
+  /**
+   * Mirrors the text walk: the own node is pushed before the children (in
+   * order); an unnamed container promotes its children; the text fallback
+   * applies only when no child node was produced (same as the outline).
+   */
+  const walk = (el: Element, depth: number): void => {
+    if (budget.left <= 0 || depth > maxD) {
+      budget.truncated = true;
+      return;
+    }
+    const tag = el.tagName.toLowerCase();
+    if (tag === "head" || tag === "script" || tag === "style" || tag === "noscript" || tag === "template") return;
+    if (el.getAttribute("aria-hidden") === "true") return;
+    let style: CSSStyleDeclaration;
+    try {
+      style = getComputedStyle(el as HTMLElement);
+    } catch {
+      return;
+    }
+    if (style.display === "none" || style.visibility === "hidden") return;
+
+    const role = a11yRole(el);
+    const name = accessibleName(el);
+    const interactive = A11Y_INTERACTIVE.has(role);
+    const hasOnclick = el.getAttribute("onclick") !== null;
+
+    // Leaves (emitted without recursing).
+    if (tag === "iframe") {
+      sawIframe = true;
+      if (withinBudget()) nodes.push({ role: "iframe", name: (el as HTMLIFrameElement).src || el.getAttribute("title") || undefined });
+      return;
+    }
+    if (role === "image") {
+      if (withinBudget()) nodes.push({ role: "image", ...(name ? { name } : {}) });
+      return;
+    }
+    if (role === "heading") {
+      const headingName = name || visibleText(el);
+      if (withinBudget()) {
+        nodes.push({
+          role: "heading",
+          level: Number(/^h([1-6])$/.exec(tag)?.[1] ?? 1),
+          ...(headingName ? { name: headingName.slice(0, 120) } : {}),
+        });
+      }
+      return;
+    }
+
+    let own: A11yNode | undefined;
+    if (interactive) {
+      const html = el as HTMLInputElement;
+      const node: A11yNode = { role, ...(name ? { name } : {}) };
+      if ((role === "checkbox" || role === "radio") && "checked" in html && (html as HTMLInputElement).checked) node.checked = true;
+      if (html.disabled) node.disabled = true;
+      const href = el.getAttribute("href");
+      if (role === "link" && href) node.href = href.slice(0, 160);
+      if ("type" in html && typeof (html as HTMLInputElement).type === "string" && (html as HTMLInputElement).type) {
+        node.type = (html as HTMLInputElement).type;
+      }
+      if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && (html as HTMLInputElement).value) {
+        node.value = String((html as HTMLInputElement).value).slice(0, 120);
+      }
+      const rect = nodeRect(el);
+      if (rect) node.rect = rect;
+      own = { ...node, ref: assignRef(el) };
+    } else if (A11Y_ALWAYS.has(role)) {
+      own = { role, ...(name ? { name } : {}) };
+    } else if (A11Y_TEXT_ROLES.has(role)) {
+      const t = visibleText(el);
+      if (t) own = { role, name: t.slice(0, 120) };
+    } else if (role === "generic") {
+      own = name ? { role: "generic", name } : undefined;
+    } else {
+      // section / article / figure / label / anchor / ...: only when named.
+      own = name ? { role, name } : undefined;
+    }
+    if (own === undefined && hasOnclick) {
+      const rect = nodeRect(el);
+      own = { role: "generic", ref: assignRef(el), ...(rect ? { rect } : {}) };
+    } else if (own !== undefined && hasOnclick) {
+      own = { ...own, ref: assignRef(el) };
+      if (!own.rect) {
+        const rect = nodeRect(el);
+        if (rect) own.rect = rect;
+      }
+    }
+
+    if (own !== undefined) {
+      // The own node comes before the children, as in the text outline.
+      if (withinBudget()) nodes.push(own);
+    }
+    if (!interactive) {
+      // Light DOM first, then the element's open shadow root (web components).
+      const sources: ArrayLike<Element>[] = [el.children];
+      const sr = (el as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
+      if (sr) sources.push(sr.children);
+      let anyChild = false;
+      outer: for (const source of sources) {
+        for (const child of Array.from(source)) {
+          if (budget.left <= 0) {
+            // More siblings were left unvisited: the snapshot is partial.
+            budget.truncated = true;
+            break outer;
+          }
+          const beforeChild = nodes.length;
+          walk(child, depth + 1);
+          if (nodes.length > beforeChild) anyChild = true;
+          if (budget.truncated) break outer;
+        }
+      }
+      if (own === undefined && !anyChild) {
+        // No own node and no children: fall back to a text node (same as
+        // the outline's `text "..."` line).
+        const t = visibleText(el);
+        if (t && withinBudget()) nodes.push({ role: "text", name: t.slice(0, 120) });
+      }
+      return;
+    }
+    // Interactive nodes: their text is already the name; don't recurse.
+    // (An interactive element with no own node is impossible — interactive
+    // always produced one above.)
+  };
+
+  const root = document.body ?? document.documentElement;
+  walk(root, 0);
+  const nodeCount = maxN - budget.left;
+  let note: string | undefined;
+  if (nodeCount < 10 && sawIframe) {
+    note =
+      "the outline is small and contains iframe leaves — the page content likely lives in a child frame; " +
+      "re-run with the frame parameter (a frameId or URL substring from the frames list in browser_get_dom)";
+  }
+  return { nodes, nodeCount, truncated: budget.truncated, ...(note ? { note } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,6 +1272,16 @@ async function handle(msg: ContentMessage): Promise<unknown> {
       return await evaluate(msg.expression, msg.arg);
     case "pi:a11y":
       return a11yTree(msg.maxNodes as number | undefined, msg.maxDepth as number | undefined);
+    case "pi:a11yNodes":
+      return a11yNodes(msg.maxNodes as number | undefined, msg.maxDepth as number | undefined);
+    case "pi:clickAt":
+      return clickAt(msg.x, msg.y);
+    case "pi:focus":
+      return focus(msg.ref);
+    case "pi:scroll":
+      return scrollInto(msg.ref);
+    case "pi:typeFocused":
+      return typeFocused(msg.text);
     case "pi:console":
       return await readConsole(msg.level, msg.limit, msg.since, msg.clear);
     case "pi:elementAt":

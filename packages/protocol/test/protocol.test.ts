@@ -218,7 +218,7 @@ test("integration metadata is stable and complete", () => {
   assert.equal(PI_BROWSER.nativeHost, "dev.pi.browser");
   assert.equal(PI_BROWSER.extensionId, "pi-agent-firefox@matbee.com");
   assert.equal(PI_BROWSER_META.protocolVersion, 2);
-  assert.equal(PI_BROWSER_META.browserToolVersion, 4);
+  assert.equal(PI_BROWSER_META.browserToolVersion, 5);
   assert.equal(X_PI_BROWSER.tool, "x-pi-browser/tool");
 });
 

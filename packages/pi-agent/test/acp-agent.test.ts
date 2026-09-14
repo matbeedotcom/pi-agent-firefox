@@ -93,7 +93,7 @@ test("initialize: capabilities + piBrowser metadata", async () => {
   assert.ok(caps.sessionCapabilities.close);
   assert.equal(caps.mcpCapabilities.acp, true);
   assert.equal(res._meta.piBrowser.protocolVersion, 2);
-  assert.equal(res._meta.piBrowser.browserToolVersion, 4);
+  assert.equal(res._meta.piBrowser.browserToolVersion, 5);
   assert.equal(res.agentInfo.name, "test-agent");
 });
 
