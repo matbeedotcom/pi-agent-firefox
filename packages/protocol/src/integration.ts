@@ -19,8 +19,16 @@ export const PI_BROWSER = {
    * identity rename (add-on IDs to @matbee.com, host name to com.matbee.agent).
    */
   protocolVersion: 2,
-  /** Browser tool schema version (bump when tool schemas change). */
-  browserToolVersion: 1,
+  /**
+   * Browser tool schema version (bump when tool schemas change).
+   * v2 = 2026-09-12: added browser_evaluate, browser_get_accessibility_tree,
+   * browser_get_console, browser_get_network, browser_element_at, browser_navigate;
+   * widened browser_get_dom coverage (more element kinds + per-element fields).
+   * v3 = 2026-09-12: frame targeting (optional `frame` parameter on the nine
+   * content-frame tools), browser_get_dom now traverses open shadow roots and
+   * reports iframes/stats; new BROWSER_FRAME_NOT_FOUND error.
+   */
+  browserToolVersion: 3,
   /** Stable Firefox Native Messaging host name (manifest `name`). */
   nativeHost: "dev.pi.browser",
   /** Stable Firefox add-on ID (gecko.id). Must match allowed_extensions. */

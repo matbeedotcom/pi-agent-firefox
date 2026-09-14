@@ -9,6 +9,7 @@ import { BROWSER_TOOLS, CONTROL_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError 
 import { AcpClient, SessionStore } from "@pi-browser/webext";
 import { ToolDispatcher } from "../src/background/tool-dispatcher.js";
 import { McpServer } from "../src/background/mcp-server.js";
+import { networkLog } from "../src/background/network-log.js";
 
 // ---------------------------------------------------------------------------
 // browser API stub
@@ -19,8 +20,20 @@ interface StubTabs {
   captureTab: (tabId: number, opts?: unknown) => Promise<string>;
   captureVisibleTab: (windowIdOrOpts: number | { format?: string }, maybeOpts?: unknown) => Promise<string>;
   reload: (tabId: number) => Promise<void>;
-  update: (tabId: number, props: { active?: boolean }) => Promise<any>;
-  sendMessage: (tabId: number, message: { type: string }) => Promise<unknown>;
+  update: (tabId: number, props: { active?: boolean; url?: string }) => Promise<any>;
+  sendMessage: (tabId: number, message: { type: string }, options?: { frameId?: number }) => Promise<unknown>;
+  onRemoved: ListenerHub;
+}
+
+/** Tiny addListener recorder for the event-page style browser.* stubs. */
+interface ListenerHub {
+  listeners: Array<(d: any) => void>;
+  addListener: (fn: (d: any) => void) => void;
+}
+
+function listenerHub(): ListenerHub {
+  const listeners: Array<(d: any) => void> = [];
+  return { listeners, addListener: (fn) => listeners.push(fn) };
 }
 
 // Shared capture stub. Both capture APIs share the fail counter so tests can
@@ -41,6 +54,12 @@ const stub: {
   tabs: StubTabs;
   scripting: { executeScript: (o: unknown) => Promise<void> };
   runtime: unknown;
+  webRequest: {
+    onBeforeRequest: ListenerHub;
+    onCompleted: ListenerHub;
+    onErrorOccurred: ListenerHub;
+  };
+  webNavigation: { getAllFrames: (o: { tabId: number }) => Promise<Array<{ frameId: number; url: string }>> };
 } = {
   storage: {
     local: {
@@ -61,10 +80,15 @@ const stub: {
       return captureStub();
     },
     async reload() {},
-    async update() {
-      return {};
+    async update(tabId: number, props: { active?: boolean; url?: string }) {
+      (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates = [
+        ...((globalThis as { __tabUpdates?: unknown[] }).__tabUpdates ?? []),
+        { tabId, props },
+      ];
+      return { id: tabId, ...props };
     },
-    async sendMessage(_tabId: number, _message: { type: string }) {
+    async sendMessage(tabId: number, message: { type: string }, options?: { frameId?: number }) {
+      (globalThis as { __lastContentMsg?: unknown }).__lastContentMsg = { tabId, message, options };
       // Mirrors real behavior: the content script always resolves with an
       // {ok, data|error} envelope; a missing content script rejects with the
       // "receiving end" error the dispatcher special-cases.
@@ -72,8 +96,21 @@ const stub: {
       if (!reply) throw new Error("Could not establish connection. Receiving end does not exist.");
       return reply;
     },
+    onRemoved: listenerHub(),
   },
   scripting: { async executeScript() {} },
+  webRequest: {
+    onBeforeRequest: listenerHub(),
+    onCompleted: listenerHub(),
+    onErrorOccurred: listenerHub(),
+  },
+  webNavigation: {
+    async getAllFrames(_o: { tabId: number }) {
+      return (
+        (globalThis as { __frames?: Array<{ frameId: number; url: string }> }).__frames ?? []
+      );
+    },
+  },
   runtime: {
     // Controllable native-messaging stub for AcpClient tests.
     connectNativeCalls: 0,
@@ -321,6 +358,279 @@ test("ToolDispatcher: screenshot that stays invisible raises structured BROWSER_
       err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
   );
   delete (globalThis as { __captureFail?: number }).__captureFail;
+});
+
+test("ToolDispatcher: browser_evaluate routes expression+arg to the content script", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 5, windowId: 1 });
+  stub.tabs.get = async () => tab(5);
+  (globalThis as { __contentReply?: unknown }).__contentReply = { ok: true, data: { value: 42, world: "page" } };
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_evaluate",
+    arguments: { expression: "document.querySelectorAll('.x').length", arg: null },
+  })) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { value: number; world: string };
+  assert.equal(parsed.value, 42);
+  assert.equal(parsed.world, "page");
+  const sent = (globalThis as { __lastContentMsg?: { message: { type: string; expression?: string } } }).__lastContentMsg;
+  assert.equal(sent?.message.type, "pi:evaluate");
+  assert.equal(sent?.message.expression, "document.querySelectorAll('.x').length");
+  delete (globalThis as { __contentReply?: unknown }).__contentReply;
+});
+
+test("ToolDispatcher: browser_get_accessibility_tree passes maxNodes/maxDepth through", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 6, windowId: 1 });
+  stub.tabs.get = async () => tab(6);
+  (globalThis as { __contentReply?: unknown }).__contentReply = {
+    ok: true,
+    data: { tree: 'WebArea "T"\n  main\n    button "Go" [el-1]', nodeCount: 4, truncated: false },
+  };
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_get_accessibility_tree",
+    arguments: { maxNodes: 100, maxDepth: 8 },
+  })) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { tree: string; nodeCount: number };
+  assert.ok(parsed.tree.includes('button "Go" [el-1]'));
+  assert.equal(parsed.nodeCount, 4);
+  const sent = (globalThis as { __lastContentMsg?: { message: Record<string, unknown> } }).__lastContentMsg;
+  assert.equal(sent?.message.type, "pi:a11y");
+  assert.equal(sent?.message.maxNodes, 100);
+  assert.equal(sent?.message.maxDepth, 8);
+  delete (globalThis as { __contentReply?: unknown }).__contentReply;
+});
+
+test("ToolDispatcher: browser_get_console passes level/limit/since/clear through", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 7, windowId: 1 });
+  stub.tabs.get = async () => tab(7);
+  (globalThis as { __contentReply?: unknown }).__contentReply = {
+    ok: true,
+    data: {
+      messages: [{ t: 111, level: "error", source: "window-error", text: "TypeError: x is not defined" }],
+      total: 1,
+      dropped: 0,
+      cleared: true,
+    },
+  };
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_get_console",
+    arguments: { level: "error", limit: 10, since: 100, clear: true },
+  })) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { messages: Array<{ text: string }>; cleared: boolean };
+  assert.equal(parsed.messages[0].text, "TypeError: x is not defined");
+  assert.equal(parsed.cleared, true);
+  const sent = (globalThis as { __lastContentMsg?: { message: Record<string, unknown> } }).__lastContentMsg;
+  assert.equal(sent?.message.type, "pi:console");
+  assert.equal(sent?.message.level, "error");
+  assert.equal(sent?.message.clear, true);
+  delete (globalThis as { __contentReply?: unknown }).__contentReply;
+});
+
+test("ToolDispatcher: browser_element_at passes coordinates through", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 8, windowId: 1 });
+  stub.tabs.get = async () => tab(8);
+  (globalThis as { __contentReply?: unknown }).__contentReply = {
+    ok: true,
+    data: { found: true, x: 10, y: 20, element: { ref: "el-7", tag: "button", role: "button", text: "Go" } },
+  };
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_element_at",
+    arguments: { x: 10, y: 20 },
+  })) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { found: boolean; element: { ref: string } };
+  assert.equal(parsed.found, true);
+  assert.equal(parsed.element.ref, "el-7");
+  const sent = (globalThis as { __lastContentMsg?: { message: Record<string, unknown> } }).__lastContentMsg;
+  assert.equal(sent?.message.type, "pi:elementAt");
+  assert.equal(sent?.message.x, 10);
+  assert.equal(sent?.message.y, 20);
+  delete (globalThis as { __contentReply?: unknown }).__contentReply;
+});
+
+test("ToolDispatcher: frame parameter — a frameId number resolves and is passed to the content script", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  (globalThis as { __frames?: unknown[] }).__frames = [
+    { frameId: 0, url: "http://localhost:5173/" },
+    { frameId: 1, url: "http://localhost:5173/embed/app.html" },
+  ];
+  (globalThis as { __contentReply?: unknown }).__contentReply = { ok: true, data: { refCount: 1, elements: [] } };
+  const d = new ToolDispatcher(store);
+  await d.handleToolCall({ sessionId: "s1", tool: "browser_get_dom", arguments: { frame: 1 } });
+  const sent = (globalThis as { __lastContentMsg?: { options?: { frameId?: number } } }).__lastContentMsg;
+  assert.equal(sent?.options?.frameId, 1);
+  delete (globalThis as { __frames?: unknown[] }).__frames;
+  delete (globalThis as { __contentReply?: unknown }).__contentReply;
+});
+
+test("ToolDispatcher: frame parameter — a URL substring resolves to the matching frame", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  (globalThis as { __frames?: unknown[] }).__frames = [
+    { frameId: 0, url: "http://localhost:5173/" },
+    { frameId: 1, url: "https://embed.other-site.test/widget?x=1" },
+  ];
+  (globalThis as { __contentReply?: unknown }).__contentReply = { ok: true, data: { tree: "WebArea \"X\"" } };
+  const d = new ToolDispatcher(store);
+  await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_get_accessibility_tree",
+    arguments: { frame: "other-site" },
+  });
+  const sent = (globalThis as { __lastContentMsg?: { options?: { frameId?: number } } }).__lastContentMsg;
+  assert.equal(sent?.options?.frameId, 1);
+  delete (globalThis as { __frames?: unknown[] }).__frames;
+  delete (globalThis as { __contentReply?: unknown }).__contentReply;
+});
+
+test("ToolDispatcher: unknown frame rejects with BROWSER_FRAME_NOT_FOUND and the frame list", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  (globalThis as { __frames?: unknown[] }).__frames = [
+    { frameId: 0, url: "http://localhost:5173/" },
+    { frameId: 1, url: "http://localhost:5173/embed/app.html" },
+  ];
+  const d = new ToolDispatcher(store);
+  await assert.rejects(
+    d.handleToolCall({ sessionId: "s1", tool: "browser_click", arguments: { ref: "el-1", frame: "nope" } }),
+    (err: unknown) => {
+      assert.ok(err instanceof PiBrowserProtocolError);
+      assert.equal(err.code, PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND);
+      const frames = (err.data as { frames: Array<{ frameId: number; url: string }> }).frames;
+      assert.equal(frames.length, 2);
+      return true;
+    },
+  );
+  delete (globalThis as { __frames?: unknown[] }).__frames;
+});
+
+test("ToolDispatcher: browser_get_network answers from the webRequest log (no content script)", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 42, windowId: 1 });
+  stub.tabs.get = async () => tab(42);
+  networkLog.start();
+  const before = stub.webRequest.onBeforeRequest.listeners.at(-1) as (d: unknown) => void;
+  const completed = stub.webRequest.onCompleted.listeners.at(-1) as (d: unknown) => void;
+  before({ requestId: "n1", tabId: 42, url: "http://x.test/api/thing", method: "GET", type: "xmlhttprequest", timeStamp: 1000 });
+  completed({ requestId: "n1", tabId: 42, url: "http://x.test/api/thing", method: "GET", type: "xmlhttprequest", timeStamp: 1042, statusCode: 200, statusLine: "HTTP/1.1 200 OK" });
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_get_network",
+    arguments: { filter: "api" },
+  })) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { requests: Array<{ url: string; status: number; durationMs: number }>; total: number };
+  assert.equal(parsed.total, 1);
+  assert.equal(parsed.requests[0].url, "http://x.test/api/thing");
+  assert.equal(parsed.requests[0].status, 200);
+  assert.equal(parsed.requests[0].durationMs, 42);
+});
+
+test("ToolDispatcher: browser_navigate updates the bound tab with the URL", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates = [];
+  const d = new ToolDispatcher(store);
+  const result = (await d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_navigate",
+    arguments: { url: "http://x.test/next" },
+  })) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { navigatingTo: string };
+  assert.equal(parsed.navigatingTo, "http://x.test/next");
+  const updates = (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates as Array<{ tabId: number; props: { url?: string } }>;
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].tabId, 9);
+  assert.equal(updates[0].props.url, "http://x.test/next");
+  delete (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates;
+});
+
+test("ToolDispatcher: browser_navigate rejects non-http(s)/file URLs", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates = [];
+  const d = new ToolDispatcher(store);
+  for (const url of ["javascript:alert(1)", "/relative", "data:text/html,x", ""] as const) {
+    await assert.rejects(
+      d.handleToolCall({ sessionId: "s1", tool: "browser_navigate", arguments: { url } }),
+      (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.INTERNAL,
+      `url ${JSON.stringify(url)} must be rejected`,
+    );
+  }
+  assert.equal((globalThis as { __tabUpdates?: unknown[] }).__tabUpdates?.length, 0, "no tab update on rejected URLs");
+  delete (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates;
+});
+
+test("NetworkLog: per-tab capture, filters, newest-first, closed-tab cleanup", () => {
+  networkLog.start(); // idempotent (already started above in the dispatcher test)
+  const before = stub.webRequest.onBeforeRequest.listeners.at(-1) as (d: unknown) => void;
+  const completed = stub.webRequest.onCompleted.listeners.at(-1) as (d: unknown) => void;
+  const failed = stub.webRequest.onErrorOccurred.listeners.at(-1) as (d: unknown) => void;
+  const removed = stub.tabs.onRemoved.listeners.at(-1) as (d: number) => void;
+
+  before({ requestId: "r1", tabId: 10, url: "http://x.test/api/users", method: "GET", type: "xmlhttprequest", timeStamp: 1000 });
+  completed({ requestId: "r1", tabId: 10, url: "http://x.test/api/users", method: "GET", type: "xmlhttprequest", timeStamp: 1250, statusCode: 200, statusLine: "HTTP/1.1 200 OK" });
+  before({ requestId: "r2", tabId: 10, url: "http://x.test/api/orders", method: "POST", type: "xmlhttprequest", timeStamp: 2000 });
+  completed({ requestId: "r2", tabId: 10, url: "http://x.test/api/orders", method: "POST", type: "xmlhttprequest", timeStamp: 2300, statusCode: 500, statusLine: "HTTP/1.1 500 Internal Server Error" });
+  before({ requestId: "r3", tabId: 20, url: "http://y.test/other.js", method: "GET", type: "script", timeStamp: 3000 });
+  failed({ requestId: "r3", tabId: 20, url: "http://y.test/other.js", method: "GET", type: "script", timeStamp: 3100, error: "NS_ERROR_OFFLINE" });
+
+  const all = networkLog.get(10);
+  assert.equal(all.total, 2, "tab 10 has both requests");
+  assert.equal(all.requests[0].url, "http://x.test/api/orders", "newest first");
+  assert.equal(all.requests[0].durationMs, 300);
+  assert.equal(all.requests[0].statusText, "Internal Server Error");
+
+  const errors = networkLog.get(10, { errorsOnly: true });
+  assert.equal(errors.returned, 1, "only the 500 is an error");
+  assert.equal(errors.requests[0].status, 500);
+
+  const filtered = networkLog.get(10, { filter: "USERS" });
+  assert.equal(filtered.returned, 1, "filter is case-insensitive");
+  assert.equal(filtered.requests[0].method, "GET");
+
+  const byMethod = networkLog.get(10, { method: "post" });
+  assert.equal(byMethod.returned, 1, "method is case-insensitive");
+
+  const limited = networkLog.get(10, { limit: 1 });
+  assert.equal(limited.returned, 1);
+  assert.equal(limited.truncated, true);
+
+  // A failed request on another tab is an error for that tab's log…
+  const other = networkLog.get(20, { errorsOnly: true });
+  assert.equal(other.returned, 1);
+  assert.equal(other.requests[0].failed, true);
+  assert.equal(other.requests[0].error, "NS_ERROR_OFFLINE");
+
+  // …and closing the tab drops its log.
+  removed(20);
+  assert.equal(networkLog.get(20).total, 0);
+  assert.equal(networkLog.get(10).total, 2, "other tabs unaffected");
 });
 
 // ---------------------------------------------------------------------------

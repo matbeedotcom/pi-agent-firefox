@@ -3,9 +3,15 @@
 A Firefox MV3 add-on that is a **full ACP (Agent Client Protocol) client for [Pi](https://pi.dev)**,
 plus a Pi package (`@pi-browser/agent`) that provides the **`com.matbee.agent` Native Messaging host** (application-neutral: Firefox + Thunderbird).
 
-Pi can inspect and operate a tab bound to a session — read page content/DOM, click and type into
-referenced elements, reload the tab, and take permission-gated screenshots — while all browser
-content flows to Pi as **untrusted tool data** (never into the prompt). The flagship workflow:
+Pi can inspect and operate a tab bound to a session — read page content/DOM (or a compact
+accessibility tree), click and type into referenced elements, wait for selectors, evaluate page
+JavaScript (page world, with isolated-world fallback), read the page console (JS errors, unhandled
+rejections, failed loads) and the tab's network requests (4xx/5xx, blocked, timing), hit-test
+viewport coordinates, navigate, reload, and take permission-gated screenshots — including inside
+child frames (an optional `frame` argument targets any frame by id or URL; `browser_get_dom`
+reports the frame's iframes and says so when the DOM is thin) and open web-component shadow
+roots — while all
+browser content flows to Pi as **untrusted tool data** (never into the prompt). The flagship workflow:
 *“look at the app in this tab, find why the interaction is broken, inspect source, fix it, reload,
 verify.”*
 
@@ -159,6 +165,8 @@ sh amo/make-zip.sh   # rebuild the AMO submission zip from firefox/dist
   backend and a fake tab set (`tests/src/e2e.test.mjs`); Firefox-side logic is unit-tested with
   API stubs. Use a Node 22 binary (e.g. `export PATH="$(node22-dir)/bin:$PATH"`) — Node 21 crashes
   the Pi SDK import.
+- **Content-script smoke probe** (fake DOM, real built bundles): `node .probe/smoke-content-dom.mjs`
+  (`SLOW=1` adds the 15 s page-eval fallback path).
 - **Live smoke test** (real Pi backend, no mock): `node .probe/smoke-host.mjs`.
 - The loadable add-on is **`firefox/dist/`** (built), not the `firefox/` source dir.
 - For confined browsers (e.g. snap Firefox), the host launcher must exec a node that lives under

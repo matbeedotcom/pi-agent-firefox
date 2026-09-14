@@ -66,7 +66,7 @@ test("selectMode: legacy by default, mcp-acp when client declares acp server", (
   assert.equal(provider.selectMode([{ name: "firefox-browser", type: "acp", serverId: "s1" }]), "mcp-acp");
 });
 
-test("createTools: 8 MCP-compatible browser tools", () => {
+test("createTools: MCP-compatible browser tools (one per protocol tool)", () => {
   const { provider } = setupFakeFirefox();
   const tools = provider.createTools({ id: "s1" }, "legacy");
   assert.equal(tools.length, BROWSER_TOOLS.length);

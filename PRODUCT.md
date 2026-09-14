@@ -961,7 +961,7 @@ first.
 
 Firefox should expose browser capabilities using MCP-compatible tool definitions.
 
-Initial tools:
+Tools:
 
 ```text
 browser_get_page
@@ -971,17 +971,31 @@ browser_screenshot
 browser_reload
 browser_click
 browser_type
-```
-
-Next:
-
-```text
-browser_evaluate
 browser_wait_for
+browser_evaluate
 browser_get_accessibility_tree
 browser_get_console
 browser_get_network
+browser_element_at
+browser_navigate
 ```
+
+Notes: `browser_get_dom` returns per-element tag, role, text, name, href,
+input type, checked state, heading level, and a short class list, over a
+selector set that covers headings/paragraphs/lists/tables/forms plus any
+ARIA-role or explicit-hook element (framework widgets are usually
+`div`/`span` with roles, so attribute-based matching matters). It traverses
+open web-component shadow roots (querySelectorAll alone never sees them),
+reports `stats` (scanned/matched/shadow roots/iframes), lists the frame's
+iframes in `frames`, and adds a `note` when few elements matched (thin DOM =
+child frame, closed shadow root, or unrendered SPA — the note says which to
+check). Icon-only links/buttons get their name from the child img's `alt`.
+
+Frames: the nine content-frame tools (get_dom, get_selection, click, type,
+wait_for, evaluate, get_accessibility_tree, get_console, element_at) accept
+an optional `frame` argument — a frameId (number) or URL substring (string)
+— defaulting to the top frame. `browser_get_network` needs no such argument:
+it is a tab-wide webRequest log covering all frames.
 
 The schemas should be independent of transport.
 
@@ -1254,6 +1268,18 @@ type
 inspect page state
 ```
 
+Frames: both content scripts run in ALL frames (`all_frames: true`), so
+every child frame has its own message receiver, its own element-reference
+registry, and (for console capture) its own page-world buffer. The
+dispatcher resolves the optional `frame` tool argument to a frameId via
+`webNavigation.getAllFrames` (a number must exist; a string is a
+case-insensitive URL substring, first match wins) and targets the frame
+with `tabs.sendMessage(tabId, msg, { frameId })`; the programmatic-injection
+fallback is frame-scoped too (`scripting.executeScript` `frameIds`). A
+missing/stale frame surfaces as `BROWSER_FRAME_NOT_FOUND` with the tab's
+current frame list in `error.data.frames`, so the agent can self-correct.
+Frame ids stay valid only until the page navigates.
+
 ---
 
 # 33. Stable Element References
@@ -1329,6 +1355,19 @@ They do not automatically provide the complete DevTools console history.
 
 Full DevTools-equivalent console access should be a later phase.
 
+Implementation (2026-09-12): a MAIN-world content script
+(`world: "MAIN"`, `document_start`, Firefox 128+) wraps `console.*` in the
+PAGE's JS world before any page script runs, records uncaught window errors,
+failed resource loads (capture-phase `error`), and unhandled promise
+rejections into a ring buffer (`window.__PI_BROWSER_CONSOLE__`, 1000
+entries). `browser_get_console` reads that buffer (level filter, `since`,
+newest-first limit, optional clear). The isolated-world content script reads
+the buffer directly or via a postMessage round-trip fallback. Console
+capture also enables page-world `browser_evaluate`: the same script serves
+expression evaluation through a postMessage request/response pair, so page
+globals are visible; the content script falls back to the isolated world
+(shared DOM, no page JS globals) when the helper is unavailable.
+
 ---
 
 # 36. Network Support
@@ -1354,6 +1393,16 @@ resource timing
 ```
 
 Request broader Firefox permissions only when the user enables features that require them.
+
+Implementation (2026-09-12): the background event page observes the tab's
+requests through `webRequest` (Firefox MV3 keeps the non-blocking API;
+requires the `webRequest` permission, no host access beyond the existing
+`<all_urls>`) and keeps a 500-entry ring buffer per tab (max 64 tracked
+tabs, cleaned up on tab close). `browser_get_network` returns request
+metadata only — URL, method, request type, status + status text, duration,
+and the browser error string for failures — with URL/method filters,
+`errorsOnly` (failed or status >= 400), and a newest-first limit. No bodies
+or headers.
 
 ---
 
@@ -1856,13 +1905,18 @@ MCP-over-ACP is specifically designed to remove the need for separate MCP transp
 Add:
 
 ```text
-console
-network
-accessibility tree
-performance
-WebSocket inspection
-framework/component information where feasible
+console                                  (done 2026-09-12: browser_get_console)
+network                                  (done 2026-09-12: browser_get_network)
+accessibility tree                       (done 2026-09-12: browser_get_accessibility_tree)
+performance                              (later)
+WebSocket inspection                     (later)
+framework/component information          (later)
 ```
+
+Also landed with Phase 6's diagnostic tools: `browser_evaluate` (page-world
+first, isolated-world fallback), `browser_element_at` (hit-test by viewport
+coordinates, returns a clickable ref), and `browser_navigate` (absolute
+http(s)/file URLs only).
 
 ---
 

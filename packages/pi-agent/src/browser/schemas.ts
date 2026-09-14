@@ -7,20 +7,33 @@
  * test/tool-schemas.test.ts enforces the sync.
  */
 import { Type, type TSchema } from "typebox";
-import { BROWSER_TOOLS, CONTROL_TOOLS } from "@pi-browser/protocol";
+import { BROWSER_FRAME_DESCRIPTION, BROWSER_TOOLS, CONTROL_TOOLS } from "@pi-browser/protocol";
 
 const empty = () => Type.Object({}, { additionalProperties: false });
+
+/**
+ * Shared `frame` parameter for the content-frame tools. MUST stay in sync
+ * with FRAME_PROPERTY in @pi-browser/protocol (enforced by
+ * test/tool-schemas.test.ts — the description is imported, not duplicated).
+ */
+const frame = () => Type.Union([Type.Number(), Type.String()], { description: BROWSER_FRAME_DESCRIPTION });
 
 const SCHEMAS: Record<string, TSchema> = {
   browser_get_page: empty(),
 
-  browser_get_selection: empty(),
+  browser_get_selection: Type.Object(
+    {
+      frame: Type.Optional(frame()),
+    },
+    { additionalProperties: false },
+  ),
 
   browser_get_dom: Type.Object(
     {
       maxElements: Type.Optional(Type.Number({
-        description: "Maximum number of elements to return (default 400, hard cap 2000).",
+        description: "Maximum number of elements to return (default 600, hard cap 2000).",
       })),
+      frame: Type.Optional(frame()),
     },
     { additionalProperties: false },
   ),
@@ -40,6 +53,7 @@ const SCHEMAS: Record<string, TSchema> = {
   browser_click: Type.Object(
     {
       ref: Type.String({ description: "Element reference, e.g. el-183 (from browser_get_dom)." }),
+      frame: Type.Optional(frame()),
     },
     { additionalProperties: false, required: ["ref"] },
   ),
@@ -49,6 +63,7 @@ const SCHEMAS: Record<string, TSchema> = {
       ref: Type.String({ description: "Element reference, e.g. el-183 (from browser_get_dom)." }),
       text: Type.String({ description: "Text to type." }),
       submit: Type.Optional(Type.Boolean({ description: "Submit the element's form after typing (default false)." })),
+      frame: Type.Optional(frame()),
     },
     { additionalProperties: false, required: ["ref", "text"] },
   ),
@@ -60,8 +75,83 @@ const SCHEMAS: Record<string, TSchema> = {
         description: "Wait until the element is visible (default) or hidden.",
       })),
       timeoutMs: Type.Optional(Type.Number({ description: "Maximum wait in milliseconds (default 10000, max 60000)." })),
+      frame: Type.Optional(frame()),
     },
     { additionalProperties: false, required: ["selector"] },
+  ),
+
+  browser_evaluate: Type.Object(
+    {
+      expression: Type.String({
+        description: "JavaScript expression or function, e.g. \"document.title\" or \"(sel) => document.querySelector(sel)?.value\".",
+      }),
+      arg: Type.Optional(Type.Any({
+        description: "Optional JSON value passed as the single argument when the expression is a function.",
+      })),
+      frame: Type.Optional(frame()),
+    },
+    { additionalProperties: false, required: ["expression"] },
+  ),
+
+  browser_get_accessibility_tree: Type.Object(
+    {
+      maxNodes: Type.Optional(Type.Number({
+        description: "Maximum outline nodes to return (default 300, hard cap 2000).",
+      })),
+      maxDepth: Type.Optional(Type.Number({
+        description: "Maximum outline depth (default 16, hard cap 40).",
+      })),
+      frame: Type.Optional(frame()),
+    },
+    { additionalProperties: false },
+  ),
+
+  browser_get_console: Type.Object(
+    {
+      level: Type.Optional(Type.Union([
+        Type.Literal("all"),
+        Type.Literal("error"),
+        Type.Literal("warn"),
+        Type.Literal("log"),
+        Type.Literal("info"),
+        Type.Literal("debug"),
+      ], {
+        description: 'Only messages at this level (default "all"); "error" includes window errors and unhandled rejections.',
+      })),
+      limit: Type.Optional(Type.Number({ description: "Maximum messages to return, newest first (default 50, max 200)." })),
+      since: Type.Optional(Type.Number({ description: "Only messages captured at or after this Unix timestamp (ms)." })),
+      clear: Type.Optional(Type.Boolean({ description: "Clear the captured buffer after reading (default false)." })),
+      frame: Type.Optional(frame()),
+    },
+    { additionalProperties: false },
+  ),
+
+  browser_get_network: Type.Object(
+    {
+      filter: Type.Optional(Type.String({ description: "Only requests whose URL contains this substring (case-insensitive)." })),
+      method: Type.Optional(Type.String({ description: 'Only requests with this HTTP method, e.g. "POST".' })),
+      errorsOnly: Type.Optional(Type.Boolean({
+        description: "Only failed requests or responses with status >= 400 (default false).",
+      })),
+      limit: Type.Optional(Type.Number({ description: "Maximum requests to return, newest first (default 50, max 200)." })),
+    },
+    { additionalProperties: false },
+  ),
+
+  browser_element_at: Type.Object(
+    {
+      x: Type.Number({ description: "X coordinate in CSS pixels from the viewport's left edge." }),
+      y: Type.Number({ description: "Y coordinate in CSS pixels from the viewport's top edge." }),
+      frame: Type.Optional(frame()),
+    },
+    { additionalProperties: false, required: ["x", "y"] },
+  ),
+
+  browser_navigate: Type.Object(
+    {
+      url: Type.String({ description: 'Absolute URL to navigate to, e.g. "http://localhost:5173/login".' }),
+    },
+    { additionalProperties: false, required: ["url"] },
   ),
 };
 

@@ -125,7 +125,13 @@ class FakeTabs {
       case "browser_get_page":
         return text({ url: tab.url, title: tab.title, viewport: { width: 1280, height: 800 } });
       case "browser_get_dom":
-        return text({ refCount: tab.dom.length, elements: tab.dom });
+        return text({
+          refCount: tab.dom.length,
+          elements: tab.dom,
+          stats: { scanned: tab.dom.length, matched: tab.dom.length, shadowRoots: 0, iframes: 1 },
+          frames: [{ index: 0, src: "http://a.test/embed/app", sameOrigin: true }],
+          frameEcho: args.frame ?? 0,
+        });
       case "browser_get_selection":
         return text({ text: "selected-text" });
       case "browser_screenshot":
@@ -146,6 +152,44 @@ class FakeTabs {
       }
       case "browser_wait_for":
         return text({ found: true, waitedMs: 5, state: args.state ?? "visible" });
+      case "browser_evaluate":
+        return text({ value: "fake-eval-result", world: "page" });
+      case "browser_get_accessibility_tree":
+        return text({
+          tree: 'WebArea "Fake Page"\n  main\n    heading "Fake Page" (level 1)\n    button "Go" [el-2]',
+          nodeCount: 4,
+          truncated: false,
+        });
+      case "browser_get_console":
+        return text({
+          messages: [{ t: Date.now(), level: "error", source: "window-error", text: "TypeError: fake is not defined" }],
+          total: 1,
+          dropped: 0,
+          cleared: Boolean(args.clear),
+        });
+      case "browser_get_network":
+        return text({
+          requests: [
+            { id: 1, time: Date.now(), url: "http://a.test/api/x", method: "GET", type: "xmlhttprequest", status: 500, durationMs: 12 },
+          ],
+          total: 1,
+          returned: 1,
+          truncated: false,
+        });
+      case "browser_element_at":
+        return text({
+          found: true,
+          x: args.x,
+          y: args.y,
+          element: { ref: "el-2", role: "button", tag: "button", text: "Go", rect: { x: 90, y: 90, width: 20, height: 20 } },
+        });
+      case "browser_navigate": {
+        if (typeof args.url !== "string" || !/^(https?|file):\/\//i.test(args.url)) {
+          throw toErrorObject(PI_BROWSER_ERROR.INTERNAL, "browser_navigate requires an absolute http(s) or file URL");
+        }
+        tab.url = args.url;
+        return text({ navigatingTo: tab.url });
+      }
       default:
         throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${tool}`);
     }
@@ -538,6 +582,15 @@ test("browser tools (legacy transport): agent-driven calls, A/B isolation, stale
     { match: "click-stale", toolCalls: [{ toolName: "browser_click", args: { ref: "el-99" } }] },
     { match: "click-ok", toolCalls: [{ toolName: "browser_click", args: { ref: "el-2" } }] },
     { match: "type-it", toolCalls: [{ toolName: "browser_type", args: { ref: "el-2", text: "hello world", submit: false } }] },
+    { match: "diagnose", toolCalls: [
+      { toolName: "browser_get_accessibility_tree", args: { maxNodes: 50 } },
+      { toolName: "browser_get_console", args: { level: "error", limit: 5 } },
+      { toolName: "browser_get_network", args: { errorsOnly: true } },
+      { toolName: "browser_evaluate", args: { expression: "(t) => t.toUpperCase()", arg: "hello" } },
+      { toolName: "browser_element_at", args: { x: 100, y: 100 } },
+      { toolName: "browser_get_dom", args: { frame: "embed", maxElements: 5 } },
+    ] },
+    { match: "goto-next", toolCalls: [{ toolName: "browser_navigate", args: { url: "http://b.test/next" } }] },
   ]);
   const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
   fakeFirefox.attach(host);
@@ -650,6 +703,43 @@ test("browser tools (legacy transport): agent-driven calls, A/B isolation, stale
     assert.equal(typeCall.sessionId, b.sessionId, "type targeted session B's tab");
     assert.equal(typeCall.arguments.ref, "el-2", "type targeted the referenced element");
     assert.equal(typeCall.arguments.text, "hello world", "typed text delivered");
+
+    // Diagnostic tools (PRODUCT.md §25 "Next" / Phase 6): a11y tree, console,
+    // network, evaluate, element_at — all round-trip through the real
+    // provider + legacy transport to the bound tab.
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: b.sessionId, prompt: [{ type: "text", text: "diagnose the tab" }] },
+      60_000,
+    );
+    const diagEnds = host
+      .sessionUpdates(b.sessionId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update" && u.params.update.status === "completed")
+      .map((u) => JSON.stringify(u.params.update))
+      .join("\n");
+    assert.ok(diagEnds.includes("fake-eval-result"), "browser_evaluate result streamed");
+    // (quotes in the tree are JSON-escaped inside the update, match without them)
+    assert.ok(diagEnds.includes("WebArea") && diagEnds.includes("[el-2]"), "accessibility tree streamed");
+    assert.ok(diagEnds.includes("TypeError: fake is not defined"), "console error streamed");
+    assert.ok(diagEnds.includes("/api/x"), "network request streamed");
+    assert.ok(diagEnds.includes("rect"), "element_at returned the hit element");
+    assert.ok(diagEnds.includes("embed"), "frame parameter round-tripped through get_dom");
+    const evalCall = [...tabs.calls].reverse().find((c) => c.tool === "browser_evaluate");
+    assert.equal(evalCall.arguments.arg, "hello", "evaluate arg delivered");
+    const elemCall = [...tabs.calls].reverse().find((c) => c.tool === "browser_element_at");
+    assert.deepEqual({ x: elemCall.arguments.x, y: elemCall.arguments.y }, { x: 100, y: 100 }, "coordinates delivered");
+    const frameCall = [...tabs.calls].reverse().find((c) => c.tool === "browser_get_dom" && c.arguments.frame !== undefined);
+    assert.equal(frameCall.arguments.frame, "embed", "frame arg delivered to the tab");
+
+    // browser_navigate moves the bound tab (the fake tab state follows).
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: b.sessionId, prompt: [{ type: "text", text: "goto-next" }] },
+      60_000,
+    );
+    const navCall = [...tabs.calls].reverse().find((c) => c.tool === "browser_navigate");
+    assert.equal(navCall.sessionId, b.sessionId, "navigate targeted session B's tab");
+    assert.equal(tabs.tabs.get(tabB).url, "http://b.test/next", "tab B navigated");
   } finally {
     await shutdown(host);
   }

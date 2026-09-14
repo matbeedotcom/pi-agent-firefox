@@ -55,6 +55,15 @@ await esbuild.build({
   outfile: path.join(dist, "content.js"),
 });
 
+// MAIN-world console capture + page-world eval helper (manifest world:
+// "MAIN", document_start) — bundled separately from the isolated-world
+// content script.
+await esbuild.build({
+  ...common,
+  entryPoints: [path.join(root, "src", "content", "console-capture.ts")],
+  outfile: path.join(dist, "console-capture.js"),
+});
+
 await esbuild.build({
   ...common,
   entryPoints: [path.join(root, "src", "sidebar", "index.ts")],

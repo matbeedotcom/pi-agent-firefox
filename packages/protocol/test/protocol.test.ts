@@ -70,6 +70,16 @@ test("browser tool registry: names are unique and well-formed", () => {
   assert.equal(getBrowserTool("browser_click")?.readOnly, false);
   assert.equal(isMutatingBrowserTool("browser_click"), true);
   assert.equal(isMutatingBrowserTool("browser_get_dom"), false);
+  // Diagnostic + interaction tools (PRODUCT.md §25, Phase 6 §35–36).
+  assert.equal(getBrowserTool("browser_evaluate")?.readOnly, false, "evaluate can mutate the page");
+  assert.equal(getBrowserTool("browser_get_accessibility_tree")?.readOnly, true);
+  assert.equal(getBrowserTool("browser_get_console")?.readOnly, true);
+  assert.equal(getBrowserTool("browser_get_network")?.readOnly, true);
+  assert.equal(getBrowserTool("browser_element_at")?.readOnly, true);
+  assert.equal(getBrowserTool("browser_navigate")?.readOnly, false);
+  assert.equal(isMutatingBrowserTool("browser_evaluate"), true);
+  assert.equal(isMutatingBrowserTool("browser_get_network"), false);
+  assert.equal(isMutatingBrowserTool("browser_navigate"), true);
 });
 
 test("mail tool registry: 11 read-only tools, unique names, disjoint from browser tools", () => {
@@ -191,7 +201,7 @@ test("integration metadata is stable and complete", () => {
   assert.equal(PI_BROWSER.nativeHost, "dev.pi.browser");
   assert.equal(PI_BROWSER.extensionId, "pi-agent-firefox@matbee.com");
   assert.equal(PI_BROWSER_META.protocolVersion, 2);
-  assert.equal(PI_BROWSER_META.browserToolVersion, 1);
+  assert.equal(PI_BROWSER_META.browserToolVersion, 3);
   assert.equal(X_PI_BROWSER.tool, "x-pi-browser/tool");
 });
 

@@ -306,6 +306,67 @@ initialize → capabilities + `mcpCapabilities.acp` → `session/new` → `sessi
 `session/resume` from a real `~/.pi/agent/sessions/*.jsonl` → close. Run:
 `node .probe/smoke-host.mjs` (Node 22).
 
+## Phase 6 (partial) — diagnostic browser tools (2026-09-12)
+
+PRODUCT.md §25 "Next" tools + §38 mutating list landed. New/changed surface:
+
+| Tool | Kind | Implementation |
+|---|---|---|
+| `browser_evaluate` | mutating | Page world first via the MAIN-world helper (`window.postMessage` round-trip, real page globals visible; promises awaited, errors returned as data `{value:null,error}`); isolated-world fallback (shared DOM, no page JS globals) with a 15 s internal deadline; result JSON-safe with a 20 KB cap. `world` in the result says which world ran. |
+| `browser_get_accessibility_tree` | read | Indented outline (roles + accessible names, hierarchy); interactive nodes carry clickable refs; `checkbox [checked]`, `heading (level N)`, link `→ href`; hidden subtrees (`display:none`/`visibility:hidden`/`aria-hidden`) pruned; unnamed containers collapse to one `text` line and never orphan indentation. `maxNodes` (default 300, cap 2000) + `maxDepth` (default 16, cap 40) budgets with a `truncated` flag. |
+| `browser_get_console` | read | MAIN-world `console-capture.js` (`world:"MAIN"`, `document_start`, FF128+) wraps `console.*` in the PAGE world before page scripts run; records window errors, failed resource loads (capture-phase `error`), unhandled rejections into a 1000-entry ring buffer. Read: direct cross-world buffer access + postMessage fallback; `level` filter (`"error"` includes window errors/rejections), `since` (Unix ms), newest-first `limit` (default 50, max 200), `clear` (read-then-clear via postMessage). Scoped per §35: page-load-onwards, not DevTools history. |
+| `browser_get_network` | read | `webRequest` observation in the background (FF MV3 keeps non-blocking webRequest; new `webRequest` permission, `<all_urls>` filter only) → 500-entry per-tab ring buffer, ≤64 tracked tabs, cleaned on `tabs.onRemoved`. Metadata only (URL, method, type, status, statusText, durationMs, failed/error) per §36. URL `filter`, `method`, `errorsOnly` (failed or ≥400), newest-first `limit`. |
+| `browser_element_at` | read | `document.elementFromPoint(x, y)` hit-test → element summary + stable ref (then `browser_click`/`browser_type` on the ref) + bounding rect. |
+| `browser_navigate` | mutating | `tabs.update(tabId, {url})`; absolute `http(s)`/`file` URLs only — `javascript:`, `data:`, relative and scheme-less values are rejected (structured `INTERNAL`). Existing `tab_navigated` host notification invalidates refs. |
+| `browser_get_dom` (widened) | read | Selector set now covers h1–h6, `p`, `li`, `label`, landmarks, tables (`table`/`tr`/`th`/`td`), plus ARIA roles (`role=button/link/tab/checkbox/radio/switch/…`), `[onclick]`, `[contenteditable]`, `[tabindex]`, `[aria-label]`, `[data-testid]` — the attribute anchors matter because React/Vue delegate events at the root, so `[onclick]` alone misses framework widgets. Per-element fields added: `type` (input), `checked` (checkbox/radio), `level` (h1–h6), `classes` (≤3); `name` fallback chain extended with `title`; `visible` now uses `getBoundingClientRect` (catches display:none ancestors + zero-size, keeps `position:fixed` modals visible); default `maxElements` 400 → 600. |
+
+Mechanical invariants: `browserToolVersion` 1 → 2 (`packages/protocol/src/integration.ts`); manifest `strict_min_version` 126 → 128 (`world:"MAIN"`); `console-capture.js` bundled separately in `firefox/build.mjs`.
+
+Verification (2026-09-12, Node 22.22.3, Linux):
+
+| Layer | Status | Evidence |
+|---|---|---|
+| Schema sync protocol ↔ TypeBox (incl. all 6 new tools + widened get_dom) | ✅ | `packages/pi-agent/test/tool-schemas.test.ts` green (byte-level compare) |
+| Dispatcher routing (evaluate/a11y/console/element_at/navigate arg pass-through; navigate URL validation; network answered from webRequest log without a content script) | ✅ | `firefox/test/addon.test.ts` (22 green, incl. 9 new tests) |
+| NetworkLog (per-tab isolation, filters, case-insensitivity, newest-first, limit/truncation, closed-tab cleanup) | ✅ | `addon.test.ts` `NetworkLog:` test |
+| Content-script logic against the REAL built bundles (a11y outline shape/names/pruning, dom summary fields, elementAt hit, evaluate fn+arg/error-as-data/async/page-world round-trip through the real MAIN helper, console capture/filter/clear, 15 s isolated fallback) | ✅ | `node .probe/smoke-content-dom.mjs` (and `SLOW=1 …`) — fake DOM, real `dist/content.js` + `dist/console-capture.js` |
+| End-to-end through the real host (legacy transport: all 5 diagnostic tools round-trip to the bound tab with args intact; navigate moves the tab) | ✅ | `tests/src/e2e.test.mjs` — "browser tools (legacy transport)" extended with a `diagnose` + `goto-next` script; 21/21 green |
+| **Live in real Firefox** (real console capture from page scripts, webRequest log on real network traffic, MAIN-world injection on file:// pages, evaluate against a real SPA's `window.*`) | ⏳ pending | Steps: `sh build.sh` → load `firefox/dist/manifest.json` in Firefox ≥ 128 → bind a tab → prompt: “read the console and the failed network requests of this tab, evaluate `document.title`, and find the element at (100,100)” → `SLOW=1 node .probe/smoke-content-dom.mjs` for the isolated fallback. Update this table with session ids when done. |
+
+Full suite after the change: `npm run typecheck` 0 failures · `npm test` **223/223** (protocol 17, pi-agent 85, firefox 22, thunderbird 78, e2e 21).
+
+## Phase 6b — frame targeting, shadow-DOM traversal, DOM self-diagnostics (2026-09-12)
+
+Trigger: on a real iframe-wrapped page, `browser_get_dom` returned only the
+top document's footer (3 elements: two links + an img with empty text) — the
+actual content lives in a child frame the tool could neither see nor target,
+and `querySelectorAll` alone also never sees open shadow roots. Fixed by
+making frames first-class and the tool self-diagnosing:
+
+| Change | Detail |
+|---|---|
+| `frame` parameter | Optional on the nine content-frame tools (get_dom, get_selection, click, type, wait_for, evaluate, get_accessibility_tree, get_console, element_at): a frameId number or a URL substring (case-insensitive, first match). Absent = top frame. `browser_get_network` is tab-wide by design (webRequest covers all frames) and takes no `frame`. |
+| Frame resolution | `ToolDispatcher.resolveFrameId` via `webNavigation.getAllFrames` (new `webNavigation` permission); unknown frame → new `BROWSER_FRAME_NOT_FOUND` error with the current frame list in `data.frames` so the agent can self-correct. `tabs.sendMessage(tabId, msg, {frameId})`; the programmatic-injection fallback is frame-scoped (`scripting.executeScript` `frameIds`). |
+| All-frame injection | Manifest `all_frames: true` for both content scripts — every frame has its own message receiver, ref registry, and page-world console buffer (per-frame `browser_get_console`). |
+| Shadow-DOM traversal | `browser_get_dom` walks open shadow roots (host element always reported as a boundary marker; closed roots are inaccessible and said so in the `note`); the a11y walker traverses shadow children too. |
+| `browser_get_dom` diagnostics | Result now carries `stats` (`scanned`/`matched`/`shadowRoots`/`iframes`), a `frames` list (src ≤200, sameOrigin, title when same-origin), and a `note` when <10 elements matched (points at child frame vs closed shadow roots vs unrendered page). |
+| Icon-only element naming | `img` `alt` enters the `name` fallback chain; icon-only links/buttons with no visible text take their name from the first child `img[alt]` (light or open-shadow DOM) — in `browser_get_dom` summaries and a11y accessible names (`link "Pilot logo" → / [el-N]`). |
+| a11y iframe leaves + note | Iframe leaves show their src; when the outline is thin (<10 nodes) and contains iframe leaves, a `note` suggests re-running with the `frame` parameter. |
+
+Mechanical invariants: `browserToolVersion` 2 → 3; `BROWSER_FRAME_NOT_FOUND` added to `PI_BROWSER_ERROR` (errors.ts); the `frame` description is a single exported constant (`BROWSER_FRAME_DESCRIPTION`) shared by the JSON Schema and the TypeBox schema — the sync test compares byte-for-byte.
+
+Verification (2026-09-12, Node 22.22.3, Linux):
+
+| Layer | Status | Evidence |
+|---|---|---|
+| Schema sync incl. 9× `frame` anyOf property | ✅ | `tool-schemas.test.ts` green |
+| Frame resolution (frameId number, URL substring, unknown → BROWSER_FRAME_NOT_FOUND with frame list; frameId passed to `tabs.sendMessage` options) | ✅ | `firefox/test/addon.test.ts` — 3 new `ToolDispatcher: frame parameter` tests (25 green) |
+| Shadow/iframe behavior against the REAL built bundles (shadow-root button in dom + a11y tree with refs, host boundary, stats.shadowRoots, frames list with src, icon-link name from img alt, iframe a11y leaf) | ✅ | `.probe/smoke-content-dom.mjs` — fake DOM extended with a shadow host + iframe + icon link, real `dist/content.js` + `dist/console-capture.js` |
+| End-to-end frame arg round-trip | ✅ | `tests/src/e2e.test.mjs` — diagnose script gains a frame-targeted `browser_get_dom`; 21/21 green |
+| **Live in real Firefox** (iframe-wrapped page: get_dom note + frames list → re-run with `frame`; click/type inside the frame; per-frame console; a shadow-DOM page; icon-only links) | ⏳ pending | Steps: `sh build.sh` → load `firefox/dist/manifest.json` (Firefox ≥ 128) → bind an iframe-wrapped tab → “dump the dom of this page” (expect `note` + `frames`) → “dump the dom of frame …” → click an element in that frame. Update this table with session ids when done. |
+
+Full suite after the change: `npm run typecheck` 0 failures · `npm test` **226/226** (protocol 17, pi-agent 85, firefox 25, thunderbird 78, e2e 21).
+
 ## Per-DoD mapping (plan §35–38)
 
 | DoD / success criterion | Status | Evidence |

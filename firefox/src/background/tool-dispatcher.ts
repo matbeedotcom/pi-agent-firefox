@@ -17,6 +17,7 @@ import {
   type BrowserToolCallParams,
 } from "@pi-browser/protocol";
 import { bindingRefId, type SessionStore } from "@pi-browser/webext";
+import { networkLog } from "./network-log.js";
 
 interface ContentResult {
   ok: boolean;
@@ -77,34 +78,170 @@ export class ToolDispatcher {
     switch (tool) {
       case "browser_get_page":
         return this.getPage(tab);
-      case "browser_get_selection":
-        return textResult((await this.content(tab, { type: "pi:selection" }, timeoutMs)).data ?? { text: "" });
-      case "browser_get_dom":
-        return textResult((await this.content(tab, { type: "pi:dom", maxElements: args?.maxElements }, timeoutMs)).data);
+      case "browser_get_selection": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult((await this.content(tab, { type: "pi:selection" }, timeoutMs, frameId)).data ?? { text: "" });
+      }
+      case "browser_get_dom": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult(
+          (await this.content(tab, { type: "pi:dom", maxElements: args?.maxElements }, timeoutMs, frameId)).data,
+        );
+      }
       case "browser_screenshot":
         return this.screenshot(tab, args);
       case "browser_reload":
         await browser.tabs.reload(tab.id as number);
         return textResult({ reloaded: tab.url });
-      case "browser_click":
-        return textResult((await this.content(tab, { type: "pi:click", ref: args?.ref }, timeoutMs)).data);
-      case "browser_type":
+      case "browser_click": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult((await this.content(tab, { type: "pi:click", ref: args?.ref }, timeoutMs, frameId)).data);
+      }
+      case "browser_type": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
         return textResult(
-          (await this.content(tab, { type: "pi:type", ref: args?.ref, text: args?.text, submit: args?.submit }, timeoutMs)).data,
+          (
+            await this.content(
+              tab,
+              { type: "pi:type", ref: args?.ref, text: args?.text, submit: args?.submit },
+              timeoutMs,
+              frameId,
+            )
+          ).data,
         );
-      case "browser_wait_for":
+      }
+      case "browser_wait_for": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
         return textResult(
           (
             await this.content(
               tab,
               { type: "pi:wait", selector: args?.selector, state: args?.state ?? "visible", timeoutMs: args?.timeoutMs },
               Math.max(timeoutMs, 5_000),
+              frameId,
             )
           ).data,
         );
+      }
+      case "browser_evaluate": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        // Page-world eval has its own 15 s internal deadline plus the
+        // isolated-world fallback, so give the round-trip some slack.
+        return textResult(
+          (
+            await this.content(
+              tab,
+              { type: "pi:evaluate", expression: args?.expression, arg: args?.arg },
+              Math.max(timeoutMs, 25_000),
+              frameId,
+            )
+          ).data,
+        );
+      }
+      case "browser_get_accessibility_tree": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult(
+          (
+            await this.content(
+              tab,
+              { type: "pi:a11y", maxNodes: args?.maxNodes, maxDepth: args?.maxDepth },
+              timeoutMs,
+              frameId,
+            )
+          ).data,
+        );
+      }
+      case "browser_get_console": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult(
+          (
+            await this.content(
+              tab,
+              { type: "pi:console", level: args?.level, limit: args?.limit, since: args?.since, clear: args?.clear },
+              timeoutMs,
+              frameId,
+            )
+          ).data,
+        );
+      }
+      case "browser_get_network":
+        return textResult(
+          networkLog.get(tab.id as number, {
+            filter: args?.filter,
+            method: args?.method,
+            errorsOnly: args?.errorsOnly === true,
+            limit: args?.limit,
+          }),
+        );
+      case "browser_element_at": {
+        const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
+        return textResult(
+          (await this.content(tab, { type: "pi:elementAt", x: args?.x, y: args?.y }, timeoutMs, frameId)).data,
+        );
+      }
+      case "browser_navigate":
+        return this.navigate(tab, args);
       default:
         throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `no handler for ${tool}`);
     }
+  }
+
+  /**
+   * Resolve the optional `frame` tool argument to a concrete frameId.
+   * Absent / null / "top" means the top frame (0). A number must be an
+   * existing frameId; a string is a case-insensitive URL substring (first
+   * match wins). Failures carry the tab's current frame list in `data`
+   * so the caller can self-correct.
+   */
+  private async resolveFrameId(tabId: number, frame: unknown): Promise<number> {
+    if (frame === undefined || frame === null || frame === 0 || frame === "top") return 0;
+    const frames = await this.listFrames(tabId);
+    if (typeof frame === "number") {
+      if (frames.some((f) => f.frameId === frame)) return frame;
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND,
+        `frame ${frame} not found in this tab (it may have navigated away)`,
+        { frames },
+      );
+    }
+    if (typeof frame === "string" && frame.length > 0) {
+      const needle = frame.toLowerCase();
+      const hit = frames.find((f) => f.url.toLowerCase().includes(needle));
+      if (hit) return hit.frameId;
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND,
+        `no frame URL contains "${frame}" in this tab`,
+        { frames },
+      );
+    }
+    throw new PiBrowserProtocolError(
+      PI_BROWSER_ERROR.INTERNAL,
+      "frame must be a frameId number or a URL substring string",
+    );
+  }
+
+  private async listFrames(tabId: number): Promise<Array<{ frameId: number; url: string }>> {
+    try {
+      const frames = await browser.webNavigation.getAllFrames({ tabId });
+      return (frames ?? []).map((f) => ({ frameId: f.frameId, url: (f.url ?? "").slice(0, 300) }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `could not list frames of tab ${tabId}: ${message}`);
+    }
+  }
+
+  private async navigate(tab: browser.tabs.Tab, args: Record<string, unknown> | undefined): Promise<unknown> {
+    const url = typeof args?.url === "string" ? args.url.trim() : "";
+    // Only absolute http(s)/file URLs: no javascript:, data:, or scheme-less
+    // values (tabs.update would happily navigate to relative junk).
+    if (!/^(https?|file):\/\//i.test(url)) {
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.INTERNAL,
+        "browser_navigate requires an absolute http(s) or file URL",
+      );
+    }
+    await browser.tabs.update(tab.id as number, { url });
+    return textResult({ navigatingTo: url });
   }
 
   private async getPage(tab: browser.tabs.Tab): Promise<unknown> {
@@ -194,29 +331,46 @@ export class ToolDispatcher {
    * injected (privileged pages, pre-injection), try programmatic injection
    * once; if that is not allowed, surface a structured permission error.
    */
-  private async content(tab: browser.tabs.Tab, msg: Record<string, unknown>, timeoutMs: number): Promise<ContentResult> {
+  private async content(
+    tab: browser.tabs.Tab,
+    msg: Record<string, unknown>,
+    timeoutMs: number,
+    frameId?: number,
+  ): Promise<ContentResult> {
     const tabId = tab.id as number;
 
-    const reply = await this.sendMessageToTab(tabId, msg, timeoutMs).catch(async (err) => {
+    const reply = await this.sendMessageToTab(tabId, msg, timeoutMs, frameId).catch(async (err) => {
       const message = err instanceof Error ? err.message : String(err);
       if (/receiving end does not exist|could not establish connection/i.test(message)) {
         // Attempt programmatic injection for http(s)/file pages.
         if (/^https?:|^file:/.test(tab.url ?? "")) {
           try {
             await browser.scripting.executeScript({
-              target: { tabId },
+              target: { tabId, ...(frameId !== undefined ? { frameIds: [frameId] } : {}) },
               files: ["content.js"],
             });
             // Give the content script a beat to register.
             await new Promise((r) => setTimeout(r, 150));
-            return await this.sendMessageToTab(tabId, msg, timeoutMs);
+            return await this.sendMessageToTab(tabId, msg, timeoutMs, frameId);
           } catch (injectErr) {
             const im = injectErr instanceof Error ? injectErr.message : String(injectErr);
+            if (frameId !== undefined && /frame/i.test(im)) {
+              throw new PiBrowserProtocolError(
+                PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND,
+                `frame ${frameId} is no longer available: ${im}`,
+              );
+            }
             throw new PiBrowserProtocolError(
               PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
               `cannot access this page (${tab.url}): ${im}`,
             );
           }
+        }
+        if (frameId !== undefined) {
+          throw new PiBrowserProtocolError(
+            PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND,
+            `no content script in frame ${frameId} of ${tab.url ?? "this page"} — the frame may have navigated away; re-run browser_get_dom for fresh frame ids`,
+          );
         }
         throw new PiBrowserProtocolError(
           PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
@@ -238,14 +392,19 @@ export class ToolDispatcher {
     return result;
   }
 
-  private sendMessageToTab(tabId: number, msg: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+  private sendMessageToTab(
+    tabId: number,
+    msg: Record<string, unknown>,
+    timeoutMs: number,
+    frameId?: number,
+  ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT, `content script timed out: ${msg.type}`)),
         timeoutMs,
       );
       browser.tabs
-        .sendMessage(tabId, msg)
+        .sendMessage(tabId, msg, frameId === undefined ? undefined : { frameId })
         .then(
           (resp) => {
             clearTimeout(timer);

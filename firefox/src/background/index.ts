@@ -23,6 +23,7 @@ import {
 import { AcpClient, bindingRefId, fetchPiTheme, notifyHost, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
 import { ToolDispatcher } from "./tool-dispatcher.js";
 import { McpServer, type ControlHandler } from "./mcp-server.js";
+import { networkLog } from "./network-log.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -518,6 +519,8 @@ function processCwdLikeFallback(): string {
 
 void (async () => {
   await store.hydrate();
+  // Start observing tab requests for browser_get_network (PRODUCT.md §36).
+  networkLog.start();
   // Read the active browser theme so the sidebar renders with it; re-read on
   // theme change and re-push state (the sidebar applies theme on every state).
   theme = await fetchPiTheme();
