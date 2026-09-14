@@ -58,6 +58,8 @@ export class MockSession implements BackendSession {
   readonly executedTools: Array<{ toolCallId: string; toolName: string; isError: boolean; result: unknown }> = [];
   private listeners = new Set<(event: BackendEvent) => void>();
   private pendingResolve: ((aborted: boolean) => void) | undefined;
+  /** Aborts the in-flight tool calls when the session is cancelled. */
+  private abortController: AbortController | undefined;
   isDisposed = false;
   history: Array<{ role: "user" | "assistant"; text: string }> = [];
   /** Per-prompt script; set from the driver before prompting. */
@@ -96,7 +98,7 @@ export class MockSession implements BackendSession {
         this.executedTools.push({ toolCallId, toolName: spec.toolName, isError: true, result: err.message });
         return;
       }
-      const result = await tool.execute(toolCallId, spec.args ?? {}, undefined);
+      const result = await tool.execute(toolCallId, spec.args ?? {}, this.abortController?.signal);
       this.emit({ type: "tool_end", toolCallId, toolName: spec.toolName, result, isError: false });
       this.executedTools.push({ toolCallId, toolName: spec.toolName, isError: false, result });
     } catch (err) {
@@ -117,6 +119,7 @@ export class MockSession implements BackendSession {
     if (this.isStreaming) return Promise.reject(new Error("session busy"));
     if (this.isDisposed) return Promise.reject(new Error("session disposed"));
     this.isStreaming = true;
+    this.abortController = new AbortController();
     const promptIndex = this.prompts.length;
     this.prompts.push({ text, images });
     const turn = this.turnFor(text);
@@ -167,7 +170,11 @@ export class MockSession implements BackendSession {
   }
 
   async abort(): Promise<void> {
-    if (this.isStreaming) this.pendingResolve?.(true);
+    if (!this.isStreaming) return;
+    // Abort the in-flight tool call (e.g. the REPL cell) so the child is
+    // killed, then settle the prompt as cancelled.
+    this.abortController?.abort();
+    this.pendingResolve?.(true);
   }
 
   async setModel(valueId: string): Promise<void> {

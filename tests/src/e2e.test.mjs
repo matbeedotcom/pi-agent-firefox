@@ -58,6 +58,8 @@ class FakeTabs {
     this.notifyLog = [];
     this.activeTabId = undefined;
     this.focusLog = [];
+    this.replOwned = new Set(); // tabIds opened via browser_open_tab (mirrors ReplTabs)
+    this.dispatchDelayMs = 0; // tests can widen the in-flight window
   }
 
   addTab(url, title = "Fake Page") {
@@ -109,8 +111,9 @@ class FakeTabs {
    * Throws structured error objects (code+message) for failures, mirroring
    * the Firefox add-on's ToolDispatcher behavior.
    */
-  dispatch(params) {
+  async dispatch(params) {
     this.calls.push(params);
+    if (this.dispatchDelayMs > 0) await new Promise((r) => setTimeout(r, this.dispatchDelayMs));
     const { sessionId, tool, arguments: args = {} } = params;
     const lookup = this.tabFor(sessionId);
     if (lookup.state === "unbound") {
@@ -154,12 +157,6 @@ class FakeTabs {
         return text({ found: true, waitedMs: 5, state: args.state ?? "visible" });
       case "browser_evaluate":
         return text({ value: "fake-eval-result", world: "page" });
-      case "browser_get_accessibility_tree":
-        return text({
-          tree: 'WebArea "Fake Page"\n  main\n    heading "Fake Page" (level 1)\n    button "Go" [el-2]',
-          nodeCount: 4,
-          truncated: false,
-        });
       case "browser_get_console":
         return text({
           messages: [{ t: Date.now(), level: "error", source: "window-error", text: "TypeError: fake is not defined" }],
@@ -190,6 +187,56 @@ class FakeTabs {
         tab.url = args.url;
         return text({ navigatingTo: tab.url });
       }
+      case "browser_get_accessibility_tree": {
+        // The REPL snapshot() asks for the structured nodes format.
+        if (args.format === "nodes") {
+          return text({
+            nodes: tab.dom.map((d) => ({ ref: d.ref, role: d.role, name: d.text, ...(d.role === "heading" ? { level: 1 } : {}), rect: { x: 90, y: 90, width: 20, height: 20 } })),
+            nodeCount: tab.dom.length,
+            truncated: false,
+          });
+        }
+        return text({
+          tree: 'WebArea "Fake Page"\n  main\n    heading "Fake Page" (level 1)\n    button "Go" [el-2]',
+          nodeCount: 4,
+          truncated: false,
+        });
+      }
+      case "browser_click_at":
+        return text({ found: true, x: args.x, y: args.y, clicked: { ref: "el-2", role: "button", tag: "button", text: "Go" } });
+      case "browser_focus":
+        return text({ focused: { tag: "button", role: "button" } });
+      case "browser_scroll":
+        return text({ scrolled: { tag: "button", role: "button" } });
+      case "browser_type_focused":
+        return text({ typed: { tag: "input", role: "textbox" }, chars: String(args.text ?? "").length });
+      case "browser_open_tab": {
+        const url = typeof args.url === "string" ? args.url : "about:blank";
+        const tabId = this.addTab(url, "REPL Tab");
+        this.replOwned.add(tabId);
+        // The real add-on rebinds the session to the REPL tab (owner "repl");
+        // the previous binding is remembered as the home tab.
+        this.bind(sessionId, tabId);
+        return text({ tabId, url });
+      }
+      case "browser_close_tab": {
+        const tabId = Number(args.tabId);
+        if (!this.replOwned.has(tabId)) {
+          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, `tab ${tabId} is not owned by this session's REPL`);
+        }
+        this.replOwned.delete(tabId);
+        this.closeTab(tabId);
+        // Restore the home tab when the session was bound to the closed tab.
+        if (this.bindings.get(sessionId) === tabId) {
+          const home = [...this.tabs.values()].find((t) => !t.closed);
+          if (home) this.bind(sessionId, home.id);
+        }
+        return text({ closed: tabId });
+      }
+      case "browser_list_tabs":
+        return text({
+          tabs: [...this.tabs.values()].filter((t) => !t.closed).map((t) => ({ id: t.id, url: t.url, title: t.title, bound: t.id === this.bindings.get(sessionId) })),
+        });
       default:
         throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${tool}`);
     }
@@ -1536,6 +1583,194 @@ test("javascript REPL (legacy transport): persistent cells, image content, timeo
     }
     assert.equal(orphans, "", `session close reaps the REPL worker (orphans: ${orphans})`);
 
+    assert.ok(host.alive);
+  } finally {
+    await shutdown(host);
+  }
+});
+
+test("javascript REPL (primitives): snapshot/goto/interact/tabs/checkpoint through the real worker", async () => {
+  const tabs = new FakeTabs();
+  const fakeFirefox = makeFakeFirefox(tabs);
+  const replDir = path.join(tmpRoot ?? (tmpRoot = mkdtempSync(path.join(tmpdir(), "pi-browser-e2e-"))), "repl-primitives");
+  const script = writeScript([
+    { match: "repl-snap", toolCalls: [{ toolName: "javascript", args: { code: "const s = await page.snapshot(); JSON.stringify(s.nodes.map((n) => n.role))" } }] },
+    { match: "repl-goto", toolCalls: [{ toolName: "javascript", args: { code: "const p = await page.goto('http://a.test/next'); p.url" } }] },
+    { match: "repl-act", toolCalls: [{ toolName: "javascript", args: { code: "const r = await page.clickAt(95, 95); [r.clicked.text, (await page.typeFocused('hi')).chars, (await page.focus('el-2')).focused.tag, (await page.scroll('el-2')).scrolled.tag].join('/')" } }] },
+    { match: "repl-tabs", toolCalls: [{ toolName: "javascript", args: { code: "const t = await tabs.open('http://aux.test/r'); const l = await tabs.list(); await page.close(); l.length" } }] },
+    { match: "repl-checkpoint", toolCalls: [{ toolName: "javascript", args: { code: "await checkpoint('state-1', { n: 1 }); 'saved'" } }] },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir });
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+    const tab = tabs.addTab("http://a.test/repl", "REPL Page");
+    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl-p" });
+    tabs.bind(s.sessionId, tab);
+
+    const runCell = async (name) => {
+      const mark = host.notifications.length;
+      await host.request(
+        AGENT_METHODS.session_prompt,
+        { sessionId: s.sessionId, prompt: [{ type: "text", text: name }] },
+        60_000,
+      );
+      return host.notifications
+        .slice(mark)
+        .filter((m) => m.method === "session/update" && m.params?.sessionId === s.sessionId && m.params.update?.sessionUpdate === "tool_call_update")
+        .map((u) => JSON.stringify(u.params.update?.rawOutput ?? ""))
+        .join("\n");
+    };
+
+    // P2.5: structured snapshot (nodes + refs + rects). (The last expression
+    // is a string, so the REPL prints it quoted — assert on the roles.)
+    let outs = await runCell("repl-snap");
+    assert.ok(outs.includes("heading") && outs.includes("button"), `snapshot roles: ${outs}`);
+    assert.ok(
+      tabs.calls.some((c) => c.tool === "browser_get_accessibility_tree" && c.sessionId === s.sessionId && c.arguments?.format === "nodes"),
+      "snapshot used the structured nodes format",
+    );
+
+    // P2.5: goto = navigate + readyState poll + info.
+    outs = await runCell("repl-goto");
+    assert.ok(outs.includes("http://a.test/next"), `goto resolved: ${outs}`);
+    assert.ok(tabs.calls.some((c) => c.tool === "browser_navigate" && c.sessionId === s.sessionId), "navigate routed through the bound tab");
+
+    // P2.5: clickAt / typeFocused / focus / scroll.
+    outs = await runCell("repl-act");
+    assert.ok(outs.includes("Go/2/button/button"), `interaction primitives: ${outs}`);
+    for (const tool of ["browser_click_at", "browser_type_focused", "browser_focus", "browser_scroll"]) {
+      assert.ok(tabs.calls.some((c) => c.tool === tool && c.sessionId === s.sessionId), `${tool} called`);
+    }
+
+    // P2.6: tabs.open -> list -> close lifecycle; binding restored.
+    outs = await runCell("repl-tabs");
+    assert.ok(outs.includes("2"), `two tabs listed before close: ${outs}`);
+    assert.equal(tabs.bindings.get(s.sessionId), tab, "binding restored to the bound tab after page.close()");
+    assert.equal(tabs.replOwned.size, 0, "REPL-owned tab cleaned up on close");
+
+    // P2.7: checkpoint lands in the session workspace (0600).
+    outs = await runCell("repl-checkpoint");
+    assert.ok(outs.includes("saved"), `checkpoint cell: ${outs}`);
+    const cp = path.join(replDir, s.sessionId, "state-1");
+    const fs = await import("node:fs");
+    assert.equal(fs.statSync(cp).mode & 0o777, 0o600, "checkpoint file is 0600");
+    assert.equal(fs.readFileSync(cp, "utf8"), JSON.stringify({ n: 1 }), "checkpoint content round-trips");
+
+    await host.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
+    assert.ok(host.alive);
+  } finally {
+    await shutdown(host);
+  }
+});
+
+test("javascript REPL (hardening): rebind mid-cell, ACP cancel, two-session isolation", async () => {
+  const tabs = new FakeTabs();
+  const fakeFirefox = makeFakeFirefox(tabs);
+  const replDir = path.join(tmpRoot ?? (tmpRoot = mkdtempSync(path.join(tmpdir(), "pi-browser-e2e-"))), "repl-hard");
+  const script = writeScript([
+    { match: "repl-mid", toolCalls: [{ toolName: "javascript", args: { code: "await page.info()" } }] },
+    { match: "repl-next", toolCalls: [{ toolName: "javascript", args: { code: "1 + 1" } }] },
+    { match: "repl-cancel", toolCalls: [{ toolName: "javascript", args: { code: "for (;;) {}" } }] },
+    { match: "repl-a1", toolCalls: [{ toolName: "javascript", args: { code: "secret = 'A'; 1" } }] },
+    { match: "repl-b1", toolCalls: [{ toolName: "javascript", args: { code: "typeof secret" } }] },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir });
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+    const tabA = tabs.addTab("http://a.test/1", "Tab A");
+    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl-h" });
+    tabs.bind(s.sessionId, tabA);
+
+    // P3.1: rebind mid-cell — the in-flight tool call hits the closed tab
+    // (structured error) and the NEXT cell starts with the invalidation note.
+    tabs.dispatchDelayMs = 300;
+    let p = host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: s.sessionId, prompt: [{ type: "text", text: "repl-mid" }] },
+      60_000,
+    );
+    await sleep(80); // the browser_get_page call is now in flight
+    tabs.closeTab(tabA);
+    host.sendRaw({
+      jsonrpc: "2.0",
+      method: X_PI_BROWSER.notify,
+      params: { sessionId: s.sessionId, event: "tab_closed", data: { tabId: tabA } },
+    });
+    await p;
+    const midOut = host.notifications
+      .filter((m) => m.method === "session/update" && m.params?.sessionId === s.sessionId && m.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update?.rawOutput ?? ""))
+      .join("\n");
+    assert.ok(midOut.includes("BROWSER_TAB_CLOSED"), `in-flight call failed with the structured code: ${midOut}`);
+
+    // Next cell: the tab_closed note is prepended (state survived; the note
+    // warns the model before it acts on a dead binding).
+    const tabA2 = tabs.addTab("http://a.test/2", "Tab A2");
+    tabs.bind(s.sessionId, tabA2);
+    tabs.dispatchDelayMs = 0;
+    const mark = host.notifications.length;
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: s.sessionId, prompt: [{ type: "text", text: "repl-next" }] },
+      60_000,
+    );
+    const nextOut = host.notifications
+      .slice(mark)
+      .filter((m) => m.method === "session/update" && m.params?.sessionId === s.sessionId && m.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update?.rawOutput ?? ""))
+      .join("\n");
+    assert.ok(nextOut.includes("bound tab was closed"), `invalidation note on next cell: ${nextOut}`);
+    assert.ok(nextOut.includes("2"), "state persisted across the dead cell (1 + 1 = 2)");
+
+    // P3.2: ACP cancel aborts a running cell (child killed, host alive).
+    p = host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: s.sessionId, prompt: [{ type: "text", text: "repl-cancel" }] },
+      60_000,
+    );
+    await sleep(2000); // the cell is spinning; cancel mid-loop
+    const cancelRes = await host.request(AGENT_METHODS.session_cancel, { sessionId: s.sessionId });
+    assert.deepEqual(cancelRes, {}, "session/cancel acked");
+    const res = await p;
+    assert.equal(res.stopReason, "cancelled", "cancel surfaced as the ACP stopReason");
+    // The killed child settles the cell AFTER the prompt resolved; poll for
+    // the abort notification.
+    let cancelOut = "";
+    for (let i = 0; i < 50 && !(cancelOut.includes("cell aborted") && cancelOut.includes("cancelled")); i++) {
+      await sleep(100);
+      cancelOut = host.notifications
+        .filter((m) => m.method === "session/update" && m.params?.sessionId === s.sessionId && m.params.update?.sessionUpdate === "tool_call_update")
+        .map((u) => JSON.stringify(u.params.update?.rawOutput ?? ""))
+        .join("\n");
+    }
+    assert.ok(cancelOut.includes("cell aborted"), `cancel aborted the cell: ${cancelOut}`);
+    assert.ok(host.alive, "host survived the cancel");
+
+    // P3.3: two sessions, two tabs — REPL state and tool traffic never cross.
+    // A defines `secret` in its own realm; B must not see it.
+    const s2 = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl-h2" });
+    const tabB = tabs.addTab("http://b.test/1", "Tab B");
+    tabs.bind(s2.sessionId, tabB);
+    await host.request(AGENT_METHODS.session_prompt, { sessionId: s.sessionId, prompt: [{ type: "text", text: "repl-a1" }] }, 60_000);
+    const markB = host.notifications.length;
+    await host.request(AGENT_METHODS.session_prompt, { sessionId: s2.sessionId, prompt: [{ type: "text", text: "repl-b1" }] }, 60_000);
+    const bOut = host.notifications
+      .slice(markB)
+      .filter((m) => m.method === "session/update" && m.params?.sessionId === s2.sessionId && m.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update?.rawOutput ?? ""))
+      .join("\n");
+    assert.ok(bOut.includes("undefined"), `B's realm does not see A's state: ${bOut}`);
+
+    // Tool traffic is partitioned per session.
+    const forA = tabs.calls.filter((c) => c.sessionId === s.sessionId);
+    const forB = tabs.calls.filter((c) => c.sessionId === s2.sessionId);
+    assert.ok(forA.every((c) => c.sessionId === s.sessionId));
+    assert.ok(forB.every((c) => c.sessionId === s2.sessionId));
+
+    await host.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
+    await host.request(AGENT_METHODS.session_close, { sessionId: s2.sessionId });
     assert.ok(host.alive);
   } finally {
     await shutdown(host);
