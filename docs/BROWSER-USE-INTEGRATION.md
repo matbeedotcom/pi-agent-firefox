@@ -10,11 +10,18 @@ workspace artifacts) driving **our** Firefox — through our add-on (browser
 tools, content scripts, bindings) and our pi instance (the ACP agent in the
 native host).
 
-**Owner constraint (2026-09-14): no CDP-over-TCP server, whatsoever.**
-That eliminates the "unmodified SDK against a local CDP endpoint" path
-(Option A below) and leaves two viable shapes: **B — fork the SDK, transport
-over our broker socket** and **C — port the REPL primitive layer into our own
-pi agent**. This doc designs both and recommends C.
+**Owner constraints (2026-09-14):**
+1. **No CDP-over-TCP server, whatsoever.** That eliminates the "unmodified SDK
+   against a local CDP endpoint" path (Option A below).
+2. **The agent must control the user's real browser** — their live Firefox
+   (real tabs, real profile, logged-in state), not a launched/cloud/headless
+   instance (which is `@browser_use/pi`'s default). Both surviving options do
+   this through the add-on; the constraint is what settles the B-vs-C call.
+
+Two viable shapes remain: **B — fork the SDK, transport over our broker
+socket** and **C — port the REPL primitive layer into our own pi agent**. This
+doc designs both and **decides C** (constraint 2 makes the controller our pi
+instance, already bound to the user's tab via the existing sidebar UX; see §6).
 
 ---
 
@@ -122,7 +129,14 @@ existing UDS/native-messaging trust boundary.
 
 ---
 
-## 4. Option C — the REPL becomes a tool of OUR pi agent (recommended)
+## 4. Option C — the REPL becomes a tool of OUR pi agent (DECISION)
+
+The controller is our pi instance, and it drives the user's **live** tab: the
+primary target of `page.*` is the session's bound tab — the one the user bound
+in the sidebar — so `page.goto`, `page.click`, `page.screenshot` act on the
+tab the user is actually looking at (they watch it happen). Agent-owned tabs
+(`tabs.open`) are auxiliary (see §4.2). Tab scope (bound-only vs any tab) is
+open question §9.1.
 
 Port the SDK's worker/realm design into the native host so that **our ACP
 agent** gets a `javascript` tool: a persistent V8 REPL whose `page`/`tabs`
@@ -340,14 +354,18 @@ surface.
 | effort (v1) | ~2 weeks | ~2.5–3 weeks + ongoing |
 | future upstream seam | irrelevant | if upstream ever adds a non-CDP transport, the fork pain ends |
 
-**Recommendation: C.** It satisfies the constraint with the smallest surface,
-fits the product (the sidebar agent *gains* the capability instead of our
-stack becoming a backend for a driver app), and is fully inside our test
-pyramid. **B is the fallback if "the actual `@browser_use/pi` agent"
-matters** — e.g. we want to run their evals/benchmarks/history against our
-Firefox, or we expect to adopt upstream releases as-is. The decision question
-is one: *do we need SDK identity (evals/history/prompt fidelity), or the
-capability inside our sessions?* Answer "capability" → C. Answer "identity" → B.
+**Decision (owner, 2026-09-14): C.** The requirement that the agent control
+the user's **real** browser settles it. In C the controller is our pi instance
+— the agent the user is already talking to in the sidebar, already bound to
+their tab through the existing binding UX — so the REPL acts directly on the
+user's live tab. In B the controller is an external headless SDK process in
+the user's app that has to synthesize a tab binding out-of-band (the binding
+UX lives in the add-on sidebar, tied to *our* sessions, not the worker's) — an
+awkward fit for "the user's browser is in control." C also has the smallest
+surface and lives fully in our test pyramid. **B remains only as a fallback**
+if we later need to run the *actual* `@browser_use/pi` agent (its evals / 
+history format / prompt identity) against our browser — a distinct goal from
+"control the user's browser."
 
 Note the two are not mutually exclusive long-term: C's mapping layer
 (primitive→tool) and B's (CDP→tool) share ~70% of the add-on deltas; starting
@@ -427,9 +445,15 @@ SDK + scripted `models` collection → live pass. ≈ 2.5–3 weeks + fork upkee
 
 ## 9. Open questions
 
-1. **C vs B identity call** (§6) — needs the owner's one-line answer:
-   capability in our sessions (C) vs. running the real SDK (B).
-   Default assumption in this plan: C.
+1. **Tab scope** (pending owner call) — "control the user's browser" can mean:
+   **(a)** the session's **bound tab** only (current security model, invariant
+   §49.5: explicit session→tab binding; the agent's `page.*` acts on that one
+   live tab; `tabs.open` creates auxiliary REPL-owned tabs, closed at session
+   end) — or **(b)** **any tab** in the user's browser (the agent can
+   list/switch/operate on any of the user's tabs), a broader grant that
+   changes invariant 5 and needs its own permission/approval story. **Default
+   for v1: (a)** + auxiliary tabs. (b) is a later, explicitly-enabled
+   extension, not a v1 blocker.
 2. **`javascript` availability**: always (with `BROWSER_NOT_BOUND` errors) vs.
    only when the session has a bound tab. Leaning: always — the tool can
    explain what's missing; sessions often bind late.
