@@ -174,6 +174,23 @@ IPC request `{type:'tool', tool, args}` answered by the host through the
 - cell timeout/cancellation = SIGKILL the child (same state-loss contract as
   the SDK — a synchronous infinite loop dies, host survives).
 
+**Why `node:inspector` at all — the DOM is in Firefox.** `node:inspector`
+never touches the browser or the DOM. All DOM/AX/input work happens in the
+add-on's content scripts. The *agent's code* (the cells the model writes —
+`await page.goto(url)`, persistent variables, `checkpoint(...)`) runs in the
+Node ReplWorker child, where `page`/`tabs` are **proxies**: each method goes
+back over IPC → host → tool transport → add-on → content script → real DOM.
+`node:inspector.Session` is simply a V8 handle to that child's **own** JS
+engine, used to run each cell as `Runtime.evaluate { contextId, awaitPromise,
+replMode: true, objectGroup: 'cell' }` against one persistent named context
+(`vm.createContext({}, { name: 'pi-repl' })`). That buys: top-level `await` +
+last-expression result capture (REPL semantics), one context that survives
+across cells so state persists, per-cell object-group cleanup (no cross-cell
+leaks), and real stack traces via `exceptionDetails`. It is the same
+mechanism Node's own REPL uses. A bare `vm.runInContext`/`eval` would force us
+to re-implement all four by hand. (The child process itself — not the
+inspector — is what makes a hung cell killable without killing the host.)
+
 ### 4.2 Primitive → tool mapping (native shapes, no CDP emulation)
 
 | primitive | implementation |
@@ -393,6 +410,11 @@ inside our host.
 ---
 
 ## 8. Implementation plan (Option C; B fallback in parens)
+
+**Executable task-by-task plan: [`docs/BROWSER-USE-REPL-PLAN.md`](./BROWSER-USE-REPL-PLAN.md)**
+(P0 prototype → P1 `javascript` tool + session wiring → P2 primitives +
+add-on deltas → P3 hardening/docs; ~2 weeks; each phase CI-green). The
+summary below is kept for context; the plan doc is authoritative.
 
 ### Phase 0 — REPL child prototype (0.5–1 day)
 Bare ReplWorker child (node:inspector realm, one cell, curated globals) +
