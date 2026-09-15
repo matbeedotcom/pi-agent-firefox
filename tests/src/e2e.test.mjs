@@ -1776,3 +1776,60 @@ test("javascript REPL (hardening): rebind mid-cell, ACP cancel, two-session isol
     await shutdown(host);
   }
 });
+
+// WS2/T2.3 (BROWSER-USE-SUPPORT-PLAN.md): rebinding the session to a different
+// tab (binding_changed, tab stays open) invalidates the REPL realm — the next
+// cell starts with the "binding changed" note. P1.3 deliverable, scripted e2e.
+test("javascript REPL: rebind (binding_changed) -> next cell starts with the note", async () => {
+  const tabs = new FakeTabs();
+  const fakeFirefox = makeFakeFirefox(tabs);
+  const replDir = path.join(tmpRoot ?? (tmpRoot = mkdtempSync(path.join(tmpdir(), "pi-browser-e2e-"))), "repl-rebind");
+  const script = writeScript([
+    { match: "rebind-a", toolCalls: [{ toolName: "javascript", args: { code: "origin = 'A'; 1" } }] },
+    { match: "rebind-b", toolCalls: [{ toolName: "javascript", args: { code: "2 + 2" } }] },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir });
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl-rebind" });
+    const tabA = tabs.addTab("http://a.test/1", "Tab A");
+    tabs.bind(s.sessionId, tabA);
+
+    // Cell on tab A establishes realm state.
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: s.sessionId, prompt: [{ type: "text", text: "rebind-a" }] },
+      60_000,
+    );
+
+    // Rebind: the add-on points the session at a different (open) tab.
+    const tabB = tabs.addTab("http://b.test/1", "Tab B");
+    tabs.bind(s.sessionId, tabB);
+    host.sendRaw({
+      jsonrpc: "2.0",
+      method: X_PI_BROWSER.notify,
+      params: { sessionId: s.sessionId, event: "binding_changed", data: { tabId: tabB } },
+    });
+
+    // The next cell starts with the invalidation note (state may have
+    // survived, but the model is warned the page it is looking at is new).
+    const mark = host.notifications.length;
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: s.sessionId, prompt: [{ type: "text", text: "rebind-b" }] },
+      60_000,
+    );
+    const out = host.notifications
+      .slice(mark)
+      .filter((m) => m.method === "session/update" && m.params?.sessionId === s.sessionId && m.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update?.rawOutput ?? ""))
+      .join("\n");
+    assert.ok(out.includes("tab binding changed"), `binding_changed note on next cell: ${out}`);
+
+    await host.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
+    assert.ok(host.alive);
+  } finally {
+    await shutdown(host);
+  }
+});

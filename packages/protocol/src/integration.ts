@@ -37,7 +37,7 @@ export const PI_BROWSER = {
    * auxiliary tabs, closed at session unbind), and browser_get_accessibility_tree
    * `format: "nodes"` (structured snapshot for page.snapshot()).
    */
-  browserToolVersion: 5,
+  browserToolVersion: 6,
   /** Stable Firefox Native Messaging host name (manifest `name`). */
   nativeHost: "dev.pi.browser",
   /** Stable Firefox add-on ID (gecko.id). Must match allowed_extensions. */

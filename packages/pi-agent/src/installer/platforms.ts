@@ -6,7 +6,7 @@
  * per-app (plan §23); on Linux/Windows both apps share one location.
  */
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile, rm, chmod, stat } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rm, chmod, stat, cp } from "node:fs/promises";
 import path from "node:path";
 import {
   buildManifest,
@@ -24,6 +24,20 @@ import {
 } from "./common.js";
 
 const NATIVE_HOST_FILE = NATIVE_HOST_NAME.replace(/\./g, "_");
+
+/**
+ * Skill shipped with the package (WS1/T1.3 of BROWSER-USE-SUPPORT-PLAN.md).
+ * Source lives in the package: skills/browser-walk/SKILL.md.
+ */
+export const SKILL_DIRNAME = "browser-walk";
+export const SKILL_SOURCE_PATH = (pkgRoot: string) => path.join(pkgRoot, "skills", SKILL_DIRNAME, "SKILL.md");
+/**
+ * Where the skill is installed for the agent: the harness-neutral global
+ * skills dir (~/.agents/skills) — used by this machine and shared by other
+ * harnesses (Agent Skills standard).
+ */
+export const SKILL_INSTALL_PATH = (homeDir: string) =>
+  path.join(homeDir, ".agents", "skills", SKILL_DIRNAME, "SKILL.md");
 
 export interface InstallTargets {
   id: "linux" | "macos" | "windows";
@@ -112,6 +126,13 @@ export async function installHost(opts: InstallOptions, targets: InstallTargets)
   await writeFile(launcherPath, targets.launcherContent(nodePath, mainJs), "utf8");
   if (targets.needsChmod) await chmod(launcherPath, 0o755);
   lines.push(`launcher: ${launcherPath}`);
+
+  // Skill (steering layer: the model reads it when a tab-walk task comes up).
+  const skillSource = SKILL_SOURCE_PATH(pkgRoot);
+  const skillTarget = SKILL_INSTALL_PATH(env.homeDir);
+  await mkdir(path.dirname(skillTarget), { recursive: true });
+  await cp(skillSource, skillTarget, { force: true });
+  lines.push(`skill: ${skillTarget}`);
 
   // Manifest(s)
   const manifest = buildManifest(launcherPath);
@@ -283,6 +304,9 @@ export async function uninstallHost(
       }
     }
   }
+  // Skill removal applies to ALL platforms: install copies it unconditionally.
+  await rm(SKILL_INSTALL_PATH(env.homeDir), { force: true });
+  lines.push(`removed skill: ${SKILL_INSTALL_PATH(env.homeDir)}`);
   return lines;
 }
 

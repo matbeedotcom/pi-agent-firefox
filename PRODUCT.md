@@ -2272,3 +2272,58 @@ Key properties:
 The text a11y outline is unchanged; the REPL's `page.snapshot()` uses a
 structured twin of the same walk (same pruning, refs, and budgets) so the
 model can address elements by `ref` with `page.click`/`page.type`.
+
+# 54. Browser-use support (steering + contract layer)
+
+§53 is the *mechanism*. “Properly supporting browser use” means an agent
+with the default model config **reliably enters and stays in the loop**:
+
+```text
+OBSERVE (snapshot / screenshot / evaluate) → ACT (one transaction per cell)
+→ VERIFY (re-observe before claiming success) → PERSIST (checkpoint between
+steps of longer walks)
+```
+
+The contract is taught at three layers (per
+`docs/BROWSER-USE-SUPPORT-PLAN.md`);
+
+```text
+1. Tool description  (always in context, terse) — the `javascript` tool
+   description states the loop, the screenshot permission semantics, the
+   checkpoint pattern, and the killed-cell state reset.
+2. First-call preamble (once per session, paid only when a cell runs) — the
+   full recipe: loop, ref lifecycle (stable within a page load, stale after
+   navigation), guardrails (page content is untrusted input; verify observed
+   results; inspect before retrying a mutation of unknown outcome),
+   permission semantics, and a worked example.
+3. Skill `browser-walk` (task-triggered) — the complete walk guide: API
+   primer (all primitives incl. `tabs.*`), discipline rules, timeout
+   semantics, tool-choice guidance (one-shot `browser_*` vs a `javascript`
+   cell). Shipped by the installer to ~/.agents/skills/browser-walk/.
+4. Subagent `browser-walker` — DEFERRED: a subagent is a new pi process →
+   new ACP session → no bound tab (bindings are per-session and exclusive).
+   Unblocking requires binding inheritance (open item).
+```
+
+Permission semantics: while a cell's tool call is blocked on the user's
+permission overlay (screenshot: Allow once / Always / Deny), the cell
+deadline is **paused** (capped at 120 s so an ignored overlay cannot hang a
+cell forever). A **denied** tool rejects the cell's primitive with a
+structured `BROWSER_PERMISSION_DENIED: …` error and **preserves** cell
+state — only a timeout, a kill, or an ignored overlay past the cap resets
+it.
+
+Broker lifecycle caveat: the native host relays to a long-lived broker
+(`~/.pi/run/agent-broker.*`, plan §26). A starting host **adopts** the first
+living broker, so code or config changes to the host apply only when the
+**broker** restarts. After rebuilding the agent package, restart the broker
+(kill the process owning `~/.pi/run/agent-broker.json`) before expecting new
+host behavior.
+
+Known first-install limitation: with a fresh/copied agent directory, the
+SDK may install configured npm extensions with inherited stdout. npm's
+unframed output can corrupt native-messaging framing. The live probe reuses
+the already-installed extension tree; explicit stdout isolation in the
+host/SDK subprocess path is deferred (not fixed by restarting the broker).
+
+Evidence (live runs, real model): see `docs/VERIFICATION.md`.

@@ -447,3 +447,304 @@ tools · `c0dafc6` screenshot permission gate · `68f1661` modal fix · `f8b674c
 + e2e flake fix · `89ffb2b` captureTab-first · `00c31b5` captureTab note · `dcabea9` onboarding
 auto-detection · `fe69686` onboarding screens · `979600b` Firefox-155 lifecycle detection ·
 `c8592bd` bootstrap state-clobber fix.
+
+## Browser-use support follow-up — 2026-09-15 (UTC)
+
+**Status:** the fixed pipeline passes the real cold-start gate: run 5, 18/18
+checks, real default Qwen model, autonomous javascript cells, checkpoint and
+screenshot. Run 4 exposed a persistent-realm GC bug; it was reproduced,
+fixed, and regression-tested before run 5. Earlier runs remain below as
+failure history, not current unresolved GC risk.
+
+### Setup failures and probe fixes
+
+- Terminated requested stale native host 719576 and Firefox 294136, then found
+  and terminated the older still-running probe 700679 (and its owned browser
+  group). That older probe interfered with run 1 by killing its fresh host.
+  Final process inspection found no live probe/native host; `~/.pi/run/` was
+  empty and the installed native manifest was restored.
+- Previous output was not actually absent: host logs live under
+  `/tmp/pi-live-*/host.log`, and evidence under `VERIFICATION-evidence/`, not
+  `/tmp/phase2-verify/live-*.log`. Prior logs showed new sessions followed by
+  old global session loads. `PI_BROWSER_AGENT_DIR` scopes SDK services but not
+  SessionManager's default paths. `.probe/live-repl.mjs` now also sets
+  `PI_CODING_AGENT_DIR`, copies settings/auth/model configuration and the model
+  catalog cache, and checks that the prompted session is the newly created one.
+  Copying the catalog matters: without it the SDK selected `openai/gpt-5.5`
+  instead of the configured `llama.cpp/Qwen3.8-27B-GGUF`.
+- Run 2 revealed a separate startup failure. With a fresh agent directory the
+  SDK auto-installs configured extensions; npm inherits native stdout. A
+  direct framed-host diagnostic observed unframed `added 109 packages, and
+  audited 153 packages in 2s` between the initialize and session/new frames;
+  the request then timed out. The probe now reuses the installed
+  `~/.pi/agent/npm` tree via symlink, retaining the same configured extensions.
+  **Production limitation:** host/SDK subprocess stdout isolation is deferred;
+  first-time package installation can still corrupt native framing. Also
+  documented in PRODUCT.md §54.
+- Probe diagnostics now print work/evidence/log paths immediately, capture
+  host stderr, share one 12-minute model budget rather than three sequential
+  budgets, and reap only the run's own marked host processes on cleanup.
+  The fixture page no longer names the tool either.
+
+### T3.1 — intermediate successful evidence: run 3, revalidated
+
+Exact launch (real default model; task never names the tool):
+
+```sh
+PI_LIVE_COLD=1 nohup node .probe/live-repl.mjs > /tmp/phase2-verify/cold-3.out 2>&1 &
+```
+
+Evidence directory:
+`VERIFICATION-evidence/live-2026-09-15T01-11-34-524Z/`.
+Original host log: `/tmp/pi-live-1789434694524/host.log`.
+Session: `01a0a29e-ab09-710f-9102-38adb9b8dadb`.
+The host explicitly records `backend: pi` and
+`model=llama.cpp/Qwen3.8-27B-GGUF`. `session.jsonl` contains model-authored
+assistant tool calls (no mock script). Excerpt from the host log:
+
+```text
+[2026-09-15T01:12:21.859Z] session/tool_start 01a0a29e-ab09-710f-9102-38adb9b8dadb javascript
+```
+
+The model-authored cell (excerpt, not injected by the probe):
+
+```js
+const snap = await page.snapshot();
+const go = snap.nodes.find((n) => n.role === "button" && n.name === "Go");
+const goRef = go.ref;
+await page.click(goRef);
+const state = await page.evaluate("() => document.getElementById('state')?.textContent ?? 'no #state element'");
+const info = await page.info();
+await checkpoint("live-walk.json", { title: info.title, state, buttonRef: goRef });
+```
+
+At `01:12:26.378Z` the model authored a second `javascript` cell:
+`await screenshot()`. Permission was shown and Allow once was granted.
+Checkpoint at
+`/tmp/pi-live-1789434694524/repl/01a0a29e-ab09-710f-9102-38adb9b8dadb/live-walk.json`
+(and evidence `checkpoint.json`, both mode 0600):
+
+```json
+{"title":"Live REPL Walk","state":"clicked:1789434741904","buttonRef":"el-1"}
+```
+
+Screenshot: evidence `browser-screenshot-1.jpg` (26,655 bytes, JPEG signature
+and trailer verified, ImageMagick identifies a 1158×815 JPEG). The SDK
+normalized the image to JPEG. The original probe falsely failed two checks:
+PNG-only extraction and a required literal `ref` key. Neither was required by
+the task. `.probe/live-repl-evidence.mjs` now recognizes PNG/JPEG magic bytes
+and valid refs under `ref`/`buttonRef`/`button_ref`/`elRef`; empty/stub data still
+fails. Tests cover those cases. Live title and clicked state are also checked.
+
+Original `results.json` remains unchanged (16/18); `results-revalidated.json`
+records 18/18 with the two corrections explained. Independent artifact
+revalidation output: `/tmp/phase2-verify/cold-3-revalidated.log`.
+This is an intermediate **successful cold loop**, not a claim that the
+original probe exited zero or that all repeat runs succeed.
+
+### Fourth run — reliability failure and bounded diagnosis
+
+Command: `PI_LIVE_COLD=1 nohup node .probe/live-repl.mjs > /tmp/phase2-verify/cold-4.out 2>&1 &`.
+Evidence: `VERIFICATION-evidence/live-2026-09-15T01-14-48-243Z/`;
+original host log `/tmp/pi-live-1789434888243/host.log`.
+The model again selected `javascript`: its first observation cell succeeded
+at `01:15:29Z`, then the next three cells failed starting at `01:15:37.961Z`:
+
+```text
+[cell error] Inspector error -32000: Cannot find context with specified id
+```
+
+The model fell back to stateless browser tools, verified the click, captured
+a screenshot, and wrote a checkpoint outside the REPL workspace. This does
+**not** pass the REPL loop gate. The final assistant message at `01:17:06.763Z`
+claimed completion; after preserving the host log/transcript/non-REPL
+checkpoint, the probe was stopped rather than waiting out its remaining
+budget. No fourth-run all-green result is claimed.
+
+**Root cause:** the missing context is the worker's Node inspector VM realm,
+not Firefox's page execution context. `packages/pi-agent/src/repl/worker.ts`
+creates `realm` at line 363, installs globals once with `Object.assign`, then
+retains only its numeric `executionContextId` for `Runtime.evaluate` (line
+449). Before the fix, no live callback retained `realm` after initialization; GC could destroy
+it between cells. `Runtime.executionContextDestroyed` is not handled.
+
+Deterministic diagnostic (temporary copies of the built worker, no production
+worker edits): `node /tmp/phase2-verify/context-gc-probe.mjs`; output at
+`/tmp/phase2-verify/context-gc-probe.log`. With Node 23.10.0 `--expose-gc`, the
+first cell returned `2`, forced GC emitted
+`Runtime.executionContextDestroyed` with `executionContextId: 2`, and the
+second cell reproduced the exact -32000 error. A control retaining `realm`
+in a timer closure returned `2` for both cells. The original run does not log
+its numeric context id, so id 2 is proven for the reproduction, not asserted
+for the original run.
+
+No timeout/kill/reset/rebind note precedes the original failures; they occur
+before screenshot permission, excluding the permission-pause path as the
+trigger in this run. The follow-up fix below strongly retains the realm and tests forced GC.
+Error classification still deserves review: these cell
+errors appeared inside tool results marked `isError: false`.
+
+### T2.2 — evidence versus vision
+
+The configured model catalog advertises `input: ["text", "image"]`; run 3's
+`javascript` tool result contains an actual JPEG image part. That proves
+image delivery into the transcript, **not visual comprehension**. Neither
+run isolates screenshot-only information from DOM-accessible information;
+vision is therefore **unverified**, not classified as text-only.
+
+The accepted fallback guidance is now explicit and consistent in the
+javascript description, first-call preamble, and installed browser-walk skill:
+“Screenshots are user-facing evidence; text-only models must rely on
+page.snapshot()/page.evaluate(), not image contents.” Tests assert the
+description and preamble wording. The skill was reinstalled after the update.
+
+### Final automated validation
+
+- `npm run typecheck`: exit 0 — `/tmp/phase2-verify/support-typecheck.log`.
+- `npm run build`: exit 0 — `/tmp/phase2-verify/support-build.log`.
+- `npm test`: exit 0 — `/tmp/phase2-verify/support-test.log`; protocol 18,
+  agent 114, Firefox 33, Thunderbird 78, integration 27: **270 passed, 0 failed**.
+- Updated the stale ACP metadata test from browserToolVersion 5 to 6.
+  Added live evidence MIME/ref regression tests; updated steering assertions.
+- `git diff --check`: clean. `git diff --cached --name-only`: empty; nothing staged.
+
+Remaining limitations: unisolated production npm stdout on first install;
+vision comprehension unverified (explicit fallback guidance supplied); local
+`/tmp` and ignored evidence directories are not durable CI artifacts. A
+single fixed-build live pass is not a statistical reliability estimate.
+
+
+### Production GC fix and canonical T3.1 pass — run 5
+
+`packages/pi-agent/src/repl/worker.ts` now gives the live inspector Session
+a strong `realm` field (`evaluator.realm = realm`). A numeric inspector
+context id alone does not keep its VM realm alive. The field is retained
+for the worker lifetime; no recreation or state reset is involved.
+
+Regression: `worker realm survives forced GC between cells with state intact`
+in `packages/pi-agent/test/repl.test.ts` forks the actual compiled worker with
+`--expose-gc` and a test-only preload. Cell 1 defines `kept.value = 41`; two GC
+cycles run outside the VM; cell 2 reads `kept.value + 1` and returns 42. It
+failed before the fix with the exact -32000 error
+(`/tmp/phase2-verify/gc-regression-red.log`), and passes after the fix in the
+full 270-test suite. No GC primitive or testing hook was added to production.
+
+Final exact command:
+
+```sh
+PI_LIVE_COLD=1 nohup node .probe/live-repl.mjs > /tmp/phase2-verify/cold-5.out 2>&1 &
+```
+
+**Result: LIVE VERIFICATION PASSED, 18/18 checks.** This fixed-build run is
+the canonical end-to-end evidence, superseding run 3's manual revalidation.
+Evidence: `VERIFICATION-evidence/live-2026-09-15T01-23-11-351Z/`
+(`results.json`, `host.log`, `host-stderr.log`, `session.jsonl`,
+`checkpoint.json`, `browser-screenshot-1.jpg`, display screenshots).
+Original host log: `/tmp/pi-live-1789435391351/host.log`.
+Session: `01a0a2a9-4d07-73bb-9abe-0d87b549572a`.
+Backend: `pi`; model: `llama.cpp/Qwen3.8-27B-GGUF`.
+
+Model-authored host-log excerpts:
+
+```text
+[2026-09-15T01:24:05.933Z] session/tool_start 01a0a2a9-4d07-73bb-9abe-0d87b549572a javascript
+[2026-09-15T01:24:10.342Z] session/tool_start 01a0a2a9-4d07-73bb-9abe-0d87b549572a javascript {"code":"await screenshot();"}
+```
+
+The first cell used `page.snapshot()`, found Go by role/name, read
+`page.info()`, clicked the observed ref, verified `#state` via
+`page.evaluate()`, and called `checkpoint()`. The second captured an approved
+screenshot. Full model-authored code is in `session.jsonl` and `host.log`.
+Checkpoint (original and evidence copy are 0600):
+
+```json
+{"url":"http://127.0.0.1:40597/live-walk.html","title":"Live REPL Walk","state":"clicked:1789435445979","buttonRef":"el-1"}
+```
+
+The actual tool-result image is preserved as `browser-screenshot-1.jpg`;
+magic bytes and ImageMagick decoding verify JPEG, not just the declared MIME.
+The recorded prompt does not name the tool. No mock backend/script was used.
+After cleanup, no probe/native-host processes remained and the normal native
+manifest was restored. Full typecheck/build/tests were rerun after the GC fix.
+
+## Independent review of the browser-use diff (2026-09-15)
+
+A read-only reviewer (separate session) audited the uncommitted diff and
+returned **BLOCK** with 4×P1 + 2×P2. All six were fixed and re-verified:
+
+| # | Finding | Fix |
+|---|---------|-----|
+| P1-1 | Pause cap checked only after the tool executor settled — a never-settling permission wait hung the cell past the cap | Watchdog armed on pause entry fires at the cumulative cap **while blocked** (`runtime.ts` `PauseLedger.enter`/`fireCap`). New test: never-settling executor, cap 400ms, asserts rejection before the 900ms settle point |
+| P1-2 | Every tool call paused the deadline (incl. `page.info()`, navigation) | Pause now applies only to `permissionTools` (default `["browser_screenshot"]`, configurable). New test: slow ordinary tool is bounded by the 400ms deadline |
+| P1-3 | Concurrent in-flight prompts: first completion resumed the timer early; per-call durations summed (overlap double-counted) | Outstanding-count ledger resumes only on the **last** settle and measures the union. New test: two concurrent 900ms prompts survive a 400ms deadline |
+| P1-4 | Late tool completions mutated runtime-global `blockedMs` / fired the current `this.pending` across cell boundaries | Ledger is cell-scoped (created in `receive()`, `live=false` in `finish()`); late `enter`/`exit` are no-ops. The global `blockedMs` field is gone |
+| P2-1 | Windows uninstall left the installed skill behind (removal was inside the non-Windows branch) | Skill removal moved out of the platform conditional (`installer/platforms.ts`) |
+| P2-2 | Skill-removal assertion initialized `true` and could never fail | Assert `stat()` rejects with `ENOENT` (same latent defect fixed for the manifest + legacy assertions in that block) |
+
+Evidence: `packages/pi-agent` tests 116/116 (was 112; +2 net new permission
+tests, the two old `page.info()`-based tests converted to `screenshot()`
+per the new contract); full repo build + suite exit 0
+(`/tmp/phase2-verify/review-fix-build.log`,
+`/tmp/phase2-verify/review-fix-suite.log`).
+
+## Complex browsing evaluation — "find 3 gluten-free dessert recipes" (2026-09-15)
+
+Stress test beyond the canonical local-page cold-start gate: real open-ended
+web task on a slow JS-heavy real site (Allrecipes), real model, no tool named
+in the task. Probe gained env overrides only (`PI_LIVE_TASK`,
+`PI_LIVE_START_URL` — `.probe/live-repl.mjs`, no built-in gate changes);
+evidence validator gained `recipeEntriesValid` (three distinct name+url+
+description entries; `.probe/live-repl-evidence.mjs`, covered by
+`tests/src/live-repl-evidence.test.mjs`).
+
+**Final run: `VERIFICATION-evidence/live-recipes-2026-09-15T01-56-38-592Z` —
+16/16 structural checks, task completed.**
+
+Performance:
+- First model-authored `javascript` cell at 01:57:20.678 (~42s after probe
+  start: UI setup + first model pass) — tool chosen autonomously.
+- 14 cells, 01:57:20 → 01:59:48 (~2.5 min total walk); total cell wall time
+  21.5s (one cell = a 20s waitFor timeout).
+- Strategy: goto site search → evaluate to collect `/recipe/` links → goto
+  each of 3 recipe pages → evaluate h1/meta/body → build entries →
+  `checkpoint("recipes.json")` (0600) → `screenshot()` (real image, verified
+  magic bytes, returned to the model).
+- 5 of 14 cells hit cell-level errors; **all 5 self-recovered** on the next
+  cell (4× `SyntaxError: Invalid or unexpected token`, 1× `Page condition
+  exceeded 20000 ms`).
+
+Failure catalog (attributed):
+1. **Model JS authoring (model layer, not product)** — 4× SyntaxError. The
+   27B model wrote multi-line double-quoted `page.evaluate("() => { … }")`
+   strings (unescaped newline in a string literal) and unbalanced parens in
+   `page.evaluate("…"));`. Each produced a clean `[cell error] SyntaxError`
+   with stack; the model rewrote single-line and succeeded. Product behavior
+   is correct; optional steering note: "keep evaluate scripts on one line".
+2. **20s wasted on a guessed selector (model + minor steering)** — cell
+   `waitFor("() => document.querySelector('.recipe-description')", …, 20000)`
+   timed out because the site does not use that class; model recovered with a
+   fallback evaluate. Steering note: prefer evaluate-with-fallback and short
+   waitFor budgets over guessed selectors.
+3. **Post-goto navigation-commit race (product gap, add-on layer)** —
+   observed in run 1 (01:52): `page.info()` immediately after `page.goto`
+   in the same cell reported the previous URL (navigate resolves when the
+   tab starts navigating, not when the new document commits; the next
+   primitive can execute in the old document). The model's own pattern
+   (waitFor/evaluate-verify after goto, per the contract) masked it in the
+   final run. Candidate fix: make `page.goto` resolve after commit (await
+   load with a cap) — follow-up, not done here.
+4. **Content-reasoning slips (model layer)** — final answer conflated "4.9
+   (29) / 17 REVIEWS" as "29 reviews" (29 is the rating count); the
+   checkpoint description includes "sweetened condensed milk", which appears
+   NOWHERE in the page content the model read (grep of the run log: the only
+   occurrence is the model's own checkpoint write) — a fabricated detail.
+   The evidence loop (checkpoint + screenshot) is what lets the user catch
+   this; no product defect.
+5. **Harness (fixed)** — the typed session cwd (`${work}/proj`) was never
+   created by the probe; the model self-reported the fallback to the session
+   workspace (graceful). Fixed: probe now `mkdirSync`s the cwd
+   (`.probe/live-repl.mjs`).
+
+Steering contract was NOT modified for this evaluation; two optional
+prereamble/skill notes (one-line evaluate scripts; waitFor budgets) are
+recorded above as follow-ups.

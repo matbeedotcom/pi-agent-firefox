@@ -9,7 +9,13 @@
  * deterministic mock (scripted `javascript` cell) so the test needs no model
  * API; the BROWSER side (DOM, content scripts, tabs, screenshots) is all real.
  * PI_LIVE_REAL=1 instead uses the configured real Pi model, without a script.
- * PI_LIVE_TIMEOUT_MS controls its model budget (default 12 minutes).
+ * PI_LIVE_COLD=1 is the cold-start acceptance gate (BROWSER-USE-SUPPORT-PLAN.md
+ * T3.1): real model, and the task text does NOT name the tool — the model
+ * must autonomously pick `javascript` and run the observe→act→verify→persist
+ * loop. PI_LIVE_TIMEOUT_MS controls its model budget (default 12 minutes).
+ *
+ * PI_LIVE_TASK overrides the prompt for a recipe evaluation; PI_LIVE_START_URL
+ * overrides the initial tab. Neither changes the built-in cold-start gate.
  *
  * The sidebar UI is driven with xdotool on a private Xvfb display. Evidence
  * (screenshots of the display, host log, workspace files) lands in
@@ -17,6 +23,7 @@
  *
  * Run: node .probe/live-repl.mjs
  */
+import { screenshotImage, checkpointButtonRef, recipeEntriesValid } from "./live-repl-evidence.mjs";
 import { execSync, spawn } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, statSync, writeFileSync } from "node:fs";
 function syncSymlinkSync(target, linkPath) {
@@ -31,12 +38,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const real = process.env.PI_LIVE_REAL === "1";
+const real = process.env.PI_LIVE_REAL === "1" || process.env.PI_LIVE_COLD === "1";
+const cold = process.env.PI_LIVE_COLD === "1";
 const modelTimeoutMs = Number(process.env.PI_LIVE_TIMEOUT_MS ?? 720_000);
 if (!Number.isFinite(modelTimeoutMs) || modelTimeoutMs <= 0) throw new Error("Invalid PI_LIVE_TIMEOUT_MS");
-const task = real
-  ? "Using the javascript tool, walk my current bound tab in ONE cell: take a snapshot, evaluate document.title and print it, print the first heading text, click the Go button and print the resulting state, take a screenshot, then save a checkpoint named live-walk.json containing the title, the resulting state, and the ref of the clicked button. Report what you observed."
-  : "live-repl-walk";
+const customTask = process.env.PI_LIVE_TASK;
+const task = customTask ?? (real
+  ? cold
+    // T3.1 cold start: open-ended, does NOT name the tool. The steering stack
+    // (description + first-call preamble + skill) must carry the model to the
+    // javascript tool and the full loop.
+    ? "In the tab you are bound to, find the Go button and click it, then tell me what the state text shows after the click. Take a screenshot as evidence and save a checkpoint file (live-walk.json) containing the page title, the resulting state text, and the element ref of the button you clicked."
+    : "Using the javascript tool, walk my current bound tab in ONE cell: take a snapshot, evaluate document.title and print it, print the first heading text, click the Go button and print the resulting state, take a screenshot, then save a checkpoint named live-walk.json containing the title, the resulting state, and the ref of the clicked button. Report what you observed."
+  : "live-repl-walk");
 const NODE = process.env.PI_LIVE_NODE ?? "/home/acidhax/.nvm/versions/node/v23.10.0/bin/node";
 const FIREFOX = "/home/acidhax/Downloads/firefox-155.0.1/firefox/firefox";
 // -displayfd allocates a free display and reports it ONLY after this server
@@ -51,6 +65,7 @@ const xvfb = spawn("Xvfb", [
   "-displayfd", "3", "-screen", "0", "1400x900x24",
 ], { stdio: ["ignore", "ignore", "pipe", "pipe"] });
 let ff;
+let ownedHostLog;
 let restoreManifest = () => {};
 let cleanedUp = false;
 function cleanup() {
@@ -59,6 +74,15 @@ function cleanup() {
   // web-ext's Firefox is a grandchild; killing just web-ext leaves it alive.
   if (ff?.pid) {
     try { process.kill(-ff.pid, "SIGTERM"); } catch { /* already exited */ }
+  }
+  if (ownedHostLog) {
+    for (const entry of readdirSync("/proc")) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const env = readFileSync(`/proc/${entry}/environ`, "utf8").split("\0");
+        if (env.includes(`PI_BROWSER_LOG_FILE=${ownedHostLog}`)) process.kill(Number(entry), "SIGTERM");
+      } catch { /* process already exited */ }
+    }
   }
   xvfb.kill();
   restoreManifest();
@@ -85,7 +109,7 @@ const DISPLAY = `:${await new Promise((resolve, reject) => {
 console.log(`owned Xvfb pid=${xvfb.pid} display=${DISPLAY}`);
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-const root = path.join(process.cwd(), "VERIFICATION-evidence", `live-${stamp}`);
+const root = path.join(process.cwd(), "VERIFICATION-evidence", `${customTask ? "live-recipes" : "live"}-${stamp}`);
 mkdirSync(root, { recursive: true });
 const evidence = (name) => path.join(root, name);
 
@@ -129,12 +153,28 @@ const nmManifest = path.join(nmHostDir, "com.matbee.agent.json");
 const pageDir = path.join(work, "page");
 mkdirSync(pageDir);
 const hostLog = path.join(work, "host.log");
+ownedHostLog = hostLog;
 const replDir = path.join(work, "repl");
 const brokerDir = path.join(work, "broker");
 const agentDir = path.join(work, "agent");
 mkdirSync(brokerDir, { recursive: true });
 mkdirSync(replDir, { recursive: true });
 mkdirSync(agentDir, { recursive: true });
+// SessionManager uses the SDK's canonical directory, not the services-only
+// PI_BROWSER_AGENT_DIR option. Preserve real model config, never old sessions.
+if (real) {
+  // Reuse installed extension packages: npm install writes unframed stdout,
+  // which corrupts the native messaging link during SDK resource loading.
+  symlinkSync(path.join(homedir(), ".pi", "agent", "npm"), path.join(agentDir, "npm"));
+  for (const name of ["settings.json", "models.json", "models-store.json", "auth.json"]) {
+    const source = path.join(homedir(), ".pi", "agent", name);
+    if (existsSync(source)) {
+      cpSync(source, path.join(agentDir, name));
+      chmodSync(path.join(agentDir, name), 0o600);
+    }
+  }
+}
+console.log(`work: ${work}\nevidence: ${root}\nhost log: ${hostLog}`);
 
 // Stale hosts from previous probe runs survive as BROKERS (plan §26 relay
 // mode: a starting host adopts the first living broker at
@@ -183,7 +223,7 @@ writeFileSync(
 </head>
 <body>
   <h1>Live REPL Walk</h1>
-  <p id="intro">The javascript tool walks this tab: snapshot, evaluate, click, screenshot, checkpoint.</p>
+  <p id="intro">Click Go to update the state below.</p>
   <button id="go" type="button" onclick="document.getElementById('state').textContent='clicked:' + Date.now()">Go</button>
   <div id="state" aria-live="polite">initial</div>
   <pre id="dbg"></pre>
@@ -246,10 +286,11 @@ writeFileSync(
     `export PI_BROWSER_REPL_DIR=${replDir}`,
     `export PI_BROWSER_BROKER_DIR=${brokerDir}`,
     `export PI_BROWSER_AGENT_DIR=${agentDir}`,
+    `export PI_CODING_AGENT_DIR=${agentDir}`,
     `export PI_BROWSER_LOG_FILE=${hostLog}`,
     `export PI_BROWSER_LOG_LEVEL=${real ? "debug" : "info"}`,
     `touch ${path.join(work, "host-launched")} 2>/dev/null || true`,
-    `exec ${NODE} ${path.join(REPO, "packages/pi-agent/dist/native-host/main.js")} "$@"`,
+    `exec ${NODE} ${path.join(REPO, "packages/pi-agent/dist/native-host/main.js")} "$@" 2>>${path.join(work, "host-stderr.log")}`,
     "",
   ].join("\n"),
 );
@@ -283,7 +324,8 @@ const httpServer = createServer((req, res) => {
   }
 });
 await new Promise((r) => httpServer.listen(0, "127.0.0.1", r));
-const pageUrl = `http://127.0.0.1:${httpServer.address().port}/live-walk.html`;
+const pageUrl = process.env.PI_LIVE_START_URL ?? `http://127.0.0.1:${httpServer.address().port}/live-walk.html`;
+writeFileSync(evidence("task.json"), JSON.stringify({ task, pageUrl, modelTimeoutMs }, null, 2));
 
 // ---------------------------------------------------------------------------
 // 2. Launch Xvfb + Firefox (via web-ext: temporary add-on, release-safe)
@@ -325,19 +367,20 @@ let exitCode = 0;
 const cpFiles = [];
 
 try {
+  const windowMatch = process.env.PI_LIVE_START_URL ? "--class firefox" : '--name "Live REPL Walk"';
   // Wait for the Firefox window.
   let win = "";
   for (let i = 0; i < 60 && !win; i++) {
     await sleep(1_000);
     try {
-      win = sh(`xdotool search --onlyvisible --name "Live REPL Walk" | head -1`);
+      win = sh(`xdotool search --onlyvisible ${windowMatch} | head -1`);
     } catch { /* not up yet */ }
   }
   if (!win) {
     check("firefox window appears", false, webExtLog.slice(-500));
     throw new Error("no firefox window");
   }
-  const matchingWindows = sh('xdotool search --onlyvisible --name "Live REPL Walk"').split("\n");
+  const matchingWindows = sh(`xdotool search --onlyvisible ${windowMatch}`).split("\n");
   check("exactly one live Firefox window on owned display", matchingWindows.length === 1, matchingWindows.join(", "));
   if (matchingWindows.length !== 1) throw new Error("ambiguous Firefox window target");
   writeFileSync(evidence("windows.txt"), sh("xwininfo -root -tree"));
@@ -398,6 +441,9 @@ try {
   shot("03-new-panel.png");
 
   // 3) cwd input + "Create session" (panel replaces the topbar area).
+  // The typed cwd must exist — the add-on does not create it (the model
+  // otherwise has to notice and fall back to the session workspace).
+  mkdirSync(path.join(work, "proj"), { recursive: true });
   click(127, 229, "cwd input");
   await sleep(500);
   typeInto("cwd", `${work}/proj`);
@@ -424,6 +470,7 @@ try {
 
   // 6) Prompt: type the trigger, click Send (bottom-left). Verify the host
   //    actually received the prompt; retry the typing if X focus raced.
+  const modelDeadline = Date.now() + modelTimeoutMs;
   let promptSent = false;
   for (let attempt = 1; attempt <= 3 && !promptSent; attempt++) {
     click(127, 830, `composer (attempt ${attempt})`);
@@ -440,6 +487,10 @@ try {
     }
     if (!promptSent) process.stdout.write("  (prompt not received by host, retrying)\n");
   }
+  const createdId = safeRead(hostLog).match(/session\/new -> ([^ ]+)/)?.[1];
+  const promptedId = safeRead(hostLog).match(/session\/prompt ([^ ]+)/)?.[1];
+  check("prompt targets the fresh session", Boolean(createdId) && promptedId === createdId);
+  if (!createdId || promptedId !== createdId) throw new Error("prompt session mismatch");
   await sleep(2_000);
   shot("07-prompt-sent.png");
   check("prompt reached the host (session/prompt)", promptSent, "");
@@ -449,9 +500,10 @@ try {
   //    "Allow once" (primary, first option) and confirm from the host log.
   const allowAt = (dx, dy) => xdotool(`mousemove ${wx + dx} ${wy + dy} click 1`);
   let promptSeen = false;
-  const promptDeadline = Date.now() + (real ? modelTimeoutMs : 30_000);
+  const promptDeadline = real ? modelDeadline : Date.now() + 30_000;
   while (Date.now() < promptDeadline && !promptSeen) {
     if (logLine(hostLog, "browser_screenshot: requesting user permission")) promptSeen = true;
+    else if (customTask && taskFinished()) break;
     else await sleep(500);
   }
   let allowed = false;
@@ -474,8 +526,8 @@ try {
   check("screenshot permission prompt shown + allowed", promptSeen && allowed, "");
 
   if (real) {
-    const deadline = Date.now() + modelTimeoutMs;
-    while (Date.now() < deadline && !realToolEvidence(safeRead(hostLog)).finished) await sleep(1_000);
+    const deadline = modelDeadline;
+    while (Date.now() < deadline && !(customTask ? taskFinished() : realToolEvidence(safeRead(hostLog)).finished)) await sleep(1_000);
     const log = safeRead(hostLog);
     const actual = realToolEvidence(log);
     // Exact: the log may contain 'mock' in unrelated strings; the actual
@@ -484,7 +536,7 @@ try {
     check("typed natural-language task recorded", log.includes(`text=${JSON.stringify(task)}`));
     check("configured real model resolved", /model=[^\s]+\//.test(log), log.match(/model=[^\n]+/)?.[0] ?? "missing");
     check("model authored non-trivial javascript cell", actual.calls.length > 0, actual.calls.join("\n"));
-    check("javascript result returned with page observations and screenshot", actual.finished, actual.ends.join("\n"));
+    check(customTask ? "model finished browsing turn" : "javascript result returned with page observations and screenshot", customTask ? taskFinished() : actual.finished, actual.ends.join("\n"));
     // Keep the actual browser screenshot returned to the model, not just Xvfb screenshots.
     const sessionId = log.match(/session\/new -> ([^ ]+)/)?.[1];
     // Per-run agent dir (PI_BROWSER_AGENT_DIR) — sessions live there now.
@@ -496,28 +548,37 @@ try {
         writeFileSync(evidence("session.jsonl"), transcript, { mode: 0o600 });
         for (const line of transcript.trim().split("\n")) {
           const message = JSON.parse(line).message;
-          if (message?.role !== "toolResult" || message.toolName !== "javascript") continue;
+          if (message?.role !== "toolResult" || !(message.toolName === "javascript" || (customTask && message.toolName === "browser_screenshot"))) continue;
           for (const part of message.content ?? []) {
-            if (part.type === "image" && part.mimeType === "image/png") {
-              writeFileSync(evidence(`browser-screenshot-${++imageCount}.png`), Buffer.from(part.data, "base64"), { mode: 0o600 });
+            const image = screenshotImage(part);
+            if (image) {
+              writeFileSync(evidence(`browser-screenshot-${++imageCount}.${image.extension}`), image.data, { mode: 0o600 });
             }
           }
         }
       }
     }
-    check("actual browser screenshot PNG returned to real model", imageCount > 0, `${imageCount} PNG(s)`);
+    check("actual browser screenshot returned to real model", imageCount > 0, `${imageCount} image(s) with verified magic bytes`);
     // DoD checkpoint: the model must have saved live-walk.json in the session
     // workspace (replDir/<sessionId>/live-walk.json) with 0600 permissions.
-    const cpDeadline = Date.now() + modelTimeoutMs;
-    while (Date.now() < cpDeadline && cpFiles.length === 0) {
+    const cpDeadline = customTask ? Date.now() : modelDeadline;
+    do {
       for (const dir of safeReaddir(replDir)) {
-        const cp = path.join(replDir, dir, "live-walk.json");
+        const cp = path.join(replDir, dir, customTask ? "recipes.json" : "live-walk.json");
         if (existsSync(cp)) cpFiles.push(cp);
       }
       if (cpFiles.length) break;
-      await sleep(500);
+      if (!customTask) await sleep(500);
+    } while (Date.now() < cpDeadline && cpFiles.length === 0);
+    check(`checkpoint saved by the real model (${customTask ? "recipes.json" : "live-walk.json"})`, cpFiles.length > 0, cpFiles[0] ? path.basename(path.dirname(cpFiles[0])) : `no ${customTask ? "recipes.json" : "live-walk.json"} under ` + replDir);
+    const cpJson = cpFiles[0] ? JSON.parse(safeRead(cpFiles[0])) : null;
+    if (customTask) {
+      check("checkpoint contains three distinct recipe entries", recipeEntriesValid(cpJson));
+    } else {
+    check("checkpoint records live title", cpJson?.title === "Live REPL Walk");
+    check("checkpoint records verified click state", typeof cpJson?.state === "string" && cpJson.state.startsWith("clicked:"));
+    check("checkpoint records button ref", Boolean(checkpointButtonRef(cpJson)));
     }
-    check("checkpoint saved by the real model (live-walk.json)", cpFiles.length > 0, cpFiles[0] ? path.basename(path.dirname(cpFiles[0])) : "no live-walk.json under " + replDir);
     const realCpStat = cpFiles[0] ? statSync(cpFiles[0]) : undefined;
     check("checkpoint file is 0600", realCpStat ? (realCpStat.mode & 0o777) === 0o600 : false, realCpStat ? `mode ${realCpStat.mode & 0o777}` : "");
   } else {
@@ -567,6 +628,7 @@ try {
   httpServer.close();
   writeFileSync(evidence("xvfb.log"), xvfbLog);
   writeFileSync(evidence("host.log"), safeRead(hostLog));
+  writeFileSync(evidence("host-stderr.log"), safeRead(path.join(work, "host-stderr.log")));
   writeFileSync(evidence("web-ext.log"), webExtLog);
   writeFileSync(evidence("results.json"), JSON.stringify(results, null, 2));
   // Preserve checkpoint confidentiality in the evidence copy too (0600).
@@ -611,4 +673,21 @@ function realToolEvidence(log) {
   const calls = log.split("\n").filter((line) => line.includes("session/tool_start") && /javascript .*"code":".{20}/.test(line));
   const ends = log.split("\n").filter((line) => line.includes("session/tool_end") && line.includes("javascript isError=false"));
   return { calls, ends, finished: calls.length > 0 && ends.some((line) => line.includes('"type":"image"')) && ends.some((line) => line.includes("Live REPL Walk")) };
+}
+
+// A final assistant response, not merely a successful cell, ends custom evaluations.
+function taskFinished() {
+  const sessionsRoot = path.join(agentDir, "sessions");
+  for (const dir of safeReaddir(sessionsRoot)) {
+    for (const file of safeReaddir(path.join(sessionsRoot, dir)).filter(f => f.endsWith(".jsonl"))) {
+      const rows = safeRead(path.join(sessionsRoot, dir, file)).trim().split("\n");
+      for (const row of rows) {
+        try {
+          const m = JSON.parse(row).message;
+          if (m?.role === "assistant" && ["stop", "error", "aborted"].includes(m.stopReason)) return true;
+        } catch { /* last line may still be being written */ }
+      }
+    }
+  }
+  return false;
 }

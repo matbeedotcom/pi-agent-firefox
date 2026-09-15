@@ -5,12 +5,14 @@
  * against a stub tool executor — no protocol, no add-on.
  */
 import { test } from "node:test";
+import { fork } from "node:child_process";
+import { once } from "node:events";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ReplRuntime, ReplCellError } from "../src/repl/runtime.js";
-import { ReplProvider, unwrapToolResult } from "../src/repl/provider.js";
+import { REPL_PREAMBLE, ReplProvider, unwrapToolResult } from "../src/repl/provider.js";
 import type { NormalizedToolResult } from "../src/browser/provider.js";
 
 async function makeRuntime(executor: (tool: string, args: Record<string, unknown>) => Promise<unknown>, opts: Record<string, unknown> = {}) {
@@ -49,6 +51,44 @@ test("state persists across cells (top-level variables survive)", async () => {
     assert.match(second.text, /42/);
   } finally {
     await cleanup();
+  }
+});
+
+test("worker realm survives forced GC between cells with state intact", { timeout: 10_000 }, async () => {
+  const workspace = await mkdtemp(path.join(tmpdir(), "pi-repl-gc-"));
+  // Test-only preload: force collection outside the VM realm, with no extra
+  // browser primitive or GC control added to the production tool surface.
+  const preload = `process.on('message', message => {
+    if (message.type !== 'force-gc') return;
+    setImmediate(() => {
+      globalThis.gc();
+      setImmediate(() => { globalThis.gc(); process.send({ type: 'gc-complete' }); });
+    });
+  });`;
+  const child = fork(new URL("../src/repl/worker.js", import.meta.url), [], {
+    execArgv: ["--expose-gc", "--import", `data:text/javascript,${encodeURIComponent(preload)}`],
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+    env: {},
+  });
+  const exchange = async (message: object) => {
+    const response = once(child, "message");
+    child.send(message);
+    return (await response)[0];
+  };
+  try {
+    assert.equal((await exchange({ workspace, redact: [], maxOutputChars: 1000 })).type, "ready");
+    const first = await exchange({ type: "execute", code: "const kept = { value: 41 }; kept.value", outputFile: path.join(workspace, "one.txt"), timeoutMs: 1000 });
+    assert.equal(first.error, undefined);
+    assert.match(first.result.text, /41/);
+    assert.equal((await exchange({ type: "force-gc" })).type, "gc-complete");
+    const second = await exchange({ type: "execute", code: "kept.value + 1", outputFile: path.join(workspace, "two.txt"), timeoutMs: 1000 });
+    assert.equal(second.error, undefined);
+    assert.match(second.result.text, /42/);
+  } finally {
+    const exited = once(child, "exit");
+    child.kill();
+    await exited;
+    await rm(workspace, { recursive: true, force: true });
   }
 });
 
@@ -243,6 +283,123 @@ test("preamble is emitted exactly once (first cell)", async () => {
     const second = await runtime.call("'two'");
     assert.match(first.text, /REPL recipe goes here/);
     assert.doesNotMatch(second.text, /REPL recipe goes here/);
+  } finally {
+    await cleanup();
+  }
+});
+
+// WS1/T1.2 + T3.2: the shipped preamble (browser/provider.ts wires this in)
+// is the first-call recipe. Assert it teaches the loop + key guardrails.
+test("REPL_PREAMBLE is the browser-use recipe (loop, refs, permissions, checkpoint)", () => {
+  const p = REPL_PREAMBLE;
+  assert.ok(p.length > 200, "preamble is substantive");
+  assert.ok(/OBSERVE/.test(p), "loop: observe");
+  assert.ok(/ACT/.test(p), "loop: act");
+  assert.ok(/VERIFY/.test(p), "loop: verify");
+  assert.ok(/PERSIST/.test(p), "loop: persist");
+  assert.ok(/STALE|stale/.test(p), "ref lifecycle (stale after navigation)");
+  assert.ok(/untrusted/i.test(p), "guardrail: page content is untrusted");
+  assert.ok(/permission/i.test(p), "permission semantics");
+  assert.ok(/checkpoint/.test(p), "checkpoint pattern");
+  assert.ok(p.includes("text-only models must rely on page.snapshot()/page.evaluate()"));
+  assert.ok(/Example/.test(p), "worked example");
+});
+
+// WS2/T2.1: a cell blocked on a (slow) permission prompt is NOT killed by the
+// cell timeout while paused — the pause must not eat the budget.
+test("permission-aware timeout: a long screenshot block (permission prompt) does not kill the cell", async () => {
+  const { runtime, cleanup } = await makeRuntime(async (tool) => {
+    // Simulate the user taking a while on the screenshot permission overlay:
+    // block longer than the cell's timeout would normally allow.
+    assert.equal(tool, "browser_screenshot");
+    await new Promise((r) => setTimeout(r, 900));
+    return { data: Buffer.from("fake").toString("base64"), mimeType: "image/jpeg" };
+  });
+  try {
+    // 400ms cell timeout, but the permission block is ~900ms while paused -> survives.
+    const result = await runtime.call("await screenshot(); 'done'", { timeoutMs: 400 });
+    assert.match(result.text, /done/);
+  } finally {
+    await cleanup();
+  }
+});
+
+// WS2/T2.1 (review P1): ordinary browser work is NOT permission work — a slow
+// non-permission tool must be bounded by the cell deadline as usual.
+test("permission-aware timeout: a slow ordinary tool is bounded by the cell deadline", async () => {
+  const { runtime, cleanup } = await makeRuntime(async (tool) => {
+    assert.equal(tool, "browser_get_page");
+    await new Promise((r) => setTimeout(r, 900));
+    return { url: "https://a.test/", title: "Slow" };
+  });
+  try {
+    const started = Date.now();
+    await assert.rejects(
+      runtime.call("await page.info(); 'done'", { timeoutMs: 400 }),
+      (err: unknown) =>
+        err instanceof ReplCellError && /exceeded 400 ms/.test(err.message) && err.stateReset === true,
+    );
+    assert.ok(Date.now() - started < 800, "deadline fires at ~400ms, not after the 900ms tool settles");
+  } finally {
+    await cleanup();
+  }
+});
+
+// WS2/T2.1 (review P1): the cap is enforced by a watchdog WHILE the overlay is
+// blocked — an executor that never settles must abort the cell at the cap, not
+// after the executor completes. (The old test waited 900ms with cap 400ms and
+// could not detect timely enforcement.)
+test("permission-aware timeout: an ignored overlay aborts the cell at the cap (watchdog, before settle)", async () => {
+  const { runtime, cleanup } = await makeRuntime(() => new Promise(() => {}), { permissionBlockCapMs: 400 });
+  try {
+    const started = Date.now();
+    await assert.rejects(
+      runtime.call("await screenshot();", { timeoutMs: 10_000 }),
+      (err: unknown) =>
+        err instanceof ReplCellError && /paused .* inside permission prompts/.test(err.message) && err.stateReset === true,
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 900, `cap fired at ${elapsed}ms (cap 400ms); must not wait for the executor`);
+  } finally {
+    await cleanup();
+  }
+});
+
+// WS2/T2.1 (review P1): concurrent permission calls — the deadline resumes
+// only when the LAST outstanding prompt settles, and the paused time is the
+// union (900ms), not the sum (1800ms).
+test("permission-aware timeout: concurrent permission calls resume on the last settle", async () => {
+  const { runtime, cleanup } = await makeRuntime(async (tool) => {
+    assert.equal(tool, "browser_screenshot");
+    await new Promise((r) => setTimeout(r, 900));
+    return { data: Buffer.from("fake").toString("base64"), mimeType: "image/jpeg" };
+  });
+  try {
+    // 400ms cell timeout; both prompts block ~900ms concurrently -> the cell
+    // must survive (paused until the last settle, union 900ms < no cap hit).
+    const result = await runtime.call("await Promise.all([screenshot(), screenshot()]); 'done'", { timeoutMs: 400 });
+    assert.match(result.text, /done/);
+  } finally {
+    await cleanup();
+  }
+});
+
+// WS2/T2.1 deny path: a denied screenshot rejects the primitive with a
+// structured code and PRESERVES cell state (not a kill).
+test("denied tool: structured code in the cell, state preserved", async () => {
+  const { runtime, cleanup } = await makeRuntime(async (tool) => {
+    if (tool === "browser_screenshot") {
+      throw Object.assign(new Error("user denied the screenshot permission"), { code: "BROWSER_PERMISSION_DENIED" });
+    }
+    return { ok: true, tool };
+  });
+  try {
+    await runtime.call("marker = 42;");
+    const result = await runtime.call("await screenshot();");
+    assert.match(result.error ?? "", /BROWSER_PERMISSION_DENIED: user denied/);
+    // State survived the rejection (the cell was not killed).
+    const after = await runtime.call("marker");
+    assert.match(after.text, /42/);
   } finally {
     await cleanup();
   }

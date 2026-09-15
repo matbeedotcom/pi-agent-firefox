@@ -192,7 +192,18 @@ test("repl tool registry: host-side javascript tool (never on the add-on surface
   assert.equal(js.inputSchema.type, "object");
   assert.equal(js.inputSchema.additionalProperties, false);
   assert.deepEqual([...(js.inputSchema.required as string[])].sort(), ["code"]);
-  assert.ok(typeof js.description === "string" && js.description.length > 10);
+  // WS1/T1.1 (BROWSER-USE-SUPPORT-PLAN.md): the always-on steering layer.
+  // The description must lead with the real-tab framing, state the loop,
+  // and teach permission/checkpoint/kill semantics — these are the exact
+  // signals the model was missing in real run #2 (13 rounds, 0 javascript
+  // calls).
+  const d = js.description as string;
+  assert.ok(d.includes("real Firefox tab"), "description leads with the bound tab");
+  assert.ok(/OBSERVE[\s\S]*ACT[\s\S]*VERIFY[\s\S]*PERSIST/.test(d), "description states the loop");
+  assert.ok(d.includes("permission prompt"), "description covers screenshot permission semantics");
+  assert.ok(d.includes("text-only models must rely on page.snapshot()/page.evaluate()"));
+  assert.ok(d.includes("checkpoint"), "description mentions multi-step persistence");
+  assert.ok(d.includes("state reset"), "description warns that a killed cell loses state");
   assert.ok(isReplTool("javascript"));
   assert.ok(!isReplTool("browser_click"));
   assert.ok(!isBrowserTool("javascript"), "REPL tool stays out of the add-on tool surface");
@@ -218,7 +229,7 @@ test("integration metadata is stable and complete", () => {
   assert.equal(PI_BROWSER.nativeHost, "dev.pi.browser");
   assert.equal(PI_BROWSER.extensionId, "pi-agent-firefox@matbee.com");
   assert.equal(PI_BROWSER_META.protocolVersion, 2);
-  assert.equal(PI_BROWSER_META.browserToolVersion, 5);
+  assert.equal(PI_BROWSER_META.browserToolVersion, 6);
   assert.equal(X_PI_BROWSER.tool, "x-pi-browser/tool");
 });
 

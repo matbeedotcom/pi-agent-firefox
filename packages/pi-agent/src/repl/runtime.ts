@@ -54,12 +54,54 @@ export interface ReplRuntimeOptions {
    */
   toolExecutor: (tool: string, args: Record<string, unknown>) => Promise<unknown>;
   log?: (line: string) => void;
+  /** Cap on time a cell may spend paused in permission prompts (default 120s). */
+  permissionBlockCapMs?: number;
+  /**
+   * Tools whose execution can block on the user's permission overlay. The
+   * cell deadline is paused ONLY while these are in flight (WS2/T2.1);
+   * ordinary browser work is bounded by the deadline as usual.
+   * Default: ["browser_screenshot"].
+   */
+  permissionTools?: readonly string[];
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
 const READY_TIMEOUT_MS = 20_000;
 const CLOSE_TIMEOUT_MS = 2_000;
+/**
+ * Cap on time a cell may spend paused inside permission prompts (WS2/T2.1 of
+ * BROWSER-USE-SUPPORT-PLAN.md): while a cell's tool waits on the user's
+ * permission overlay the cell deadline is paused, so an "Allow once" click
+ * cannot cost the cell its remaining budget. The cap (enforced by a watchdog
+ * while blocked, cumulative across prompts in the cell) stops an ignored
+ * overlay from hanging a cell forever; exceeding it aborts the cell (state
+ * reset).
+ */
+const PERMISSION_BLOCK_CAP_MS = 120_000;
+/** Only these tools may block on the user's permission overlay (WS2/T2.1). */
+const DEFAULT_PERMISSION_TOOLS = ["browser_screenshot"];
+
+/**
+ * Per-cell accounting for permission-prompt pauses (WS2/T2.1). Cell-scoped on
+ * purpose: when the cell finishes (result, timeout, cancel, cap) the ledger
+ * goes live=false, so a LATE tool completion (e.g. the user finally answers
+ * an overlay after the cell was killed) is a no-op and cannot corrupt the
+ * next cell's accounting or fire into the next cell's pending.
+ */
+interface PauseLedger {
+  live: boolean;
+  /** In-flight permission tool calls (resume only when this hits 0). */
+  outstanding: number;
+  /** Wall-clock start of the current pause union, if one is running. */
+  pausedSince: number | undefined;
+  /** Paused time accumulated from completed unions (ms). */
+  blockedMs: number;
+  /** Watchdog enforcing the cumulative cap while blocked. */
+  watchdog: NodeJS.Timeout | undefined;
+  enter: () => void;
+  exit: () => void;
+}
 
 export class ReplRuntime {
   private child: ChildProcess | undefined;
@@ -71,8 +113,15 @@ export class ReplRuntime {
   private nextToolId = 0;
   private toolPending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private notes: string[] = [];
+  /** The active cell's permission-pause ledger (set by receive(), no-op once the cell ends). */
+  private pauseLedger: PauseLedger | undefined;
+  private readonly blockCapMs: number;
+  private readonly permissionTools: ReadonlySet<string>;
 
-  constructor(private readonly opts: ReplRuntimeOptions) {}
+  constructor(private readonly opts: ReplRuntimeOptions) {
+    this.blockCapMs = opts.permissionBlockCapMs ?? PERMISSION_BLOCK_CAP_MS;
+    this.permissionTools = new Set(opts.permissionTools ?? DEFAULT_PERMISSION_TOOLS);
+  }
 
   /**
    * Run one cell. Rejects with ReplCellError for code errors, timeouts and
@@ -238,6 +287,17 @@ export class ReplRuntime {
       this.replyTool(worker, message.id, undefined, "the javascript tool cannot be called from inside a cell");
       return;
     }
+    // The cell deadline is paused ONLY while a tool can block on the user's
+    // permission overlay (screenshot, by default): an "Allow once" click must
+    // not cost the cell its budget (WS2/T2.1), and ordinary browser work is
+    // bounded by the deadline as usual. A denied tool rejects the cell's
+    // primitive with a structured `<CODE>: <message>` error (state
+    // preserved); only an IGNORED overlay past the cumulative cap aborts the
+    // cell (watchdog, state reset). The ledger is cell-scoped: a late
+    // completion after the cell ended is a no-op.
+    const ledger = this.pauseLedger;
+    const pausable = this.permissionTools.has(message.tool);
+    if (pausable) ledger?.enter();
     try {
       const result = await this.opts.toolExecutor(message.tool, message.args);
       this.replyTool(worker, message.id, result, undefined);
@@ -247,6 +307,8 @@ export class ReplRuntime {
       const code = (error as { code?: unknown })?.code;
       const message2 = error instanceof Error ? error.message : String(error);
       this.replyTool(worker, message.id, undefined, typeof code === "string" && code ? `${code}: ${message2}` : message2);
+    } finally {
+      if (pausable) ledger?.exit();
     }
   }
 
@@ -283,8 +345,20 @@ export class ReplRuntime {
 
   private receive(worker: ChildProcess, timeoutMs: number, signal?: AbortSignal): Promise<ReplResponse> {
     return new Promise((resolve, reject) => {
+      let finished = false;
+      let running = false;
+      let timer: NodeJS.Timeout | undefined;
       const finish = (value: ReplResponse | Error) => {
+        if (finished) return;
+        finished = true;
+        running = false;
         clearTimeout(timer);
+        // Kill the pause ledger with the cell: late completions of an in-flight
+        // permission tool (the user answers after the cell was killed/capped)
+        // must be no-ops, never touching this or the next cell's state.
+        ledger.live = false;
+        clearTimeout(ledger.watchdog);
+        ledger.watchdog = undefined;
         signal?.removeEventListener("abort", abort);
         worker.off("message", onMessage);
         this.pending = undefined;
@@ -300,15 +374,90 @@ export class ReplRuntime {
             "Execution cancelled. JavaScript state was reset; browser actions may already have happened.",
           ),
         );
-      const timer = setTimeout(
-        () =>
-          finish(
-            new Error(
-              `Cell exceeded ${timeoutMs} ms. JavaScript state was reset; inspect the page before retrying actions.`,
+      // Pausable deadline: pause()/resume() around tool calls (a permission
+      // prompt must not consume the cell's remaining budget, WS2/T2.1).
+      // `remaining` counts only unpaused time, so the message stays truthful.
+      let remaining = timeoutMs;
+      let startedAt = 0;
+      const startTimer = () => {
+        if (finished || running) return;
+        running = true;
+        startedAt = Date.now();
+        timer = setTimeout(
+          () =>
+            finish(
+              new Error(
+                `Cell exceeded ${timeoutMs} ms. JavaScript state was reset; inspect the page before retrying actions.`,
+              ),
             ),
+          remaining,
+        );
+      };
+      const cellTimer = {
+        pause: () => {
+          if (finished || !running) return;
+          running = false;
+          clearTimeout(timer);
+          remaining = Math.max(0, remaining - (Date.now() - startedAt));
+        },
+        resume: () => startTimer(),
+      };
+      // Permission-pause ledger for THIS cell (WS2/T2.1): pauses only while
+      // outstanding permission tool calls are in flight, measures the UNION
+      // of their durations (concurrent calls neither double-count nor resume
+      // early), and enforces the cumulative cap with a watchdog that fires
+      // WHILE blocked — an ignored overlay cannot hang the cell.
+      const ledger: PauseLedger = {
+        live: true,
+        outstanding: 0,
+        pausedSince: undefined,
+        blockedMs: 0,
+        watchdog: undefined,
+        enter: () => undefined,
+        exit: () => undefined,
+      };
+      const fireCap = () => {
+        if (!ledger.live) return;
+        const effective =
+          ledger.blockedMs + (ledger.pausedSince !== undefined ? Date.now() - ledger.pausedSince : 0);
+        finish(
+          new Error(
+            `Cell paused ${Math.round(effective / 1000)}s inside permission prompts (cap ${Math.round(this.blockCapMs / 1000)}s). ` +
+              "JavaScript state was reset; inspect the page before retrying actions.",
           ),
-        timeoutMs,
-      );
+        );
+      };
+      ledger.enter = () => {
+        if (!ledger.live) return;
+        const first = ledger.outstanding === 0;
+        ledger.outstanding += 1;
+        if (!first) return;
+        cellTimer.pause();
+        ledger.pausedSince = Date.now();
+        const grace = this.blockCapMs - ledger.blockedMs;
+        if (grace > 0) {
+          ledger.watchdog = setTimeout(fireCap, grace);
+          ledger.watchdog.unref?.();
+        } else {
+          fireCap();
+        }
+      };
+      ledger.exit = () => {
+        if (!ledger.live || ledger.outstanding <= 0) return;
+        ledger.outstanding -= 1;
+        if (ledger.outstanding > 0 || ledger.pausedSince === undefined) return;
+        ledger.blockedMs += Date.now() - ledger.pausedSince;
+        ledger.pausedSince = undefined;
+        clearTimeout(ledger.watchdog);
+        ledger.watchdog = undefined;
+        if (ledger.blockedMs > this.blockCapMs) {
+          fireCap();
+          return;
+        }
+        cellTimer.resume();
+      };
+      this.pauseLedger = ledger;
+      startTimer();
       this.pending = (error) => finish(error);
       worker.on("message", onMessage);
       signal?.addEventListener("abort", abort, { once: true });

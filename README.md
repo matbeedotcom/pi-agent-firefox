@@ -92,6 +92,20 @@ permissions, same bound tab). Screenshots from a cell prompt for approval
 just like a direct `browser_screenshot`; `tabs.open()` tabs are closed when
 the session ends. Design: PRODUCT.md §53.
 
+You don't have to write the cell yourself. With a tab bound, just ask in
+plain language and the agent picks the `javascript` tool and walks the tab
+(observe → act → verify → persist), saving a checkpoint you can inspect:
+
+```text
+> In the tab you're bound to, find the Go button and click it, then tell me
+  what the state text shows. Take a screenshot as evidence and save a
+  checkpoint (live-walk.json) with the title, the resulting state, and the
+  button's element ref.
+```
+
+The steering for that (tool description + first-call preamble + the
+`browser-walk` skill) is described in PRODUCT.md §54.
+
 ## `/pi-browser` commands
 
 | Command | Effect |

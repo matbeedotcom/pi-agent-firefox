@@ -352,7 +352,7 @@ const tabs = {
 // The V8 realm: one persistent named context, cells run via the inspector
 // ---------------------------------------------------------------------------
 
-const evaluator = new Session();
+const evaluator: Session & { realm?: ReturnType<typeof createContext> } = new Session();
 evaluator.connect();
 let executionContextId: number | undefined;
 evaluator.on("Runtime.executionContextCreated", (event) => {
@@ -367,6 +367,9 @@ const realm = createContext(
     importModuleDynamically: undefined,
   },
 );
+// Inspector context IDs are weak handles. The live evaluator must also own
+// the realm, or V8 can collect it between cells despite persistent variables.
+evaluator.realm = realm;
 if (executionContextId === undefined)
   throw new Error("Could not initialize the JavaScript context.");
 

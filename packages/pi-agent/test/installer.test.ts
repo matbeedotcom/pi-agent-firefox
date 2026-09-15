@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { runCommand, expandAppTarget } from "../src/installer/index.js";
 import { manifestPathsForApps, distinctManifestLocations, legacyManifestPath, WINDOWS_REGISTRY_KEY } from "../src/installer/common.js";
+import { SKILL_INSTALL_PATH, SKILL_SOURCE_PATH } from "../src/installer/platforms.js";
 import type { ExecResult } from "../src/installer/common.js";
 
 /**
@@ -24,11 +25,18 @@ function norm(p: string): string {
   return p;
 }
 
+const SKILL_FIXTURE =
+  "---\nname: browser-walk\ndescription: Multi-step work on the Firefox tab bound to this session.\n---\n\n# Browser-walk (fixture)\n";
+
 async function makePkg(root: string): Promise<string> {
   const pkgRoot = path.join(root, "pkg");
   await mkdir(path.join(pkgRoot, "dist", "native-host"), { recursive: true });
   await writeFile(path.join(pkgRoot, "dist", "native-host", "main.js"), "console.log('host');\n");
   await writeFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "@pi-browser/agent", version: "0.1.1" }));
+  // Skill shipped with the package (WS1/T1.3): the installer copies it to
+  // ~/.agents/skills/browser-walk/SKILL.md.
+  await mkdir(path.join(pkgRoot, "skills", "browser-walk"), { recursive: true });
+  await writeFile(SKILL_SOURCE_PATH(pkgRoot), SKILL_FIXTURE, "utf8");
   return pkgRoot;
 }
 
@@ -134,6 +142,10 @@ for (const platform of ["linux", "macos"] as const) {
         assert.ok(st.mode & 0o100, "launcher should be executable");
       }
 
+      // 2b. skill copied to the user skills dir (WS1/T1.3)
+      const skillTarget = SKILL_INSTALL_PATH(home);
+      assert.equal(await readFile(skillTarget, "utf8"), SKILL_FIXTURE, "skill copied on install");
+
       // 3. status after install (fresh temp home -> no add-on heartbeat yet)
       const after = await runCommand("status", ctx);
       assert.equal(after.ok, true);
@@ -167,22 +179,55 @@ for (const platform of ["linux", "macos"] as const) {
       await writeFile(legacyFire, JSON.stringify({ name: "dev.pi.browser" }));
       const uninstall = await runCommand("uninstall", { ...ctx, pkgRoot: movedRoot });
       assert.equal(uninstall.ok, true);
-      let gone = true;
+      // Each removal is proven by stat REJECTING (a surviving file must fail
+      // the test — the old `let x = true` pattern never could).
+      let firefoxStat: unknown;
       try {
-        await stat(paths.firefox);
-      } catch {
-        gone = true;
+        firefoxStat = await stat(paths.firefox);
+      } catch (err) {
+        firefoxStat = err;
       }
-      assert.ok(gone);
-      let legacyGone = true;
+      assert.ok(firefoxStat instanceof Error && (firefoxStat as NodeJS.ErrnoException).code === "ENOENT", "manifest removed");
+      let legacyStat: unknown;
       try {
-        await stat(legacyFire);
-      } catch {
-        legacyGone = true;
+        legacyStat = await stat(legacyFire);
+      } catch (err) {
+        legacyStat = err;
       }
-      assert.ok(legacyGone, "legacy dev.pi.browser manifest removed");
+      assert.ok(legacyStat instanceof Error && (legacyStat as NodeJS.ErrnoException).code === "ENOENT", "legacy dev.pi.browser manifest removed");
+      let skillStat: unknown;
+      try {
+        skillStat = await stat(skillTarget);
+      } catch (err) {
+        skillStat = err;
+      }
+      assert.ok(skillStat instanceof Error && (skillStat as NodeJS.ErrnoException).code === "ENOENT", "skill removed on uninstall");
       const finalStatus = await runCommand("status", { ...ctx, pkgRoot: movedRoot });
       assert.equal(finalStatus.ok, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test(`${platform}: install copies the browser-walk skill into ~/.agents/skills`, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `pi-agent-skill-${platform}-`));
+    try {
+      const pkgRoot = await makePkg(root);
+      const home = path.join(root, "home");
+      const install = await runCommand("install", { pkgRoot, platform, homeDir: home, apps: "firefox" });
+      assert.equal(install.ok, true);
+      assert.ok(install.lines.some((l) => l.includes("skill: ")));
+      const skillTarget = SKILL_INSTALL_PATH(home);
+      const content = await readFile(skillTarget, "utf8");
+      // Frontmatter must be valid: name + non-empty description (pi skill rule).
+      const match = content.match(/^---\n([\s\S]*?)\n---\n/);
+      assert.ok(match, "skill frontmatter present");
+      assert.equal(match![1].includes("name: browser-walk"), true, "frontmatter name");
+      assert.equal(match![1].includes("description:"), true, "frontmatter description");
+      // Reinstall over an existing skill succeeds (force).
+      const again = await runCommand("install", { pkgRoot, platform, homeDir: home, apps: "firefox" });
+      assert.equal(again.ok, true);
+      assert.equal(await readFile(skillTarget, "utf8"), content);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

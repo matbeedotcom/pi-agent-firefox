@@ -418,14 +418,20 @@ export const REPL_TOOLS: readonly BrowserToolDef[] = [
   {
     name: "javascript",
     description:
-      "Run JavaScript in a persistent REPL that controls the session's current Firefox tab (default: the bound tab). " +
+      "Drive the real Firefox tab bound to this session with JavaScript — use this tool (not shell commands) for " +
+      "multi-step browser work. Work in a loop: OBSERVE (snapshot/screenshot/evaluate) -> ACT (goto/click/type, one " +
+      "transaction per cell) -> VERIFY (re-snapshot; element refs go stale after navigation) -> PERSIST (checkpoint " +
+      "between steps of longer tasks). " +
       "State (variables, helpers) persists across calls; top-level await is supported; the last expression is printed. " +
       "Primitives: page.goto(url), page.info(), page.evaluate(fn|expr, arg?), page.waitFor(fn, arg?, {timeoutMs?}), " +
-      "page.snapshot() -> {url,title,nodes:[{ref,role,name,...}]}, page.click(ref), page.clickAt(x,y), page.type(ref,text), " +
-      "page.typeFocused(text), page.focus(ref), page.scroll(ref), page.close(), tabs.list(), tabs.open(url), tabs.get(targetId), " +
-      "screenshot(), snapshot(), artifact(name, data), checkpoint(name, value), reconnect(). " +
-      "Inspect the page (snapshot/screenshot) before acting; refs go stale after navigation. " +
-      "A cell that runs too long is killed and its state reset — inspect before retrying actions.",
+      "page.snapshot({maxNodes?,maxDepth?}) -> {url,title,nodes:[{ref,role,name,...}]}, page.click(ref), page.clickAt(x,y), " +
+      "page.type(ref,text), page.typeFocused(text), page.focus(ref), page.scroll(ref), page.close(), tabs.list(), tabs.open(url), " +
+      "tabs.get(targetId), screenshot(), snapshot(), artifact(name, data), checkpoint(name, value), reconnect(). " +
+      "Screenshots are user-facing evidence; text-only models must rely on page.snapshot()/page.evaluate(), not image contents. " +
+      "screenshot() may pause while the user answers its permission prompt (Allow once / Always / Deny); a denial " +
+      "rejects the call — rely on snapshot/evaluate instead. " +
+      "A cell that runs too long is killed and its state reset — after an abort inspect the page (snapshot/screenshot) " +
+      "before retrying any action (it may have partially happened).",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {

@@ -46,7 +46,7 @@ import { MAIL_MUTATION_TOOL_SCHEMAS, type MailMutationToolSchema } from "../muta
 import { CONTACTS_TOOL_SCHEMAS, type ContactsToolSchema } from "../contacts/schemas.js";
 import { McpAcpClient } from "./mcp-acp-client.js";
 import type { CapabilityRegistry } from "../capability-registry.js";
-import { ReplProvider, type ReplToolExecutor } from "../repl/provider.js";
+import { REPL_PREAMBLE, ReplProvider, type ReplToolExecutor } from "../repl/provider.js";
 
 export { MCP_PROTOCOL_VERSION } from "@pi-browser/protocol";
 import { TransportClosedError, TransportTimeoutError } from "../native-host/transport.js";
@@ -250,7 +250,12 @@ export class CapabilityToolProvider {
    */
   private readonly sessionAllowed = new Map<string, Set<string>>();
   /** The host-side `javascript` REPL (BROWSER-USE-REPL-PLAN.md, option C). */
-  private readonly repl = new ReplProvider({ log: (line) => this.log.debug(line) });
+  private readonly repl = new ReplProvider({
+    log: (line) => this.log.debug(line),
+    // First-call recipe (observe -> act -> verify -> persist, guardrails,
+    // ref lifecycle, permission semantics): BROWSER-USE-SUPPORT-PLAN.md WS1/T1.2.
+    preamble: REPL_PREAMBLE,
+  });
 
   constructor(
     /**
