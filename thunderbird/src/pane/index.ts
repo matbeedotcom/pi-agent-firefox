@@ -14,7 +14,7 @@
  * transcript and renders ACP session/update streams pushed over the Port.
  */
 import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
-import { applyPiTheme, type PiTheme } from "@pi-browser/webext";
+import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme } from "@pi-browser/webext";
 import type { SessionUpdate, ToolCallUpdate } from "@pi-browser/protocol";
 
 interface StatusInfo {
@@ -548,98 +548,117 @@ function flash(text: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Conversation rendering (markdown-lite, same as the Space)
+// Conversation rendering (streaming-markdown, incremental DOM)
+//
+// Text blocks (user/assistant/thought) stream in: each block owns one
+// streaming-markdown parser, and parser_write only appends new DOM nodes, so
+// already-streamed text stays selectable and finished blocks are never
+// re-rendered. Tool blocks re-render their body when the (replaced) text
+// changes.
 // ---------------------------------------------------------------------------
+
+interface BlockDom {
+  wrap: HTMLElement;
+  /** Live markdown view for text blocks; undefined for tool blocks. */
+  md?: MarkdownView;
+  /** Chars of block.text already written into `md`. */
+  written?: number;
+  /** Tool blocks: head spans + body, patched when title/status/text change. */
+  name?: HTMLSpanElement;
+  status?: HTMLSpanElement;
+  body?: HTMLDivElement;
+  toolText?: string;
+  toolStatus?: string;
+  toolTitle?: string;
+}
+
+const blockDoms = new Map<number, BlockDom>();
+/** Session the conversation DOM currently shows; a change forces a rebuild. */
+let domSession: string | undefined;
+
+function toolStatusClass(status: string): string {
+  return status === "completed" ? "done" : status === "failed" ? "failed" : "";
+}
+
+function buildBlockDom(block: Block, conv: HTMLElement): BlockDom {
+  const wrap = document.createElement("div");
+  let dom: BlockDom;
+  if (block.kind === "tool") {
+    wrap.className = "msg tool";
+    const head = document.createElement("div");
+    head.className = "tool-head";
+    const name = document.createElement("span");
+    name.textContent = block.title;
+    const status = document.createElement("span");
+    status.className = `tool-status ${toolStatusClass(block.status)}`;
+    status.textContent = block.status;
+    head.append(name, status);
+    const body = document.createElement("div");
+    body.classList.add("muted");
+    if (block.text) renderMarkdownInto(body, block.text);
+    wrap.append(head, body);
+    dom = { wrap, name, status, body, toolText: block.text, toolStatus: block.status, toolTitle: block.title };
+  } else {
+    wrap.className = `msg ${block.kind}`;
+    const md = new MarkdownView(wrap);
+    md.write(block.text);
+    dom = { wrap, md, written: block.text.length };
+  }
+  conv.append(wrap);
+  blockDoms.set(block.id, dom);
+  return dom;
+}
 
 function renderConversation(): void {
   const conv = $<HTMLDivElement>("conversation");
   const blocks = activeSessionId ? blocksFor(activeSessionId) : [];
-  conv.textContent = "";
-  for (const block of blocks) {
-    const div = document.createElement("div");
-    if (block.kind === "tool") {
-      div.className = "msg tool";
-      const head = document.createElement("div");
-      head.className = "tool-head";
-      const name = document.createElement("span");
-      name.textContent = block.title;
-      const status = document.createElement("span");
-      status.className = `tool-status ${block.status === "completed" ? "done" : block.status === "failed" ? "failed" : ""}`;
-      status.textContent = block.status;
-      head.append(name, status);
-      div.append(head);
-      const body = renderMarkdown(block.text);
-      body.classList.add("muted");
-      div.append(body);
-    } else {
-      div.className = `msg ${block.kind}`;
-      div.append(renderMarkdown(block.text));
+  if (domSession !== activeSessionId) {
+    // Page load or session switch: rebuild from scratch.
+    domSession = activeSessionId;
+    blockDoms.clear();
+    conv.textContent = "";
+    for (const block of blocks) buildBlockDom(block, conv);
+  } else {
+    // Same session: append new blocks, patch changed tool blocks, stream new
+    // text into the tail. Chunks only ever append, so each block is written
+    // exactly once and finished blocks' DOM is left alone.
+    let prev: BlockDom | undefined;
+    for (const block of blocks) {
+      let dom = blockDoms.get(block.id);
+      if (!dom) {
+        // A new block started: the previous text block is final.
+        prev?.md?.end();
+        dom = buildBlockDom(block, conv);
+      } else if (block.kind === "tool") {
+        if (dom.toolTitle !== block.title && dom.name) {
+          dom.name.textContent = block.title;
+          dom.toolTitle = block.title;
+        }
+        if (dom.toolStatus !== block.status && dom.status) {
+          dom.status.className = `tool-status ${toolStatusClass(block.status)}`;
+          dom.status.textContent = block.status;
+          dom.toolStatus = block.status;
+        }
+        if (dom.toolText !== block.text && dom.body) {
+          dom.body.textContent = "";
+          if (block.text) renderMarkdownInto(dom.body, block.text);
+          dom.toolText = block.text;
+        }
+      } else if (dom.md && block.text.length > (dom.written ?? 0)) {
+        dom.md.write(block.text.slice(dom.written ?? 0));
+        dom.written = block.text.length;
+      }
+      prev = dom;
     }
-    conv.append(div);
+  }
+  // When the turn is not streaming, the last text block is final: flush its
+  // pending tokens (e.g. a stray ** at the end of the stream).
+  const streaming = uiState.sessions.some((s) => s.sessionId === activeSessionId && s.streaming);
+  if (!streaming) {
+    const last = blocks[blocks.length - 1];
+    if (last) blockDoms.get(last.id)?.md?.end();
   }
   conv.scrollTop = conv.scrollHeight;
-}
-
-function renderMarkdown(text: string): HTMLElement {
-  const wrapper = document.createElement("div");
-  const parts = text.split(/```/);
-  parts.forEach((part, i) => {
-    if (i % 2 === 1) {
-      const nl = part.indexOf("\n");
-      const code = nl >= 0 ? part.slice(nl + 1) : part;
-      const pre = document.createElement("pre");
-      const codeEl = document.createElement("code");
-      codeEl.textContent = code.replace(/\n$/, "");
-      pre.append(codeEl);
-      wrapper.append(pre);
-      return;
-    }
-    wrapper.append(renderInline(part));
-  });
-  return wrapper;
-}
-
-function renderInline(text: string): HTMLElement {
-  const span = document.createElement("span");
-  // No HTML escaping here: every value below is inserted as a text node
-  // (append(string)/textContent), which renders characters verbatim and is
-  // safe from HTML injection. Escaping would show entities like "&gt;" raw.
-  const lines = text.split("\n");
-  lines.forEach((line, idx) => {
-    if (idx > 0) span.append(document.createElement("br"));
-    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
-    if (heading) {
-      const h = document.createElement(`h${Math.min(heading[1].length + 1, 5)}`);
-      h.append(fragmentFromInline(heading[2]));
-      span.append(h);
-      return;
-    }
-    span.append(fragmentFromInline(line));
-  });
-  return span;
-}
-
-function fragmentFromInline(line: string): DocumentFragment {
-  const frag = document.createDocumentFragment();
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(line)) !== null) {
-    if (m.index > last) frag.append(line.slice(last, m.index));
-    if (m[1]) {
-      const code = document.createElement("code");
-      code.className = "code";
-      code.textContent = m[1].slice(1, -1);
-      frag.append(code);
-    } else if (m[2]) {
-      const b = document.createElement("b");
-      b.append(m[2].slice(2, -2));
-      frag.append(b);
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < line.length) frag.append(line.slice(last));
-  return frag;
 }
 
 // ---------------------------------------------------------------------------

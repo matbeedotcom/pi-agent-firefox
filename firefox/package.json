@@ -12,7 +12,8 @@
     "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
   },
   "dependencies": {
-    "@pi-browser/protocol": "0.1.1"
+    "@pi-browser/protocol": "0.1.1",
+    "@pi-browser/webext": "^0.1.1"
   },
   "devDependencies": {
     "@types/firefox-webext-browser": "^143.0.0",
