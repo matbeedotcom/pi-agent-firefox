@@ -144,6 +144,7 @@ async function ensurePiSpace(): Promise<number | undefined> {
     const found = existing.find((s) => s.name === SPACE_NAME);
     if (found) {
       spaceId = found.id;
+      await browser.piPane.registerSpaceButton(SPACE_NAME);
       return spaceId;
     }
     const space = await browser.spaces.create(
@@ -152,6 +153,7 @@ async function ensurePiSpace(): Promise<number | undefined> {
       { title: "Pi Agent" },
     );
     spaceId = space.id;
+    await browser.piPane.registerSpaceButton(SPACE_NAME);
     return spaceId;
   } catch (err) {
     console.error("[pi-thunderbird] ensurePiSpace failed", err);
@@ -643,45 +645,6 @@ function processCwdLikeFallback(): string {
   // the user hits "create" with an empty field.
   return "/";
 }
-
-// ---------------------------------------------------------------------------
-// Pi side pane (Experiment API) — toolbar button toggles it beside the message
-// ---------------------------------------------------------------------------
-// The `browser.action` toolbar button toggles the native Pi pane on the active
-// mail tab. Unlike the Pi Space (which is a full view that hides the mail), the
-// pane sits beside the message so the user keeps the email in view. The pane
-// hosts the same shared space/ UI, so sessions and ACP state are unchanged.
-
-const piPaneAvailable = typeof browser.piPane !== "undefined";
-if (!piPaneAvailable) {
-  console.warn("[pi-thunderbird] browser.piPane unavailable (Experiment API not loaded — is the add-on privileged/temporary?)");
-}
-
-browser.action.onClicked.addListener(async () => {
-  if (!piPaneAvailable) {
-    console.warn("[pi-thunderbird] browser.piPane unavailable — Experiment API not loaded");
-    return;
-  }
-  // Find the active mail tab's WebExtension tab id (needs the `tabs` permission).
-  let tabId: number | undefined;
-  try {
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    tabId = tab?.id;
-  } catch (err) {
-    console.warn("[pi-thunderbird] browser.tabs.query failed (missing 'tabs' permission?)", err);
-    return;
-  }
-  if (tabId === undefined) {
-    console.warn("[pi-thunderbird] no active tab");
-    return;
-  }
-  try {
-    const st = await browser.piPane.toggle(tabId);
-    console.info(`[pi-thunderbird] piPane.toggle(${tabId}) -> open=${st.open}`);
-  } catch (err) {
-    console.warn(`[pi-thunderbird] piPane.toggle(${tabId}) failed`, err);
-  }
-});
 
 // ---------------------------------------------------------------------------
 // Startup

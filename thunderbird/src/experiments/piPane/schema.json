@@ -4,6 +4,15 @@
     "description": "Native 4th-pane plumbing for the Pi side panel in Thunderbird's about:3pane. Manipulates only Thunderbird's native UI; all ACP/session/mail logic lives in the normal extension background.",
     "functions": [
       {
+        "name": "registerSpaceButton",
+        "type": "function",
+        "async": true,
+        "description": "Use the named Pi Space button to toggle the docked mail pane in each window.",
+        "parameters": [
+          { "name": "spaceName", "type": "string" }
+        ]
+      },
+      {
         "name": "open",
         "type": "function",
         "async": true,

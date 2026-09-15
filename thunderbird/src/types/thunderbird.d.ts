@@ -368,6 +368,8 @@ declare namespace browser.accounts {
  * (addon_parent); available to the background only. See experiments/piPane/.
  */
 declare namespace browser.piPane {
+  /** Bind the Pi Space button to the docked pane in existing and new windows. */
+  function registerSpaceButton(spaceName: string): Promise<void>;
   interface PaneState {
     /** True when the pane is installed in the tab's about:3pane. */
     open: boolean;

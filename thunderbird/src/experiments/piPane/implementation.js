@@ -22,6 +22,121 @@
 "use strict";
 
 (function (exports) {
+  // Keep Thunderbird's Space registration (keyboard navigation and overflow),
+  // but route its primary activation to the mail pane instead of a content tab.
+  class PiSpaceToggle {
+    constructor(context, pane) {
+      this.context = context;
+      this.pane = pane;
+      this.windows = new Map();
+      this.listenerId = context.extension.id + ":pi-pane-toggle";
+      this.support = ChromeUtils.importESModule("resource:///modules/ExtensionSupport.sys.mjs").ExtensionSupport;
+    }
+
+    register(spaceName) {
+      if (this.buttonId) return;
+      this.buttonId = ExtensionCommon.makeWidgetId(this.context.extension.id) + "-spacesButton-" + spaceName;
+      this.support.registerWindowListener(this.listenerId, {
+        chromeURLs: ["chrome://messenger/content/messenger.xhtml"],
+        onLoadWindow: win => this.attach(win),
+        onUnloadWindow: win => this.detach(win),
+      });
+    }
+
+    attach(win) {
+      if (this.windows.has(win)) return;
+      const state = { lastMail: null, busy: false, bindings: new Map() };
+      this.windows.set(win, state);
+      state.sync = () => this.sync(win, state);
+      state.observer = new win.MutationObserver(state.sync);
+      state.observer.observe(win.document.documentElement, { childList: true, subtree: true });
+      win.addEventListener("TabSelect", state.sync);
+      const style = win.document.createElementNS("http://www.w3.org/1999/xhtml", "style");
+      style.textContent = ".spaces-toolbar-button.pi-pane-active { background-color: var(--selected-item-color); color: var(--selected-item-text-color); }";
+      win.document.documentElement.appendChild(style);
+      state.style = style;
+      this.sync(win, state);
+    }
+
+    sync(win, state) {
+      const tab = win.document.getElementById("tabmail")?.currentTabInfo;
+      if (tab?.mode.name === "mail3PaneTab") state.lastMail = tab;
+      const open = tab?.mode.name === "mail3PaneTab" &&
+        !!tab.chromeBrowser?.contentDocument?.getElementById("piPane");
+      for (const [id, event] of [[this.buttonId, "click"], [this.buttonId + "-menuitem", "command"]]) {
+        const button = win.document.getElementById(id);
+        if (!button) continue;
+        if (!state.bindings.has(button)) {
+          const activate = e => {
+            if (event === "click" && e.button !== 0) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            win.gSpacesToolbar.setFocusButton(win.document.getElementById(this.buttonId));
+            this.activate(win, state).catch(error => console.error("[piPane] toolbar toggle failed", error));
+          };
+          button.addEventListener(event, activate, true);
+          state.bindings.set(button, { event, activate });
+        }
+        button.setAttribute("aria-pressed", String(!!open));
+        button.classList.toggle("pi-pane-active", !!open);
+      }
+    }
+
+    async activate(win, state) {
+      if (state.busy) return;
+      const tabmail = win.document.getElementById("tabmail");
+      const current = tabmail.currentTabInfo;
+      const inMail = current?.mode.name === "mail3PaneTab";
+      const remembered = tabmail.tabInfo.includes(state.lastMail) ? state.lastMail : null;
+      const target = inMail ? current : remembered || tabmail.tabInfo.find(tab => tab.mode.name === "mail3PaneTab");
+      if (!target) throw new Error("No mail tab is available for the Pi pane");
+      state.busy = true;
+      try {
+        const tabId = this.context.extension.tabManager.wrapTab(target).id;
+        if (inMail) {
+          await this.pane.toggle(tabId);
+        } else {
+          tabmail.switchToTab(target);
+          await this.pane.open(tabId);
+        }
+      } finally {
+        state.busy = false;
+        this.sync(win, state);
+      }
+    }
+
+    refresh() {
+      for (const [win, state] of this.windows) this.sync(win, state);
+    }
+
+    detach(win) {
+      const state = this.windows.get(win);
+      if (!state) return;
+      state.observer.disconnect();
+      win.removeEventListener("TabSelect", state.sync);
+      for (const [button, { event, activate }] of state.bindings) {
+        button.removeEventListener(event, activate, true);
+        button.removeAttribute("aria-pressed");
+        button.classList.remove("pi-pane-active");
+      }
+      state.style.remove();
+      this.windows.delete(win);
+    }
+
+    close() {
+      if (this.buttonId) this.support.unregisterWindowListener(this.listenerId);
+      for (const win of this.windows.keys()) {
+        for (const tab of win.document.getElementById("tabmail").tabInfo) {
+          if (tab.mode.name === "mail3PaneTab") {
+            this.pane.close(this.context.extension.tabManager.wrapTab(tab).id);
+          }
+        }
+        this.detach(win);
+      }
+      this.buttonId = null;
+    }
+  }
+
   class PiPane extends ExtensionCommon.ExtensionAPI {
     getAPI(context) {
       const PANE_ID = "piPane";
@@ -156,6 +271,7 @@
         const body = gridContainer(doc);
         body.append(splitter, pane);
         body.classList.add(OPEN_CLASS);
+        toolbar.refresh();
 
         // Force construction of the frame loader (Gecko's extension code does this).
         try { pane.getBoundingClientRect(); } catch (_e) {}
@@ -200,6 +316,7 @@
         const style = doc.getElementById(STYLE_ID);
         if (style) style.remove();
         gridContainer(doc).classList.remove(OPEN_CLASS);
+        toolbar.refresh();
       }
 
       function setWidthPx(tabId, width) {
@@ -228,8 +345,11 @@
         return { open: open, tabId: tabId, ...(width !== undefined ? { width: width } : {}) };
       }
 
-      return {
+      const api = {
         piPane: {
+          registerSpaceButton(spaceName) {
+            toolbar.register(spaceName);
+          },
           open(tabId) {
             return installPane(tabId)
               .then(() => ({}))
@@ -277,6 +397,9 @@
           },
         },
       };
+      const toolbar = new PiSpaceToggle(context, api.piPane);
+      context.callOnClose(toolbar);
+      return api;
     }
   }
   exports.piPane = PiPane;

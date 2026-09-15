@@ -28,10 +28,6 @@
     ]
   },
 
-  "action": {
-    "default_title": "Pi pane (toggle beside the message)"
-  },
-
   "experiment_apis": {
     "piSearch": {
       "schema": "experiments/piSearch/schema.json",
