@@ -8,8 +8,12 @@
  * by routing through the SAME transport + permission path as direct browser
  * tool calls (screenshots taken from a cell still prompt the user).
  *
- * Per-session workspace (P1.4): `~/.pi/browser-repl/<sessionId>/` (0700)
- * holds artifact/checkpoint files and cell output spills.
+ * Per-session workspace: the ACP session's cwd (the task's scratch dir,
+ * provisioned by AcpAgent and pushed here via `bindWorkspace`) so cell
+ * artifacts, checkpoints and output spills land alongside the files the
+ * model writes with its native tools. Falls back to
+ * `~/.pi/browser-repl/<sessionId>/` (0700) when the session was never bound
+ * (e.g. legacy sessions opened before task workspaces existed).
  */
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
@@ -110,8 +114,19 @@ export class ReplProvider {
   private readonly runtimes = new Map<string, ReplRuntime>();
   /** Invalidation notes queued before the session's runtime exists. */
   private readonly queuedNotes = new Map<string, string[]>();
+  /** Session id -> task workspace dir (the session cwd), set by AcpAgent. */
+  private readonly bound = new Map<string, string>();
 
   constructor(private readonly opts: ReplProviderOptions) {}
+
+  /**
+   * Bind a session's REPL workspace to the task's scratch directory (the
+   * session cwd). Called by AcpAgent once a session is open. Takes effect
+   * from the next cell; a runtime already created keeps its first workspace.
+   */
+  bindWorkspace(sessionId: string, workspace: string): void {
+    if (!this.runtimes.has(sessionId)) this.bound.set(sessionId, workspace);
+  }
 
   get root(): string {
     return (
@@ -198,7 +213,7 @@ export class ReplProvider {
   ): Promise<ReplCallOutcome> {
     let runtime = this.runtimes.get(sessionId);
     if (!runtime) {
-      const workspace = this.workspaceFor(sessionId);
+      const workspace = this.bound.get(sessionId) ?? this.workspaceFor(sessionId);
       // The worker chdirs into the workspace at startup; it must exist.
       await mkdir(workspace, { recursive: true, mode: 0o700 });
       runtime = new ReplRuntime({
@@ -247,6 +262,7 @@ export class ReplProvider {
   /** Kill the session's worker child (session close / host shutdown). */
   async disposeSession(sessionId: string): Promise<void> {
     this.queuedNotes.delete(sessionId);
+    this.bound.delete(sessionId);
     const runtime = this.runtimes.get(sessionId);
     this.runtimes.delete(sessionId);
     if (runtime) await runtime.dispose();
@@ -254,6 +270,7 @@ export class ReplProvider {
 
   async shutdown(): Promise<void> {
     for (const id of [...this.runtimes.keys()]) await this.disposeSession(id);
+    this.bound.clear();
   }
 }
 

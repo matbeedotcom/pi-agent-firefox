@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import { createLogger } from "../src/logger.js";
 import { createMemoryTransportPair, type Dispatcher } from "../src/native-host/transport.js";
@@ -35,7 +38,7 @@ interface Harness {
   lastCreateTools: unknown[];
 }
 
-function setup(): Harness {
+function setup(workspaceRoot?: string): Harness {
   const backend = new MockBackend();
   const { a, b } = createMemoryTransportPair(quiet, quiet);
   const provider = new CapabilityToolProvider(b.transport, quiet);
@@ -45,6 +48,7 @@ function setup(): Harness {
     transport: b.transport,
     log: quiet,
     agentInfo: { name: "test-agent", version: "0.0.0" },
+    ...(workspaceRoot ? { workspaceRoot } : {}),
   });
   const updates: SessionNotification[] = [];
   a.transport.onNotification = (method, params) => {
@@ -437,4 +441,38 @@ test("x-pi-browser/ping responds with integration metadata", async () => {
   const res = (await h.request(X_PI_BROWSER.ping, {})) as { pong: boolean; meta: { protocolVersion: number } };
   assert.equal(res.pong, true);
   assert.equal(res.meta.protocolVersion, 2);
+});
+
+test("session/new: neutral cwd (\"/\") provisions a per-task workspace", async () => {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pi-ws-"));
+  const h = setup(workspaceRoot);
+  const res = (await h.request(AGENT_METHODS.session_new, { cwd: "/", mcpServers: [] })) as {
+    sessionId: string;
+    _meta?: { piBrowser?: { workspace?: string } };
+  };
+  const workspace = res._meta?.piBrowser?.workspace;
+  assert.ok(workspace, "_meta.piBrowser.workspace is reported");
+  // The workspace lives under the configured root.
+  assert.ok(workspace.startsWith(workspaceRoot + path.sep), `workspace ${workspace} under ${workspaceRoot}`);
+  // The backend session's cwd is the provisioned workspace.
+  const sess = h.backend.sessions.get(res.sessionId) as MockSession;
+  assert.equal(sess.cwd, workspace);
+  // A second neutral session gets its own, distinct workspace.
+  const res2 = (await h.request(AGENT_METHODS.session_new, { cwd: "/", mcpServers: [] })) as {
+    _meta?: { piBrowser?: { workspace?: string } };
+  };
+  assert.notEqual(res2._meta?.piBrowser?.workspace, workspace);
+});
+
+test("session/new: meaningful cwd is used as-is (no workspace provisioned)", async () => {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pi-ws-"));
+  const h = setup(workspaceRoot);
+  const res = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/real", mcpServers: [] })) as {
+    sessionId: string;
+    _meta?: { piBrowser?: { workspace?: string } };
+  };
+  // The requested cwd is honored and reported back unchanged.
+  assert.equal(res._meta?.piBrowser?.workspace, "/proj/real");
+  const sess = h.backend.sessions.get(res.sessionId) as MockSession;
+  assert.equal(sess.cwd, "/proj/real");
 });

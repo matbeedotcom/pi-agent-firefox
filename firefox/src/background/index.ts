@@ -222,19 +222,25 @@ async function createSession(cwd: string): Promise<string> {
   const mcpServers = [{ name: "firefox-browser", type: "acp", serverId: decl.serverId }];
   let sessionId: string;
   let configOptions: unknown;
+  let effectiveCwd: string;
   try {
-    const res = await client.request<{ sessionId: string; configOptions?: unknown }>(
-      AGENT_METHODS.session_new,
-      { cwd, mcpServers },
-    );
+    const res = await client.request<{
+      sessionId: string;
+      configOptions?: unknown;
+      _meta?: { piBrowser?: { workspace?: string } };
+    }>(AGENT_METHODS.session_new, { cwd, mcpServers });
     sessionId = res.sessionId;
     configOptions = res.configOptions;
+    // The agent may provision a per-task workspace as the session cwd (when
+    // the requested cwd was neutral). Record the real cwd so the UI shows
+    // where the model's files land, not the fallback we sent.
+    effectiveCwd = res._meta?.piBrowser?.workspace ?? cwd;
   } catch (err) {
     decl.discard();
     throw err;
   }
   decl.resolve(sessionId);
-  store.upsertCreated(sessionId, cwd, configOptions as never);
+  store.upsertCreated(sessionId, effectiveCwd, configOptions as never);
   store.setLastSession(sessionId);
   activeSessionId = sessionId;
   pushState();

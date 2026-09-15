@@ -310,7 +310,11 @@ async function refreshSessionList(): Promise<void> {
 }
 
 async function createSession(cwd: string): Promise<string> {
-  const res = await client.request<{ sessionId: string; configOptions?: unknown }>(
+  const res = await client.request<{
+    sessionId: string;
+    configOptions?: unknown;
+    _meta?: { piBrowser?: { workspace?: string } };
+  }>(
     AGENT_METHODS.session_new,
     // No mcpServers: the add-on declares no MCP server. The host uses the
     // legacy transport; the mail tools are still registered because the client
@@ -318,7 +322,11 @@ async function createSession(cwd: string): Promise<string> {
     { cwd },
   );
   const sessionId = res.sessionId;
-  store.upsertCreated(sessionId, cwd, res.configOptions as never);
+  // The agent may provision a per-task workspace as the session cwd (when the
+  // requested cwd was neutral). Record the real cwd so the UI shows where the
+  // model's files land.
+  const effectiveCwd = res._meta?.piBrowser?.workspace ?? cwd;
+  store.upsertCreated(sessionId, effectiveCwd, res.configOptions as never);
   store.setLastSession(sessionId);
   activeSessionId = sessionId;
   pushState();

@@ -52,6 +52,7 @@ import type {
   ToolSpec,
 } from "./backend.js";
 import { buildConfigOptions, CONFIG_ID_MODEL, CONFIG_ID_THINKING } from "./config-options.js";
+import { isNeutralCwd, TaskWorkspace } from "../workspace.js";
 import type { BrowserMode, CapabilityToolProvider } from "../browser/provider.js";
 import type { ImageAttachment } from "./backend.js";
 import { touchClientHeartbeat } from "../client-heartbeat.js";
@@ -71,6 +72,13 @@ export interface AcpAgentOptions {
    * connected clients' tools (cross-app routing, plan §29).
    */
   registry?: CapabilityRegistry;
+  /**
+   * Root for per-task workspaces (default ~/.pi/workspaces). A session whose
+   * requested cwd is neutral (empty/root/home) is provisioned a fresh
+   * directory here and uses it as its cwd, so the model's file tools and the
+   * `javascript` REPL share one task-scoped scratch.
+   */
+  workspaceRoot?: string;
 }
 
 interface SessionState {
@@ -127,12 +135,15 @@ export class AcpAgent {
    */
   private clientApplication: AgentApplication = "firefox";
   private clientCapabilities: AgentCapability[] = ["browser"];
+  /** Per-task filesystem scratch (one directory per session). */
+  private readonly workspaces: TaskWorkspace;
 
   hasCapability(cap: AgentCapability): boolean {
     return this.clientCapabilities.includes(cap);
   }
 
   constructor(private readonly opts: AcpAgentOptions) {
+    this.workspaces = new TaskWorkspace({ root: opts.workspaceRoot });
     opts.transport.onRequest = (method, params, id) => {
       void this.handleRequest(method, params as never, id);
     };
@@ -271,12 +282,20 @@ export class AcpAgent {
   }
 
   private async sessionNew(req: NewSessionRequest) {
+    // A session with no meaningful requested cwd (the add-on's empty-field
+    // fallback is "/") gets a fresh per-task workspace as its cwd, so the
+    // model's file tools and the REPL share one task-scoped scratch.
+    const cwd = isNeutralCwd(req.cwd) ? await this.workspaces.create() : req.cwd;
     const { state } = await this.openBackendSession(
-      (tools) => this.opts.backend.createSession({ cwd: req.cwd, customTools: tools }),
+      (tools) => this.opts.backend.createSession({ cwd, customTools: tools }),
       req.mcpServers,
     );
     this.opts.log.info(`session/new -> ${state.id} cwd=${state.cwd}`);
-    return { sessionId: state.id, configOptions: state.configOptions };
+    return {
+      sessionId: state.id,
+      configOptions: state.configOptions,
+      _meta: { piBrowser: { workspace: state.cwd } },
+    };
   }
 
   private async sessionResume(req: ResumeSessionRequest) {
@@ -426,6 +445,11 @@ export class AcpAgent {
       browserMode,
       ...(mcpServerId ? { mcpServerId } : {}),
     };
+
+    // The session cwd is the task's scratch: point the `javascript` REPL at it
+    // so cell artifacts, checkpoints and images land with the files the model
+    // writes. The REPL falls back to its own per-session dir if unbound.
+    this.opts.provider.bindWorkspace(session.sessionId, state.cwd);
 
     // Stream backend events to the client as session/update notifications.
     state.unsubscribe = session.subscribe((event) => {

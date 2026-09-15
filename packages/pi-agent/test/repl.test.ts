@@ -209,6 +209,31 @@ test("ReplProvider screenshot() accepts the Firefox image plus capture-note resu
   }
 });
 
+test("ReplProvider.bindWorkspace routes a session's cells to the shared task dir", async () => {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pi-repl-bind-test-"));
+  const provider = new ReplProvider({ workspaceRoot, log: () => {} });
+  // The task's scratch dir, as provisioned by the host for the session.
+  const taskDir = path.join(workspaceRoot, "task-scratch");
+  const executor = async () => ({ ok: true, tool: "none" });
+  try {
+    // Bind BEFORE the first cell (the host does this at session creation, so no
+    // runtime exists yet and the binding takes effect).
+    provider.bindWorkspace("s1", taskDir);
+    const bound = await provider.call("s1", "await artifact('b.txt','y'); 'ok'", 5000, undefined, executor);
+    assert.doesNotMatch(bound.error ?? "", /Error/);
+    assert.ok(await (await stat(path.join(taskDir, "b.txt"))).isFile(), "bound cell wrote to the task dir");
+
+    // A session that was never bound falls back to its own per-session dir.
+    const unbound = await provider.call("s2", "await artifact('a.txt','x'); 'ok'", 5000, undefined, executor);
+    assert.doesNotMatch(unbound.error ?? "", /Error/);
+    const defaultDir = path.join(workspaceRoot, "s2");
+    assert.ok(await (await stat(path.join(defaultDir, "a.txt"))).isFile(), "unbound cell used the per-session dir");
+  } finally {
+    await provider.shutdown();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("screenshot() attaches an image to the cell result (max 4 per cell)", async () => {
   const { runtime, cleanup } = await makeRuntime(canned);
   try {

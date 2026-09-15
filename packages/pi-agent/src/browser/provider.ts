@@ -613,6 +613,15 @@ export class CapabilityToolProvider {
     this.repl.invalidate(params.sessionId, replNotes[params.event]);
   }
 
+  /**
+   * Bind a session's `javascript` REPL workspace to the task's scratch dir
+   * (the session cwd). Delegates to the REPL provider; takes effect from the
+   * session's next cell.
+   */
+  bindWorkspace(sessionId: string, workspace: string): void {
+    this.repl.bindWorkspace(sessionId, workspace);
+  }
+
   /** Release per-session state (session/close or host shutdown). */
   async disposeSession(sessionId: string): Promise<void> {
     this.sessionAllowed.delete(sessionId);
