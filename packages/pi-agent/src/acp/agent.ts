@@ -281,7 +281,11 @@ export class AcpAgent {
 
   private async sessionResume(req: ResumeSessionRequest) {
     const { state } = await this.openBackendSession(
-      () => this.opts.backend.openSession({ sessionId: req.sessionId }),
+      // Resumed sessions must keep the browser/`javascript` tool surface
+      // (same as sessionNew) — dropping customTools here silently removes
+      // every provider tool from the model's tool list on resume.
+      (tools) =>
+        this.opts.backend.openSession({ sessionId: req.sessionId, customTools: tools }),
       req.mcpServers,
       req.cwd,
     );
@@ -291,7 +295,10 @@ export class AcpAgent {
 
   private async sessionLoad(req: LoadSessionRequest) {
     const { state } = await this.openBackendSession(
-      () => this.opts.backend.openSession({ sessionId: req.sessionId }),
+      // Loaded sessions must keep the browser/`javascript` tool surface
+      // (same as sessionNew) — see sessionResume.
+      (tools) =>
+        this.opts.backend.openSession({ sessionId: req.sessionId, customTools: tools }),
       req.mcpServers,
       req.cwd,
     );
@@ -322,6 +329,7 @@ export class AcpAgent {
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "empty prompt");
     }
     this.opts.log.info(`session/prompt ${req.sessionId} (${text.length} chars, ${images.length} images)`);
+    this.opts.log.debug(`session/prompt ${req.sessionId} text=${JSON.stringify(text)}`);
     const result = await st.session.prompt(text, images.length > 0 ? images : undefined);
     return { stopReason: result.aborted ? ("cancelled" as const) : ("end_turn" as const) };
   }
@@ -452,7 +460,12 @@ export class AcpAgent {
   }
 
   private mapEvent(sessionId: string, event: BackendEvent): SessionUpdate[] {
-    void sessionId;
+    // Debug-only evidence: omit image payloads and keep normal logs content-free.
+    if (event.type === "tool_start") {
+      this.opts.log.debug(`session/tool_start ${sessionId} ${event.toolName} ${JSON.stringify(event.args)}`);
+    } else if (event.type === "tool_end") {
+      this.opts.log.debug(`session/tool_end ${sessionId} ${event.toolName} isError=${event.isError} ${JSON.stringify(event.result, (key, value) => key === "data" ? "[omitted]" : value)}`);
+    }
     switch (event.type) {
       case "text_delta":
         return [

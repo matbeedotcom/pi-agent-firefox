@@ -389,6 +389,57 @@ Full suite after the change: `npm run typecheck` 0 failures · `npm test` **226/
 > proven working in an earlier stage, but Experiment APIs are **out of scope** for this goal
 > (objective Boundaries). It is bonus work, not a success criterion; T0–T3 above are the DoD.
 
+## Phase 2 — JavaScript REPL in the Pi Agent (2026-09-14)
+
+`jupyter`/`repl`/`REPL` prompts in the Pi agent open an in-chat JavaScript REPL backed by the
+Firefox add-on (REPL-PLAN.md). Five primitives — `snapshot`, `goTo`, `interact`, `tabs`,
+`checkpoint` — run in a worker; arbitrary cell code keeps the legacy `eval` path. Sessions:
+`repl:tab:<tabId>`, cwd = `~/.pi/browser-sessions/<workspace>/<tab>/`, artifacts under
+`artifacts/`, checkpoints 0600. Screenshots go through the existing permission gate.
+
+**Verified live** — real Firefox 155 on an owned Xvfb, real native-host binary with the
+deterministic mock ACP backend (one scripted `javascript` cell), XTEST typed session (no
+synthetic `session/new` bypass). The full BROWSER path is real end-to-end (add-on ↔ native
+host ↔ REPL worker ↔ DOM/tabs/screenshot/permission gate); only the LLM loop is mocked, so
+the walk is deterministic and needs no model API. Autonomous real-model browser use is out
+of scope for this deterministic e2e. Harness: `.probe/live-repl.mjs` (auto
+allocates a free display via `-displayfd 3`; display collision is fatal before touching the
+native manifest; owns the web-ext process group; requires exactly one matching window and
+asserts keyboard focus matches it). Four 14/14 runs on 2026-09-14 (two subagent, two parent-session, the last after an
+independent verifier gate); final evidence
+`../VERIFICATION-evidence/live-2026-09-14T21-04-54-240Z/` (results.json, probe.log,
+host.log, checkpoint.json — **0600 in both the live session cwd and the evidence copy** —
+09-final.png + typing overlays `typing-final-*.png`).
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Add-on connects to native host | ✅ live | `host.log`: `client connected` → `capabilities registered: browser` |
+| Typed cwd reached `session/new` | ✅ live | XTEST-typed path (first attempt, no retry) → `session/new ... cwd=/tmp/pi-live-…/proj` in host.log; overlay shows `key`/`inp` events on `#cwd-input` |
+| Prompt reached the host | ✅ live | `session/prompt` 14 chars, first attempt; overlay `key`/`inp` on `#prompt` |
+| Screenshot permission prompt + allowed | ✅ live | overlay `clk .perm-primary`; host: `browser_screenshot: user chose Allow once` |
+| Live cell finished → checkpoint saved | ✅ live | `checkpoint.json` in session cwd (0600); `Checkpoint saved.` in cell stream |
+| `snapshot` found the Go button | ✅ live | role+name → `el-1` |
+| `interact` click had a real DOM effect | ✅ live | overlay value `clicked:<ts>` after click (DOM `change` state, not a synthetic `.click()` reading) |
+| `evaluate` read the page value | ✅ live | clicked timestamp echoed back |
+| `info()` carries the live title | ✅ live | `Live REPL Walk` |
+| Artifact written to session workspace | ✅ live | `artifacts/` file: `title=Live REPL Walk \| state=clicked:<ts>` |
+| Checkpoint file permissions | ✅ live | mode 384 (0600) |
+| In-cell screenshot passed the gate | ✅ live | `Screenshot captured.` after permission approval (not just tool-name match) |
+
+**Product bug found and fixed during verification** (approved as part of this phase):
+`firefox/src/background/tool-dispatcher.ts` `imageResult` returns `[image, text capture-note]`
+(two parts); `packages/pi-agent/src/repl/provider.ts` `unwrapToolResult` previously unwrapped
+images only for length-1 content, so `screenshot()` received an array and threw
+`Screenshot returned no image data.` Fix: `unwrapToolResult` extracts exactly one image even
+with accompanying text metadata (multi-image/text-only/error behavior unchanged). Regression
+tests added in `packages/pi-agent/test/repl.test.ts` (non-image/multi-image/error preservation
++ real-provider `screenshot()` with capture-note), red before / green after the fix.
+
+**Test gates:** `npm test` at root — protocol, agent **107/107** (incl. 2 new), firefox
+**33/33**, thunderbird, e2e **24/24** (incl. REPL primitive/hardening suites); typecheck 0
+failures; `npm run build` clean. Live probe also re-verified after every fix (two consecutive
+14/14 subagent runs + one parent-session run).
+
 ## Related commits (2026-09-11)
 
 `0fa664d` scaffold + protocol + host · `32f38d4` add-on + e2e harness · `39d6444` pi_* control

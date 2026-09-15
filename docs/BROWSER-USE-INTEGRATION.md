@@ -1,14 +1,28 @@
 # Browser Use Pi ↔ Pi Browser: research & design
 
-Date: 2026-09-14 (updated same day after owner decision). Status: research complete, not started.
+Date: 2026-09-14 (updated same day after owner decision). Status: research
+complete; **Option C implemented (v1)** — see the §4.1 and §8 status notes.
 Upstream: https://github.com/browser-use/browser-use-pi (package `@browser_use/pi` v0.1.0, MIT).
 Research copy for this doc: `/tmp/browser-use-pi` (shallow clone; re-clone if gone).
 
-Goal: get the Browser-Use-style agent (Pi model loop + persistent V8 JavaScript
-REPL + browser primitives: `page`/`tabs`/`browser`, AX snapshots, screenshots,
-workspace artifacts) driving **our** Firefox — through our add-on (browser
-tools, content scripts, bindings) and our pi instance (the ACP agent in the
-native host).
+**Product intent: Pi Browser is a browser-use runtime over our Firefox
+MCP/ACP stack.** The browser-use paradigm — an LLM agent driving a *real*
+browser through a persistent JavaScript interface (`page`/`tabs` primitives,
+AX snapshots, screenshots, workspace artifacts/checkpoints) — is what we
+support natively: over our own transport (add-on + native messaging + broker
+UDS/ACP), on the user's live Firefox, under our security model (explicit
+session→tab binding, permission gates, no CDP/TCP). Concretely, the
+`javascript` REPL tool of our ACP agent (§4) **is** the browser-use surface —
+the API any agent that speaks our ACP/MCP protocol can drive, plus the
+one-shot `browser_*` tools for single actions. This doc is the research +
+design record for that support; the implementation plan is
+`BROWSER-USE-REPL-PLAN.md`.
+
+Goal: get that Browser-Use-style agent (Pi model loop + persistent V8
+JavaScript REPL + browser primitives: `page`/`tabs`/`browser`, AX snapshots,
+screenshots, workspace artifacts) driving **our** Firefox — through our
+add-on (browser tools, content scripts, bindings) and our pi instance (the
+ACP agent in the native host).
 
 **Owner constraints (2026-09-14):**
 1. **No CDP-over-TCP server, whatsoever.** That eliminates the "unmodified SDK
@@ -190,6 +204,12 @@ leaks), and real stack traces via `exceptionDetails`. It is the same
 mechanism Node's own REPL uses. A bare `vm.runInContext`/`eval` would force us
 to re-implement all four by hand. (The child process itself — not the
 inspector — is what makes a hung cell killable without killing the host.)
+
+> **Status: IMPLEMENTED** (v1). Shipped as PRODUCT.md §53: `javascript`
+> tool (REPL_TOOLS, browserToolVersion 5), per-session `ReplProvider`/
+> `ReplRuntime`, the `pi-repl` realm, `page.*`/`tabs.*` over the normal
+> browser-tool path, REPL-owned tabs, and the live-Firefox verification
+> recorded in `VERIFICATION.md`.
 
 ### 4.2 Primitive → tool mapping (native shapes, no CDP emulation)
 
@@ -452,6 +472,12 @@ workspace dir lifecycle; PRODUCT.md section (new §"Browser-Use-style REPL" +
 (browser.ts/protocol.ts/runtime.ts/worker.ts) → `pi-connection.ts` with the
 §5.3 mapping → broker role tagging → add-on deltas (A-set) → e2e with the real
 SDK + scripted `models` collection → live pass. ≈ 2.5–3 weeks + fork upkeep.)
+
+> **Status (v1, option C): all four phases complete.** Phases 0–1:
+> `repl: phase 0 core` / `repl: phase 1 — javascript tool + session wiring`;
+> phase 2a (add-on): `repl: phase 2a — add-on primitives`; phases 2b/3
+> (e2e + hardening): `repl: phase 2b/3`; docs + live verification: see
+> `VERIFICATION.md` and the `repl: docs + live verification` commit.
 
 ### Test pyramid (C)
 

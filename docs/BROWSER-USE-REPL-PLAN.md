@@ -1,8 +1,21 @@
 # Plan — Browser-Use-style REPL in our pi agent (Option C)
 
-Date: 2026-09-14. Design rationale: `docs/BROWSER-USE-INTEGRATION.md` (this plan
-implements its §4; CDP surface tables there are reference for what the
-primitives must cover).
+Date: 2026-09-14. **Status: all phases complete (v1)** — implementation notes
+in `docs/BROWSER-USE-INTEGRATION.md` §8 and `docs/VERIFICATION.md`.
+Design rationale: `docs/BROWSER-USE-INTEGRATION.md` (this plan implements its
+§4; CDP surface tables there are reference for what the primitives must cover).
+
+**Purpose.** This plan is the implementation of **browser-use support over our
+Firefox MCP/ACP stack**: the `javascript` REPL tool makes our ACP agent a
+browser-use agent — JS cells over the user's live bound tab — and the
+`javascript` + `browser_*` tool surface is the browser-use API that any agent
+speaking our ACP/MCP protocol can drive. The agent contract it enables:
+**observe** (`snapshot`/`screenshot`/`evaluate`) → **act** (`click`/`type`/
+`goto`) → **verify** (re-snapshot; refs go stale after navigation) → **persist**
+(`artifact`/`checkpoint` into the session workspace), in small
+checkpoint-protected cells (a cell can be killed; its state resets — see the
+tool description in `packages/protocol/src/browser-tools.ts` and the prompt
+strategy in INTEGRATION.md §4.3).
 
 ## Scope & settled decisions
 

@@ -2023,6 +2023,11 @@ These rules must never be weakened:
 9. No localhost TCP port is required.
 
 10. No native bridge is separately downloaded by the user.
+
+11. The javascript REPL worker child is NOT a security sandbox. It is a
+    convenience boundary (crash isolation, kill-on-timeout), not a privilege
+    boundary: the cell code runs with full Node privileges in the child, and
+    v1 exposes no require/import to the realm (curated globals only).
 ```
 
 ---
@@ -2067,6 +2072,13 @@ only as a compatibility layer
 ```
 
 until MCP-over-ACP can replace them cleanly.
+
+It implements the `javascript` REPL (§53) as a **forked Node child with a
+`node:inspector` V8 realm** rather than in-process `vm`/`eval`, because the
+tool's contract is kill-on-timeout: a hung cell must die without taking the
+host down, and only a child process can be SIGKILL'd. The realm lives in the
+child even though the DOM lives in Firefox because `node:inspector` is a
+local handle to the child's own engine — no browser, no CDP, no TCP.
 
 ---
 
@@ -2204,3 +2216,59 @@ and verify the fix."
 ```
 
 That is the first meaningful product milestone.
+
+---
+
+# 53. Browser-Use-style REPL (the `javascript` tool)
+
+The agent gets a persistent JavaScript REPL — a `javascript` tool — in which
+it can write multi-step browser automation across multiple turns, the way
+Browser-Use-style agents script a page. It runs against the **user's live
+Firefox** through the exact same browser-tool transport the agent already
+uses; nothing here opens a second browser or a TCP port.
+
+Design (decided in `docs/BROWSER-USE-INTEGRATION.md`, option C; executed per
+`docs/BROWSER-USE-REPL-PLAN.md`):
+
+```text
+ACP agent (host)
+  └─ ReplProvider            one per session
+       └─ ReplRuntime        lazily forked Node child (env {}), kill-on-timeout
+            └─ V8 realm      node:inspector context "pi-repl" (top-level await,
+                             last-expr capture, per-cell object-group cleanup)
+                 │  page.* / tabs.*  (curated globals)
+                 ▼
+            IPC tool channel ──> host routes via the SAME transport +
+                                 permission path as direct browser tools
+                 ▼
+            Firefox add-on ──> content scripts ──> the bound tab's real DOM
+```
+
+Key properties:
+
+```text
+1. The realm is a convenience boundary, not a sandbox (§49.11). v1 exposes
+   curated globals only (page, tabs, fetch, Buffer, timers, console→sink,
+   workspace, artifact, checkpoint); no require/import, no process.
+
+2. page.* and tabs.* are IPC proxies. A cell calling page.clickAt() sends a
+   tool request to the host, which executes it through the normal browser
+   tool path — so screenshots taken from a cell still prompt the user, and
+   every call targets the session's bound tab (or a REPL-owned tab).
+
+3. Kill-on-timeout is a child-process property. A hung cell is SIGKILL'd;
+   the host survives and the next cell starts with a reset notice. ACP
+   cancel aborts the in-flight cell the same way.
+
+4. Tab scope is the bound tab. tabs.open() creates REPL-owned tabs that the
+   add-on closes at session end; the user's tab is released only by
+   unbinding in the sidebar. Any-tab scope is deliberately out of v1 scope.
+
+5. Output is bounded (1 MB, secrets redacted) and spills to a per-session
+   workspace (~/.pi/browser-repl/<sessionId>/, 0700); screenshots are
+   attached as images (≤4 per cell, ≤8 MB) and never printed as bytes.
+```
+
+The text a11y outline is unchanged; the REPL's `page.snapshot()` uses a
+structured twin of the same walk (same pruning, refs, and budgets) so the
+model can address elements by `ref` with `page.click`/`page.type`.

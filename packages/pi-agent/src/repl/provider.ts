@@ -48,8 +48,9 @@ const MAX_QUEUED_NOTES = 5;
 
 /**
  * Unwrap a normalized tool result into the raw value the worker's primitives
- * expect: single text part -> its parsed JSON (the add-on ships JSON), single
- * image part -> { data, mimeType }, else the content array itself.
+ * expect: single text part -> its parsed JSON (the add-on ships JSON), one
+ * image (optionally accompanied by capture notes) -> { data, mimeType },
+ * else the content array itself.
  */
 export function unwrapToolResult(result: NormalizedToolResult): unknown {
   if (result.isError) {
@@ -59,9 +60,13 @@ export function unwrapToolResult(result: NormalizedToolResult): unknown {
       .join("\n");
     throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, text || "browser tool failed");
   }
+  // Firefox screenshots include a text note naming the capture API. That
+  // metadata must not hide the image from the worker's screenshot primitive.
+  const images = result.content.filter((part) => part.type === "image");
+  if (images.length === 1) return { data: images[0].data, mimeType: images[0].mimeType };
   if (result.content.length === 1) {
     const part = result.content[0];
-    if (part.type === "image") return { data: part.data, mimeType: part.mimeType };
+    if (part.type !== "text") return result.content;
     try {
       return JSON.parse(part.text);
     } catch {

@@ -223,6 +223,7 @@ export class PiSdkBackend implements PiBackend {
           "(provider not configured?) — prompts will fail until a model is selected",
       );
     }
+    this.opts.log.info(`session ${agentSession.sessionId}: model=${m?.provider}/${m?.id}`);
     return this.wrapSession(agentSession, cwd);
   }
 

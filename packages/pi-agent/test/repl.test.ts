@@ -10,6 +10,8 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ReplRuntime, ReplCellError } from "../src/repl/runtime.js";
+import { ReplProvider, unwrapToolResult } from "../src/repl/provider.js";
+import type { NormalizedToolResult } from "../src/browser/provider.js";
 
 async function makeRuntime(executor: (tool: string, args: Record<string, unknown>) => Promise<unknown>, opts: Record<string, unknown> = {}) {
   const workspace = await mkdtemp(path.join(tmpdir(), "pi-repl-test-"));
@@ -137,6 +139,36 @@ test("redaction: secrets are scrubbed from captured output", async () => {
   }
 });
 
+test("unwrapToolResult preserves non-image results, multiple images, and errors", () => {
+  const image = { type: "image", data: "aW1hZ2U=", mimeType: "image/jpeg" } as const;
+  assert.deepEqual(unwrapToolResult({ content: [image] }), { data: image.data, mimeType: image.mimeType });
+  assert.deepEqual(unwrapToolResult({ content: [{ type: "text", text: '{"ok":true}' }] }), { ok: true });
+  assert.equal(unwrapToolResult({ content: [{ type: "text", text: "plain text" }] }), "plain text");
+  const multiText: NormalizedToolResult = { content: [{ type: "text", text: "one" }, { type: "text", text: "two" }] };
+  assert.deepEqual(unwrapToolResult(multiText), multiText.content);
+  assert.deepEqual(unwrapToolResult({ content: [image, image] }), [image, image]);
+  assert.throws(() => unwrapToolResult({ isError: true, content: [image, { type: "text", text: "capture failed" }] }), /capture failed/);
+});
+
+test("ReplProvider screenshot() accepts the Firefox image plus capture-note result", async () => {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pi-repl-provider-test-"));
+  const provider = new ReplProvider({ workspaceRoot, log: () => {} });
+  const image = { type: "image", data: Buffer.from("fake-jpeg-bytes").toString("base64"), mimeType: "image/jpeg" } as const;
+  try {
+    for (const via of ["captureTab", "captureVisibleTab"]) {
+      const result = await provider.call(`screenshot-${via}`, "await screenshot();", 10_000, undefined, async (_sessionId, tool) => {
+        assert.equal(tool, "browser_screenshot");
+        return { content: [image, { type: "text", text: `screenshot via ${via}` }] };
+      });
+      assert.match(result.text, /Screenshot captured\./);
+      assert.deepEqual(result.images, [image]);
+    }
+  } finally {
+    await provider.shutdown();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("screenshot() attaches an image to the cell result (max 4 per cell)", async () => {
   const { runtime, cleanup } = await makeRuntime(canned);
   try {
@@ -148,6 +180,26 @@ test("screenshot() attaches an image to the cell result (max 4 per cell)", async
     // the case here — each call is a fresh cell). A single cell with 5
     // screenshots hits the cap inside the cell.
     assert.match(tooMany.text, /done/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("screenshot() over 8 MB is omitted (P3.4 image cap)", async () => {
+  // 9 MB of raw bytes -> ~12 MB base64, above the 8 MB cap.
+  const big = Buffer.alloc(9 * 1024 * 1024, 7);
+  const bigBase64 = big.toString("base64");
+  const { runtime, cleanup } = await makeRuntime(async (tool) => {
+    if (tool === "browser_screenshot") return { data: bigBase64, mimeType: "image/jpeg" };
+    return { ok: true, tool };
+  });
+  try {
+    const result = await runtime.call("await screenshot();");
+    assert.equal(result.images.length, 0, "oversized screenshot must not be attached");
+    assert.match(result.text, /8 MB limit/i, `omission note present: ${result.text}`);
+    // A subsequent small screenshot in a fresh cell still works (cap is per cell).
+    const small = await runtime.call("await screenshot();");
+    assert.equal(small.images.length, 0, "stub still returns the big image, so this cell is also capped");
   } finally {
     await cleanup();
   }

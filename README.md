@@ -70,6 +70,28 @@ With an MCP-capable client, the add-on also serves `pi_new_session`, `pi_select_
 `pi_unbind_tab`, `pi_open_bound_tab`, `pi_set_config_option` over MCP-over-ACP — the same
 handlers the sidebar uses.
 
+### Browser scripting: the `javascript` REPL
+
+Beyond the individual `browser_*` tools, the agent can call a persistent
+`javascript` tool — a Browser-Use-style REPL bound to the session's tab. A
+cell runs in a long-lived V8 realm (state persists across cells) with a
+`page` object (`goto`, `snapshot`, `evaluate`, `waitFor`, `click`, `clickAt`,
+`type`, `typeFocused`, `focus`, `scroll`, `screenshot`) and a `tabs` object
+(`list`, `open`, `get`). Typical cell:
+
+```js
+const s = await page.snapshot();
+const go = s.nodes.find((n) => n.role === "button" && n.name === "Go");
+await page.click(go.ref);
+await page.waitFor("() => document.title.includes('Done')", undefined, { timeoutMs: 10000 });
+const shot = await screenshot();
+```
+
+Every `page.*` call goes through the normal browser-tool path (same
+permissions, same bound tab). Screenshots from a cell prompt for approval
+just like a direct `browser_screenshot`; `tabs.open()` tabs are closed when
+the session ends. Design: PRODUCT.md §53.
+
 ## `/pi-browser` commands
 
 | Command | Effect |
@@ -157,7 +179,7 @@ Thunderbird add-on.
 Optional verification:
 
 ```sh
-npm test             # 95 tests across the workspaces (Node 22)
+npm test             # 257 tests across the workspaces (Node 22+)
 sh amo/make-zip.sh   # rebuild the AMO submission zip from firefox/dist
 ```
 
