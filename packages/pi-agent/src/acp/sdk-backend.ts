@@ -55,6 +55,8 @@ async function loadBuiltinExtensionFactories(log: Logger): Promise<BuiltinExtens
 }
 import type {
   BackendEvent,
+  BackendHistoryEntry,
+  BackendHistoryToolCall,
   BackendPromptResult,
   BackendSession,
   BackendToolResult,
@@ -353,7 +355,7 @@ export class PiSdkBackend implements PiBackend {
         });
       },
       getHistory: async () => {
-        const out: Array<{ role: "user" | "assistant"; text: string }> = [];
+        const out: BackendHistoryEntry[] = [];
         for (const msg of agentSession.messages as unknown as Array<Record<string, unknown>>) {
           const role = msg.role as string | undefined;
           if (role === "user") {
@@ -369,14 +371,22 @@ export class PiSdkBackend implements PiBackend {
                   : "";
             if (text) out.push({ role: "user", text });
           } else if (role === "assistant") {
-            const content = msg.content as Array<{ type?: string; text?: string }> | undefined;
+            const content = msg.content as Array<{ type?: string; text?: string; id?: string; name?: string; arguments?: unknown; input?: unknown }> | undefined;
             const text = Array.isArray(content)
               ? content
                   .filter((c) => c?.type === "text" && typeof c.text === "string")
                   .map((c) => c.text as string)
                   .join("")
               : "";
-            if (text) out.push({ role: "assistant", text });
+            const toolCalls: BackendHistoryToolCall[] = Array.isArray(content)
+              ? content
+                  .filter((c) => (c?.type === "toolCall" || c?.type === "tool_call") && typeof c.id === "string" && typeof c.name === "string")
+                  .map((c) => ({ toolCallId: c.id as string, toolName: c.name as string, input: c.arguments ?? c.input }))
+              : [];
+            if (text || toolCalls.length) out.push({ role: "assistant", ...(text ? { text } : {}), ...(toolCalls.length ? { toolCalls } : {}) });
+          } else if (role === "toolResult" || role === "tool") {
+            const toolCallId = typeof msg.toolCallId === "string" ? msg.toolCallId : typeof msg.id === "string" ? msg.id : "";
+            if (toolCallId) out.push({ role: "tool", toolCallId, toolName: typeof msg.toolName === "string" ? msg.toolName : undefined, content: msg.content, isError: msg.isError === true });
           }
         }
         return out;

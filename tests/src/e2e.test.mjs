@@ -1503,12 +1503,16 @@ test("javascript REPL (legacy transport): persistent cells, image content, timeo
     { match: "repl-shot", toolCalls: [{ toolName: "javascript", args: { code: "await screenshot()" } }] },
     { match: "repl-hang", toolCalls: [{ toolName: "javascript", args: { code: "for (;;) {}", timeoutMs: 1500 } }] },
   ]);
-  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir });
+  // Neutral cwd ("/"): the host provisions a per-task workspace under
+  // PI_BROWSER_WORKSPACE_DIR (the REPL binds to it); a real /work/... path
+  // would need mkdir /work (EACCES) in CI.
+  const wsDir = path.join(tmpRoot, "ws-repl");
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir, PI_BROWSER_WORKSPACE_DIR: wsDir });
   fakeFirefox.attach(host);
   try {
     await initialize(host);
     const tab = tabs.addTab("http://a.test/repl", "REPL Page");
-    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl" });
+    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/" });
     tabs.bind(s.sessionId, tab);
 
     const cellUpdates = (mark) =>
@@ -1593,6 +1597,7 @@ test("javascript REPL (primitives): snapshot/goto/interact/tabs/checkpoint throu
   const tabs = new FakeTabs();
   const fakeFirefox = makeFakeFirefox(tabs);
   const replDir = path.join(tmpRoot ?? (tmpRoot = mkdtempSync(path.join(tmpdir(), "pi-browser-e2e-"))), "repl-primitives");
+  const wsDir = path.join(tmpRoot, "ws-repl-p");
   const script = writeScript([
     { match: "repl-snap", toolCalls: [{ toolName: "javascript", args: { code: "const s = await page.snapshot(); JSON.stringify(s.nodes.map((n) => n.role))" } }] },
     { match: "repl-goto", toolCalls: [{ toolName: "javascript", args: { code: "const p = await page.goto('http://a.test/next'); p.url" } }] },
@@ -1600,12 +1605,14 @@ test("javascript REPL (primitives): snapshot/goto/interact/tabs/checkpoint throu
     { match: "repl-tabs", toolCalls: [{ toolName: "javascript", args: { code: "const t = await tabs.open('http://aux.test/r'); const l = await tabs.list(); await page.close(); l.length" } }] },
     { match: "repl-checkpoint", toolCalls: [{ toolName: "javascript", args: { code: "await checkpoint('state-1', { n: 1 }); 'saved'" } }] },
   ]);
-  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir });
+  // Neutral cwd: the session gets a provisioned task workspace; the REPL
+  // binds to it, so checkpoints land there (reported in _meta.piBrowser.workspace).
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir, PI_BROWSER_WORKSPACE_DIR: wsDir });
   fakeFirefox.attach(host);
   try {
     await initialize(host);
     const tab = tabs.addTab("http://a.test/repl", "REPL Page");
-    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl-p" });
+    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/" });
     tabs.bind(s.sessionId, tab);
 
     const runCell = async (name) => {
@@ -1652,10 +1659,71 @@ test("javascript REPL (primitives): snapshot/goto/interact/tabs/checkpoint throu
     // P2.7: checkpoint lands in the session workspace (0600).
     outs = await runCell("repl-checkpoint");
     assert.ok(outs.includes("saved"), `checkpoint cell: ${outs}`);
-    const cp = path.join(replDir, s.sessionId, "state-1");
+    const ws = s._meta?.piBrowser?.workspace;
+    assert.ok(ws, "session_new reports the provisioned task workspace");
+    const cp = path.join(ws, "state-1");
     const fs = await import("node:fs");
     assert.equal(fs.statSync(cp).mode & 0o777, 0o600, "checkpoint file is 0600");
     assert.equal(fs.readFileSync(cp, "utf8"), JSON.stringify({ n: 1 }), "checkpoint content round-trips");
+
+    await host.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
+    assert.ok(host.alive);
+  } finally {
+    await shutdown(host);
+  }
+});
+
+test("javascript REPL (fs): workspace-scoped filesystem, escapes rejected", async () => {
+  const tabs = new FakeTabs();
+  const fakeFirefox = makeFakeFirefox(tabs);
+  const replDir = path.join(tmpRoot ?? (tmpRoot = mkdtempSync(path.join(tmpdir(), "pi-browser-e2e-"))), "repl-fs");
+  const wsDir = path.join(tmpRoot, "ws-repl-fs");
+  const script = writeScript([
+    { match: "repl-fs-write", toolCalls: [{ toolName: "javascript", args: { code: "await fs.write('notes/a.txt', 'from-cell'); await fs.append('notes/a.txt', '+more'); await fs.mkdir('docs'); (await fs.list()).length" } }] },
+    { match: "repl-fs-read", toolCalls: [{ toolName: "javascript", args: { code: "await fs.read('notes/a.txt')" } }] },
+    { match: "repl-fs-escape", toolCalls: [{ toolName: "javascript", args: { code: "try { await fs.read('../escape.txt'); 'no-throw' } catch (e) { String(e).includes('escapes') ? 'blocked' : 'wrong-error: ' + e }" } }] },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir, PI_BROWSER_WORKSPACE_DIR: wsDir });
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+    const tab = tabs.addTab("http://a.test/fs", "REPL FS Page");
+    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/" });
+    tabs.bind(s.sessionId, tab);
+    const ws = s._meta?.piBrowser?.workspace;
+    assert.ok(ws && ws.startsWith(wsDir), `session workspace under PI_BROWSER_WORKSPACE_DIR: ${ws}`);
+
+    const runCell = async (name) => {
+      const mark = host.notifications.length;
+      await host.request(
+        AGENT_METHODS.session_prompt,
+        { sessionId: s.sessionId, prompt: [{ type: "text", text: name }] },
+        60_000,
+      );
+      return host.notifications
+        .slice(mark)
+        .filter((m) => m.method === "session/update" && m.params?.sessionId === s.sessionId && m.params.update?.sessionUpdate === "tool_call_update")
+        .map((u) => JSON.stringify(u.params.update?.rawOutput ?? ""))
+        .join("\n");
+    };
+
+    // fs.write/append/mkdir land in the session's task workspace.
+    let outs = await runCell("repl-fs-write");
+    assert.ok(outs.includes("2"), `two top-level entries after write+mkdir: ${outs}`);
+    const nodeFs = await import("node:fs");
+    assert.equal(
+      nodeFs.readFileSync(path.join(ws, "notes/a.txt"), "utf8"),
+      "from-cell+more",
+      "fs.write/append landed in the session workspace",
+    );
+
+    // Round-trip read through the realm.
+    outs = await runCell("repl-fs-read");
+    assert.ok(outs.includes("from-cell+more"), `fs.read round-trips: ${outs}`);
+
+    // Escape attempts are rejected by the sandbox (the cell reports 'blocked').
+    outs = await runCell("repl-fs-escape");
+    assert.ok(outs.includes("blocked"), `escape rejected with the sandbox error: ${outs}`);
 
     await host.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
     assert.ok(host.alive);
@@ -1668,6 +1736,7 @@ test("javascript REPL (hardening): rebind mid-cell, ACP cancel, two-session isol
   const tabs = new FakeTabs();
   const fakeFirefox = makeFakeFirefox(tabs);
   const replDir = path.join(tmpRoot ?? (tmpRoot = mkdtempSync(path.join(tmpdir(), "pi-browser-e2e-"))), "repl-hard");
+  const wsDir = path.join(tmpRoot, "ws-repl-h");
   const script = writeScript([
     { match: "repl-mid", toolCalls: [{ toolName: "javascript", args: { code: "await page.info()" } }] },
     { match: "repl-next", toolCalls: [{ toolName: "javascript", args: { code: "1 + 1" } }] },
@@ -1675,12 +1744,12 @@ test("javascript REPL (hardening): rebind mid-cell, ACP cancel, two-session isol
     { match: "repl-a1", toolCalls: [{ toolName: "javascript", args: { code: "secret = 'A'; 1" } }] },
     { match: "repl-b1", toolCalls: [{ toolName: "javascript", args: { code: "typeof secret" } }] },
   ]);
-  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir });
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir, PI_BROWSER_WORKSPACE_DIR: wsDir });
   fakeFirefox.attach(host);
   try {
     await initialize(host);
     const tabA = tabs.addTab("http://a.test/1", "Tab A");
-    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl-h" });
+    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/" });
     tabs.bind(s.sessionId, tabA);
 
     // P3.1: rebind mid-cell — the in-flight tool call hits the closed tab
@@ -1750,7 +1819,7 @@ test("javascript REPL (hardening): rebind mid-cell, ACP cancel, two-session isol
 
     // P3.3: two sessions, two tabs — REPL state and tool traffic never cross.
     // A defines `secret` in its own realm; B must not see it.
-    const s2 = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl-h2" });
+    const s2 = await host.request(AGENT_METHODS.session_new, { cwd: "/" });
     const tabB = tabs.addTab("http://b.test/1", "Tab B");
     tabs.bind(s2.sessionId, tabB);
     await host.request(AGENT_METHODS.session_prompt, { sessionId: s.sessionId, prompt: [{ type: "text", text: "repl-a1" }] }, 60_000);
@@ -1788,11 +1857,12 @@ test("javascript REPL: rebind (binding_changed) -> next cell starts with the not
     { match: "rebind-a", toolCalls: [{ toolName: "javascript", args: { code: "origin = 'A'; 1" } }] },
     { match: "rebind-b", toolCalls: [{ toolName: "javascript", args: { code: "2 + 2" } }] },
   ]);
-  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir });
+  const wsDir = path.join(tmpRoot, "ws-repl-rebind");
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir, PI_BROWSER_WORKSPACE_DIR: wsDir });
   fakeFirefox.attach(host);
   try {
     await initialize(host);
-    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/work/repl-rebind" });
+    const s = await host.request(AGENT_METHODS.session_new, { cwd: "/" });
     const tabA = tabs.addTab("http://a.test/1", "Tab A");
     tabs.bind(s.sessionId, tabA);
 

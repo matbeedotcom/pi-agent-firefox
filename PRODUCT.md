@@ -2030,7 +2030,11 @@ These rules must never be weakened:
 11. The javascript REPL worker child is NOT a security sandbox. It is a
     convenience boundary (crash isolation, kill-on-timeout), not a privilege
     boundary: the cell code runs with full Node privileges in the child, and
-    v1 exposes no require/import to the realm (curated globals only).
+    v1 exposes no require/import to the realm (curated globals only). The
+    `fs` global is the exception that is confined: it resolves every path
+    against the session's task workspace and rejects lexical escapes and
+    symlinks pointing outside it, so a cell cannot reach files beyond the
+    task's scratch.
 ```
 
 ---
@@ -2252,7 +2256,11 @@ Key properties:
 ```text
 1. The realm is a convenience boundary, not a sandbox (§49.11). v1 exposes
    curated globals only (page, tabs, fetch, Buffer, timers, console→sink,
-   workspace, artifact, checkpoint); no require/import, no process.
+   workspace, fs, artifact, checkpoint); no require/import, no process.
+   `fs` is the one filesystem surface: read/write/append/list/stat/exists/
+   mkdir/rename/unlink/rm, every path resolved against the session's task
+   workspace with lexical + symlink escape rejection (nothing outside the
+   task scratch is reachable from a cell).
 
 2. page.* and tabs.* are IPC proxies. A cell calling page.clickAt() sends a
    tool request to the host, which executes it through the normal browser

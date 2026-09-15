@@ -64,6 +64,8 @@ export const REPL_PREAMBLE = [
   "2. ACT — one action per cell: page.goto(url) | page.click(ref) | page.type(ref, text).",
   "3. VERIFY — re-snapshot or evaluate to confirm the effect BEFORE claiming success.",
   "4. PERSIST — for multi-step tasks, await checkpoint('step-N.json', {...}) between steps; files land in the session workspace (global `workspace` prints its path).",
+  "Downloads: await page.download(url, path?) saves an image/video/any file into the task workspace using the browser's own cookies — use it (not shell curl) for authenticated resources; it returns { path, bytes, mimeType, url}.",
+  "The task workspace is the `fs` global's root: fs.read/fs.write/fs.append/fs.list/fs.stat/fs.mkdir/fs.rename/fs.unlink/fs.rm (relative paths from the workspace; nothing outside it is reachable). Use it to stage data between cells or to read files the agent's native tools wrote.",
   "Screenshots are user-facing evidence; text-only models must rely on page.snapshot()/page.evaluate(), not image contents.",
   "Rules:",
   "- Element refs are stable within one page load and go STALE after navigation — never reuse a ref across a goto; snapshot again.",

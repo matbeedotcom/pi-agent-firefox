@@ -36,8 +36,12 @@ export const PI_BROWSER = {
    * browser_open_tab / browser_close_tab / browser_list_tabs (REPL-owned
    * auxiliary tabs, closed at session unbind), and browser_get_accessibility_tree
    * `format: "nodes"` (structured snapshot for page.snapshot()).
+   * v6 = 2026-09-12: `javascript` REPL gains an `fs` global — a workspace-
+   * scoped filesystem (read/write/append/list/stat/exists/mkdir/rename/
+   * unlink/rm) confined to the session's task workspace (lexical + symlink
+   * escape rejection); no add-on-side change (host-side realm global).
    */
-  browserToolVersion: 6,
+  browserToolVersion: 7,
   /** Stable Firefox Native Messaging host name (manifest `name`). */
   nativeHost: "dev.pi.browser",
   /** Stable Firefox add-on ID (gecko.id). Must match allowed_extensions. */
@@ -282,3 +286,5 @@ export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const BROWSER_TOOL_TIMEOUT_MS = 30_000;
 /** Long deadline for screenshot calls (capture can be slow on busy pages). */
 export const BROWSER_SCREENSHOT_TIMEOUT_MS = 60_000;
+/** Long deadline for file downloads (images/videos can be several MB). */
+export const BROWSER_DOWNLOAD_TIMEOUT_MS = 120_000;

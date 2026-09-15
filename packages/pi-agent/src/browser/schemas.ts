@@ -158,6 +158,19 @@ const SCHEMAS: Record<string, TSchema> = {
     { additionalProperties: false, required: ["url"] },
   ),
 
+  browser_download: Type.Object(
+    {
+      url: Type.String({
+        description: 'Absolute http(s) URL to download, e.g. the src of an image on the current page.',
+      }),
+      maxBytes: Type.Optional(Type.Number({
+        description:
+          "Maximum bytes to download (default 10485760, cap 52428800). Larger files are rejected, not truncated.",
+      })),
+    },
+    { additionalProperties: false, required: ["url"] },
+  ),
+
   browser_click_at: Type.Object(
     {
       x: Type.Number({ description: "X coordinate in CSS pixels from the viewport's left edge." }),

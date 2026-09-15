@@ -287,6 +287,24 @@ export const BROWSER_TOOLS: readonly BrowserToolDef[] = [
     },
     readOnly: false,
   },
+  {
+    name: "browser_download",
+    description:
+      "Download a file (image, video, or any resource) from an absolute http(s) URL using the browser's own network " +
+      "state: the request is issued with the user's cookies for the target origin, so authenticated resources that a " +
+      "shell curl cannot reach download correctly. Returns the content base64-encoded with its name, MIME type, and " +
+      "size; the bound tab is only used as the Referer and is not navigated. Files larger than maxBytes are rejected " +
+      "(BROWSER_DOWNLOAD_TOO_LARGE), never truncated.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        url: { type: "string", description: 'Absolute http(s) URL to download, e.g. the src of an image on the current page.' },
+        maxBytes: { type: "number", description: "Maximum bytes to download (default 10485760, cap 52428800). Larger files are rejected, not truncated." },
+      },
+      required: ["url"],
+    },
+    readOnly: true,
+  },
   // ---------------------------------------------------------------------
   // REPL interaction primitives (BROWSER-USE-REPL-PLAN.md Phase 2).
   // Atomic content-script operations behind the javascript tool's page.*
@@ -427,6 +445,11 @@ export const REPL_TOOLS: readonly BrowserToolDef[] = [
       "page.snapshot({maxNodes?,maxDepth?}) -> {url,title,nodes:[{ref,role,name,...}]}, page.click(ref), page.clickAt(x,y), " +
       "page.type(ref,text), page.typeFocused(text), page.focus(ref), page.scroll(ref), page.close(), tabs.list(), tabs.open(url), " +
       "tabs.get(targetId), screenshot(), snapshot(), artifact(name, data), checkpoint(name, value), reconnect(). " +
+      "Downloads: page.download(url, path?) saves a file (image/video/anything) into the task workspace using the " +
+      "browser's own cookies — authenticated resources that a shell curl cannot fetch; returns { path, bytes, mimeType }. " +
+      "Filesystem: fs (read, write, append, list, stat, exists, mkdir, rename, unlink, rm) — confined to this session's task workspace " +
+      "(the directory artifact()/checkpoint() write into, global `workspace` prints it); paths are relative to that root, " +
+      "absolute paths outside it and `..` escapes are rejected. " +
       "Screenshots are user-facing evidence; text-only models must rely on page.snapshot()/page.evaluate(), not image contents. " +
       "screenshot() may pause while the user answers its permission prompt (Allow once / Always / Deny); a denial " +
       "rejects the call — rely on snapshot/evaluate instead. " +

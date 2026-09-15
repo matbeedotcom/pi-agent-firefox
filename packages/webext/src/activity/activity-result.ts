@@ -135,7 +135,25 @@ export function resultView(title: string, input: unknown, text: string): ResultV
   if (title === "browser_get_selection") return { kind: "quote", heading: result.text ? "Selected text" : "No text selected", value: string(result.text) };
   if (title === "browser_evaluate" || title === "javascript") return { kind: "value", heading: "Returned result", value: Object.hasOwn(result, "result") ? result.result : value };
   if (/^(mail_|compose_|contacts_|pi_)/.test(title)) return applicationView(title, result, args);
+  if (title === "bash" || title === "powershell") return {
+    kind: "action", heading: "Command finished", caption: commandCaption(text, args),
+  };
+  if (title === "edit" || title === "write") return {
+    kind: "action", heading: title === "edit" ? "File updated" : "File written", caption: editCaption(text, args),
+  };
   return actionView(title, result, args);
+}
+
+function commandCaption(text: string, args: Record<string, unknown>): string {
+  const command = string(args.command);
+  const output = text.split("\n").filter(Boolean)[0]?.slice(0, 180) ?? "No output";
+  return [command ? command.slice(0, 160) : "", output].filter(Boolean).join(" · ");
+}
+
+function editCaption(text: string, args: Record<string, unknown>): string {
+  const path = string(args.path || args.filePath);
+  const summary = text.split("\n").filter(Boolean)[0]?.slice(0, 180) ?? "Change applied";
+  return [path, summary].filter(Boolean).join(" · ");
 }
 
 function applicationView(title: string, result: Record<string, unknown>, args: Record<string, unknown>): ResultView {

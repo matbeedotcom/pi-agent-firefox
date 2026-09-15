@@ -45,6 +45,7 @@ import type { AcpTransport } from "../native-host/transport.js";
 import type { Logger } from "../logger.js";
 import type {
   BackendEvent,
+  BackendHistoryEntry,
   BackendSession,
   ListedSession,
   ModelOption,
@@ -305,6 +306,12 @@ export class AcpAgent {
   }
 
   private async sessionLoad(req: LoadSessionRequest) {
+    const existing = this.sessions.get(req.sessionId);
+    if (existing) {
+      for (const update of await this.replayHistory(existing)) this.sendSessionUpdate(existing.id, update);
+      this.opts.log.info(`session/load -> ${existing.id} (already open; replayed history)`);
+      return { configOptions: existing.configOptions };
+    }
     const { state } = await this.openBackendSession(
       // Loaded sessions must keep the browser/`javascript` tool surface
       // (same as sessionNew) — see sessionResume.
@@ -543,13 +550,17 @@ export class AcpAgent {
     const messages = await st.session.getHistory?.().catch(() => []);
     if (!messages) return [];
     const updates: SessionUpdate[] = [];
-    for (const msg of messages) {
-      if (!msg.text) continue;
-      updates.push(
-        msg.role === "user"
+    for (const msg of messages as BackendHistoryEntry[]) {
+      if (msg.role === "user" || msg.role === "assistant") {
+        if (msg.text) updates.push(msg.role === "user"
           ? { sessionUpdate: "user_message_chunk", content: { type: "text", text: msg.text } }
-          : { sessionUpdate: "agent_message_chunk", content: { type: "text", text: msg.text } },
-      );
+          : { sessionUpdate: "agent_message_chunk", content: { type: "text", text: msg.text } });
+        for (const call of msg.toolCalls ?? []) {
+          updates.push({ sessionUpdate: "tool_call", toolCallId: call.toolCallId, title: call.toolName, kind: toolKindFor(call.toolName), status: "in_progress", rawInput: call.input ?? {} });
+        }
+      } else if (msg.role === "tool") {
+        updates.push({ sessionUpdate: "tool_call_update", toolCallId: msg.toolCallId, status: msg.isError ? "failed" : "completed", content: toToolCallContent(msg), rawOutput: msg.content });
+      }
     }
     return updates;
   }

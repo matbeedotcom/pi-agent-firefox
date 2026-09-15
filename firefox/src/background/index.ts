@@ -526,6 +526,13 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
       }
       return {};
     }
+    case "load_session": {
+      const sessionId = String(payload.sessionId);
+      const view = store.get(sessionId);
+      if (!view) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      await openExistingSession(sessionId, view.cwd, true);
+      return {};
+    }
     case "prompt": {
       const sessionId = String(payload.sessionId);
       const text = String(payload.text ?? "");

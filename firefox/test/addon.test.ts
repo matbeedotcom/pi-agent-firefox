@@ -613,6 +613,158 @@ test("ToolDispatcher: browser_navigate rejects non-http(s)/file URLs", async () 
   delete (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates;
 });
 
+test("ToolDispatcher: browser_download fetches with the browser's state (cookies + referrer) and returns base64", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9, "https://app.example.com/asset/1");
+  const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  let fetchArgs: unknown[] | undefined;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    fetchArgs = [input, init];
+    return new Response(bytes, {
+      status: 200,
+      headers: { "content-type": "image/png; charset=binary", "content-length": String(bytes.byteLength) },
+    });
+  }) as typeof fetch;
+  try {
+    const d = new ToolDispatcher(store);
+    const result = (await d.handleToolCall({
+      sessionId: "s1",
+      tool: "browser_download",
+      arguments: { url: "https://cdn.example.com/cat.png" },
+      timeoutMs: 1000,
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text) as {
+      fileName: string;
+      mimeType: string;
+      byteLength: number;
+      dataBase64: string;
+    };
+    assert.equal(parsed.fileName, "cat.png"); // from the URL's last path segment
+    assert.equal(parsed.mimeType, "image/png");
+    assert.equal(parsed.byteLength, bytes.byteLength);
+    assert.deepEqual(new Uint8Array(Buffer.from(parsed.dataBase64, "base64")), bytes);
+    // The request carried the user's credentials and the bound tab as Referer.
+    const init = fetchArgs?.[1] as RequestInit | undefined;
+    assert.equal(init?.credentials, "include");
+    assert.equal((init as Record<string, unknown> | undefined)?.referrer, "https://app.example.com/asset/1");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("ToolDispatcher: browser_download honors Content-Disposition filenames", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(new Uint8Array([1, 2]), {
+      status: 200,
+      headers: { "content-disposition": 'attachment; filename="report 2024.pdf"' },
+    })) as typeof fetch;
+  try {
+    const d = new ToolDispatcher(store);
+    const result = (await d.handleToolCall({
+      sessionId: "s1",
+      tool: "browser_download",
+      arguments: { url: "https://app.example.com/download?id=42" },
+      timeoutMs: 1000,
+    })) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text) as { fileName: string };
+    assert.equal(parsed.fileName, "report 2024.pdf");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("ToolDispatcher: browser_download rejects oversized files (BROWSER_DOWNLOAD_TOO_LARGE, never truncated)", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  const realFetch = globalThis.fetch;
+  const d = new ToolDispatcher(store);
+  const bigBody = new Uint8Array(1000).fill(7);
+  try {
+    // Streamed body exceeds the cap mid-download.
+    globalThis.fetch = (async () =>
+      new Response(bigBody, { status: 200, headers: { "content-length": String(bigBody.byteLength) } })) as typeof fetch;
+    await assert.rejects(
+      d.handleToolCall({
+        sessionId: "s1",
+        tool: "browser_download",
+        arguments: { url: "https://cdn.example.com/big.mp4", maxBytes: 100 },
+        timeoutMs: 1000,
+      }),
+      (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
+    );
+    // A declared content-length over the cap is rejected before streaming.
+    globalThis.fetch = (async () =>
+      new Response(new Uint8Array(1), { status: 200, headers: { "content-length": "999999" } })) as typeof fetch;
+    await assert.rejects(
+      d.handleToolCall({
+        sessionId: "s1",
+        tool: "browser_download",
+        arguments: { url: "https://cdn.example.com/big.mp4", maxBytes: 1000 },
+        timeoutMs: 1000,
+      }),
+      (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("ToolDispatcher: browser_download surfaces HTTP failures and rejects non-http(s) URLs", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => tab(9);
+  const realFetch = globalThis.fetch;
+  const d = new ToolDispatcher(store);
+  try {
+    globalThis.fetch = (async () => new Response(null, { status: 404, statusText: "Not Found" })) as typeof fetch;
+    await assert.rejects(
+      d.handleToolCall({
+        sessionId: "s1",
+        tool: "browser_download",
+        arguments: { url: "https://cdn.example.com/missing.png" },
+        timeoutMs: 1000,
+      }),
+      (err: unknown) => err instanceof PiBrowserProtocolError && /HTTP 404/.test(err.message),
+    );
+    for (const url of ["javascript:alert(1)", "ftp://x/file", "/relative", ""] as const) {
+      await assert.rejects(
+        d.handleToolCall({ sessionId: "s1", tool: "browser_download", arguments: { url }, timeoutMs: 1000 }),
+        (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.INTERNAL,
+        `url ${JSON.stringify(url)} must be rejected`,
+      );
+    }
+    // Bad maxBytes is an argument error, not a fetch.
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches++;
+      return new Response(new Uint8Array([1]), { status: 200 });
+    }) as typeof fetch;
+    await assert.rejects(
+      d.handleToolCall({
+        sessionId: "s1",
+        tool: "browser_download",
+        arguments: { url: "https://cdn.example.com/x.png", maxBytes: -5 },
+        timeoutMs: 1000,
+      }),
+      (err: unknown) => err instanceof PiBrowserProtocolError && /maxBytes/.test(err.message),
+    );
+    assert.equal(fetches, 0, "no fetch for an invalid maxBytes");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("ToolDispatcher: browser_get_accessibility_tree format=nodes routes to pi:a11yNodes", async () => {
   const store = new SessionStore();
   await store.hydrate();

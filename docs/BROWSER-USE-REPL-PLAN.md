@@ -143,4 +143,7 @@ P0 (exec core) ──► P1 (tool + sessions) ──► P2a (add-on) ──► P
 recording/screencast, `highlightActions`, `sensitiveData`; any-tab scope (b);
 Option B (SDK fork) unless the "SDK identity" goal appears; uploads
 (`setFileInputFiles`) — small, likely slips in during P2 if a live workflow
-needs it.
+needs it. Filesystem access IS in scope, but only through the workspace-
+scoped `fs` global (added post-v1, protocol v7): paths resolve against the
+session's task workspace with lexical + symlink escape rejection — no cell
+path reaches the host filesystem outside the task's scratch.

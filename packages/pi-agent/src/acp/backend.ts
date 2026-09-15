@@ -62,8 +62,19 @@ export interface BackendSession {
    * Conversation history for ACP `session/load` replay. Optional: backends
    * without history support simply do not replay.
    */
-  getHistory?(): Promise<Array<{ role: "user" | "assistant"; text: string }>>;
+  getHistory?(): Promise<BackendHistoryEntry[]>;
   dispose(): void;
+}
+
+/** Persisted conversation entries needed to reconstruct visible tool cards. */
+export type BackendHistoryEntry =
+  | { role: "user" | "assistant"; text?: string; toolCalls?: BackendHistoryToolCall[] }
+  | { role: "tool"; toolCallId: string; toolName?: string; content?: unknown; isError?: boolean; input?: unknown };
+
+export interface BackendHistoryToolCall {
+  toolCallId: string;
+  toolName: string;
+  input?: unknown;
 }
 
 export interface CreateSessionOptions {

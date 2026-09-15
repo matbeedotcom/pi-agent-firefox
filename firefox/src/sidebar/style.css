@@ -280,6 +280,10 @@ button:disabled {
 }
 
 .msg {
+  /* Conversation rows must keep their intrinsic height. In a column flex
+     container the default flex-shrink: 1 compresses replayed rows into bars
+     when their total height exceeds the viewport. */
+  flex: 0 0 auto;
   border-radius: 8px;
   padding: 8px 10px;
   line-height: 1.45;

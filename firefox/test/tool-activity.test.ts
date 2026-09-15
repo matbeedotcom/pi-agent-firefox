@@ -65,5 +65,5 @@ test("typing preview reports actual counts without exposing typed values", () =>
   assert.ok(!JSON.stringify(preview).includes("secret"));
   assert.ok(isVisualTool("javascript"));
   assert.ok(isVisualTool("browser_screenshot"));
-  assert.ok(!isVisualTool("bash"));
+  assert.ok(isVisualTool("bash"));
 });

@@ -170,8 +170,9 @@ Firefox add-on  ◄── native messaging ──►  native host
                                                         ├─ V8 realm via node:inspector (same trick as the SDK)
                                                         ├─ cells: one Runtime.evaluate per cell, output capture,
                                                         │  redaction, image collection, 1 MB/16 KB limits
-                                                        ├─ realm globals: page, tabs, workspace, screenshot(),
-                                                        │  snapshot(), artifact(), checkpoint(), reconnect()
+                                                        ├─ realm globals: page, tabs, workspace, fs (workspace-
+                                                        │  scoped), screenshot(), snapshot(), artifact(), checkpoint(),
+                                                        │  reconnect()
                                                         └─ tool calls over IPC to the host
                                                              host → existing transport → add-on → content scripts
 ```
@@ -231,6 +232,7 @@ inspector — is what makes a hung cell killable without killing the host.)
 | `page.close()` / close owned tabs at session end | **new `browser_close_tab {tabId}`** |
 | frames | `frame` param on the primitives (maps to the tool param); cross-origin frames already work via all-frames content scripts |
 | `artifact(name,data)` / `checkpoint(name,value,{partial})` | ported from the SDK worker (workspace files, atomic rename, partials over IPC) — per-session workspace dir |
+| `fs` (read/write/append/list/stat/exists/mkdir/rename/unlink/rm) | **new, host-side** — workspace-scoped filesystem: every path resolves against the session's task workspace; lexical escapes (`..`, outside absolute paths) and symlink escapes are rejected (write/append create parent dirs) |
 | `reconnect()` | reset the tool channel state (host-side: nothing to reconnect — the transport persists; the REPL clears page handles + ref registry note "inspect before acting") |
 | `finish` / `finish_from_js` | **not needed**: our ACP agent ends the turn naturally; the schema-validated delivery contract is a property of the SDK's standalone run, not of the tool. (Port later if we add structured run delivery.) |
 

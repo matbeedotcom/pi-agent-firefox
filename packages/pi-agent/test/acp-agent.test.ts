@@ -97,7 +97,7 @@ test("initialize: capabilities + piBrowser metadata", async () => {
   assert.ok(caps.sessionCapabilities.close);
   assert.equal(caps.mcpCapabilities.acp, true);
   assert.equal(res._meta.piBrowser.protocolVersion, 2);
-  assert.equal(res._meta.piBrowser.browserToolVersion, 6);
+  assert.equal(res._meta.piBrowser.browserToolVersion, 7);
   assert.equal(res.agentInfo.name, "test-agent");
 });
 
@@ -356,6 +356,34 @@ test("session/load: replays history as session/update notifications", async () =
     (h.updates[0].update as { content: { text: string } }).content.text,
     "fix the button",
   );
+});
+
+test("session/load: replays persisted tool calls and image results", async () => {
+  const h = setup();
+  h.backend.precreate("existing-rich", "/proj/rich", [
+    { role: "assistant", toolCalls: [{ toolCallId: "shot-1", toolName: "browser_screenshot", input: {} }] },
+    { role: "tool", toolCallId: "shot-1", toolName: "browser_screenshot", content: [
+      { type: "image", mimeType: "image/png", data: "AQID" },
+      { type: "text", text: "{\"captured\":true}" },
+    ] },
+  ]);
+  h.updates.length = 0;
+  await h.request(AGENT_METHODS.session_load, { sessionId: "existing-rich", cwd: "/proj/rich", mcpServers: [] });
+  assert.deepEqual(h.updates.map((u) => (u.update as { sessionUpdate: string }).sessionUpdate), ["tool_call", "tool_call_update"]);
+  const update = h.updates[1].update as Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>;
+  assert.equal(update.status, "completed");
+  assert.equal(update.content?.filter((c) => c.type === "content" && c.content.type === "image").length, 1);
+});
+
+test("session/load: rehydrates an already-open session instead of failing busy", async () => {
+  const h = setup();
+  const created = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/open", mcpServers: [] })) as { sessionId: string };
+  const session = h.backend.sessions.get(created.sessionId) as MockSession;
+  session.history.push({ role: "assistant", toolCalls: [{ toolCallId: "js-1", toolName: "javascript", input: { code: "1 + 1" } }] });
+  session.history.push({ role: "tool", toolCallId: "js-1", toolName: "javascript", content: [{ type: "text", text: "2" }] });
+  h.updates.length = 0;
+  await h.request(AGENT_METHODS.session_load, { sessionId: created.sessionId, cwd: "/proj/open", mcpServers: [] });
+  assert.deepEqual(h.updates.map((u) => (u.update as { sessionUpdate: string }).sessionUpdate), ["tool_call", "tool_call_update"]);
 });
 
 test("session/close: subsequent prompts fail with SESSION_NOT_FOUND", async () => {

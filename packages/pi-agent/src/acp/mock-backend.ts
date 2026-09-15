@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { PI_BROWSER_ERROR, PiBrowserProtocolError, codeFromErrorObject, isStructuredErrorObject } from "@pi-browser/protocol";
 import type {
+  BackendHistoryEntry,
   BackendEvent,
   BackendPromptResult,
   BackendSession,
@@ -61,7 +62,7 @@ export class MockSession implements BackendSession {
   /** Aborts the in-flight tool calls when the session is cancelled. */
   private abortController: AbortController | undefined;
   isDisposed = false;
-  history: Array<{ role: "user" | "assistant"; text: string }> = [];
+  history: BackendHistoryEntry[] = [];
   /** Per-prompt script; set from the driver before prompting. */
   nextTurn: ScriptedTurn = {};
 
@@ -202,7 +203,7 @@ export class MockSession implements BackendSession {
     this.listeners.clear();
   }
 
-  getHistory(): Promise<Array<{ role: "user" | "assistant"; text: string }>> {
+  getHistory(): Promise<BackendHistoryEntry[]> {
     return Promise.resolve(this.history);
   }
 }
@@ -273,7 +274,7 @@ export class MockBackend implements PiBackend {
   precreate(
     sessionId: string,
     cwd: string,
-    history: Array<{ role: "user" | "assistant"; text: string }> = [],
+    history: BackendHistoryEntry[] = [],
     customTools: ToolSpec[] = [],
   ): MockSession {
     const session = new MockSession(sessionId, cwd, customTools, this.script);

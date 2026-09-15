@@ -16,7 +16,7 @@ import type {
   ToolCallUpdate,
 } from "@pi-browser/protocol";
 
-import { isVisualTool, resultParts, type BrowserActivity, type ToolImage } from "../tool-activity.js";
+import { resultParts, type BrowserActivity, type ToolImage } from "../tool-activity.js";
 import { createActivityCard, type ActivityCardData } from "./activity-card.js";
 
 interface StatusInfo {
@@ -514,29 +514,14 @@ function toolStatusClass(status: string): string {
 function buildBlockDom(block: Block, conv: HTMLElement): BlockDom {
   const wrap = document.createElement("div");
   let dom: BlockDom;
-  if (block.kind === "tool" && isVisualTool(block.title)) {
+  if (block.kind === "tool") {
     const card = createActivityCard(block);
     dom = { wrap: card.wrap, updateActivity: card.update };
     conv.append(card.wrap);
     blockDoms.set(block.id, dom);
     return dom;
   }
-  if (block.kind === "tool") {
-    wrap.className = "msg tool";
-    const head = document.createElement("div");
-    head.className = "tool-head";
-    const name = document.createElement("span");
-    name.textContent = block.title;
-    const status = document.createElement("span");
-    status.className = `tool-status ${toolStatusClass(block.status)}`;
-    status.textContent = block.status;
-    head.append(name, status);
-    const body = document.createElement("div");
-    body.classList.add("muted");
-    if (block.text) renderMarkdownInto(body, block.text);
-    wrap.append(head, body);
-    dom = { wrap, name, status, body, toolText: block.text, toolStatus: block.status, toolTitle: block.title };
-  } else {
+  else {
     wrap.className = `msg ${block.kind}`;
     let content: HTMLElement = wrap;
     if (block.kind === "thought") {
@@ -865,8 +850,13 @@ void (async () => {
     syncPermissionPrompt(state.permissionRequests);
     // Rehydrate the transcript of the active session if needed.
     const active = state.sessions.find((s) => s.sessionId === activeSessionId);
-    if (active && !active.loaded) {
-      // Background will load it; nothing to do here.
+    if (active) {
+      // The background may already have the ACP session open (and therefore
+      // mark it loaded), but this new sidebar has an empty transcript. Ask
+      // for an explicit history replay so tool cards and images reappear.
+      blocksFor(active.sessionId).length = 0;
+      domSession = undefined;
+      void action("load_session", { sessionId: active.sessionId }).catch(() => {});
     }
   } catch {
     // background not ready yet; state will arrive via push

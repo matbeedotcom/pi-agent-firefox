@@ -232,6 +232,8 @@ button:disabled {
 }
 
 .msg {
+  /* Keep each transcript row readable when the conversation overflows. */
+  flex: 0 0 auto;
   border-radius: 8px;
   padding: 8px 12px;
   line-height: 1.45;

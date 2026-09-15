@@ -11,6 +11,7 @@
  * background.
  */
 import {
+  BROWSER_DOWNLOAD_TIMEOUT_MS,
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
   getBrowserTool,
@@ -43,6 +44,11 @@ function imageResult(dataUrl: string, mimeType: string, via?: string) {
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
+/** Hard cap for content-script round-trips (browser_download is excluded: it runs in the background). */
+const CONTENT_TIMEOUT_CAP_MS = 60_000;
+/** browser_download size limits (bytes). */
+const DOWNLOAD_MAX_BYTES_DEFAULT = 10 * 1024 * 1024;
+const DOWNLOAD_MAX_BYTES_CAP = 50 * 1024 * 1024;
 
 export class ToolDispatcher {
   /** Last capture error (from captureTab) so the fallback path can report it. */
@@ -167,7 +173,12 @@ export class ToolDispatcher {
       );
     }
 
-    const timeoutMs = Math.min(params.timeoutMs ?? DEFAULT_TIMEOUT_MS, 60_000);
+    // Downloads run in the background and may stream for the full tool
+    // deadline; everything else is capped at 60s (content-script round-trips).
+    const timeoutMs =
+      tool === "browser_download"
+        ? Math.min(params.timeoutMs ?? BROWSER_DOWNLOAD_TIMEOUT_MS, BROWSER_DOWNLOAD_TIMEOUT_MS)
+        : Math.min(params.timeoutMs ?? DEFAULT_TIMEOUT_MS, CONTENT_TIMEOUT_CAP_MS);
     switch (tool) {
       case "browser_get_page":
         return this.getPage(tab);
@@ -290,6 +301,8 @@ export class ToolDispatcher {
       }
       case "browser_navigate":
         return this.navigate(tab, args);
+      case "browser_download":
+        return this.download(tab, args, timeoutMs);
       case "browser_open_tab":
         return this.openTab(sessionId, args);
       case "browser_close_tab":
@@ -342,6 +355,85 @@ export class ToolDispatcher {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `could not list frames of tab ${tabId}: ${message}`);
+    }
+  }
+
+  /**
+   * Download a URL using the browser's own network state. Firefox extension
+   * background pages may fetch cross-origin with `credentials: "include"`
+   * (host_permissions <all_urls>): the request carries the USER'S cookies for
+   * the target origin — which is exactly what a shell curl lacks. The bound
+   * tab contributes only its URL (as Referer); it is not navigated.
+   *
+   * Files are streamed with a hard byte cap: an oversized download is
+   * rejected (BROWSER_DOWNLOAD_TOO_LARGE), never truncated — a half video is
+   * worthless, and the caller can retry with a larger maxBytes.
+   */
+  private async download(tab: browser.tabs.Tab, args: Record<string, unknown> | undefined, timeoutMs: number): Promise<unknown> {
+    const url = typeof args?.url === "string" ? args.url.trim() : "";
+    if (!/^https?:\/\//i.test(url)) {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_download requires an absolute http(s) URL");
+    }
+    let maxBytes = DOWNLOAD_MAX_BYTES_DEFAULT;
+    if (args?.maxBytes !== undefined) {
+      if (typeof args.maxBytes !== "number" || !Number.isFinite(args.maxBytes) || args.maxBytes <= 0) {
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "maxBytes must be a positive number");
+      }
+      maxBytes = Math.min(Math.floor(args.maxBytes), DOWNLOAD_MAX_BYTES_CAP);
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          credentials: "include",
+          ...(tab.url ? { referrer: tab.url, referrerPolicy: "strict-origin-when-cross-origin" as ReferrerPolicy } : {}),
+          signal: controller.signal,
+        });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT, `download timed out after ${timeoutMs} ms: ${url}`);
+        }
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `download failed: ${errMessage(err)}: ${url}`);
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new PiBrowserProtocolError(
+          PI_BROWSER_ERROR.INTERNAL,
+          `download failed: HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""} for ${url}`,
+        );
+      }
+      const declared = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > 0 && declared > maxBytes) {
+        await response.body?.cancel().catch(() => {});
+        throw downloadTooLarge(declared, maxBytes, url);
+      }
+
+      let bytes: Uint8Array;
+      try {
+        bytes = await readBoundedBody(response, maxBytes, url);
+      } catch (err) {
+        if (err instanceof PiBrowserProtocolError) throw err;
+        if (controller.signal.aborted) {
+          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT, `download timed out after ${timeoutMs} ms: ${url}`);
+        }
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `download failed: ${errMessage(err)}: ${url}`);
+      }
+
+      const mimeType = (response.headers.get("content-type") ?? "").split(";")[0].trim();
+      const fileName = fileNameFromResponse(response, url, mimeType);
+      return textResult({
+        url,
+        status: response.status,
+        mimeType,
+        fileName,
+        byteLength: bytes.byteLength,
+        dataBase64: toBase64(bytes),
+      });
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -540,3 +632,110 @@ type PiBrowserErrorCodeString =
   | "BROWSER_ELEMENT_STALE"
   | "BROWSER_TOOL_TIMEOUT"
   | "INTERNAL";
+
+// ---------------------------------------------------------------------------
+// browser_download helpers
+// ---------------------------------------------------------------------------
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? (err.name ? `${err.name}: ${err.message}` : err.message) : String(err);
+}
+
+function downloadTooLarge(knownSize: number, maxBytes: number, url: string): PiBrowserProtocolError {
+  return new PiBrowserProtocolError(
+    PI_BROWSER_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
+    `download exceeds maxBytes (${maxBytes} bytes): ${url}${Number.isFinite(knownSize) ? ` — the server declared ${knownSize} bytes; retry with a larger maxBytes (cap ${DOWNLOAD_MAX_BYTES_CAP})` : ""}`,
+    { maxBytes, knownSize },
+  );
+}
+
+/**
+ * Read a fetch response body, enforcing a hard byte cap while streaming.
+ * Aborts the download (and throws BROWSER_DOWNLOAD_TOO_LARGE) the moment the
+ * cap is exceeded, so memory never grows past ~cap + one chunk.
+ */
+async function readBoundedBody(response: Response, maxBytes: number, url: string): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    // No streamable body (defensive fallback): read it whole under the cap.
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    if (buffer.byteLength > maxBytes) throw downloadTooLarge(buffer.byteLength, maxBytes, url);
+    return buffer;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw downloadTooLarge(total, maxBytes, url);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+/** Base64-encode in 32 KB slices (spreading a 50 MB array would blow the stack). */
+function toBase64(bytes: Uint8Array): string {
+  const SLICE = 0x8000;
+  let out = "";
+  for (let i = 0; i < bytes.length; i += SLICE) {
+    out += String.fromCharCode(...bytes.subarray(i, i + SLICE));
+  }
+  return btoa(out);
+}
+
+/** Extension for the content-type when the server gives no filename. */
+const MIME_EXTENSIONS: ReadonlyArray<[string, string]> = [
+  ["image/jpeg", "jpg"],
+  ["image/png", "png"],
+  ["image/webp", "webp"],
+  ["image/gif", "gif"],
+  ["image/avif", "avif"],
+  ["video/mp4", "mp4"],
+  ["video/webm", "webm"],
+  ["video/ogg", "ogv"],
+  ["audio/mpeg", "mp3"],
+  ["audio/ogg", "ogg"],
+  ["application/pdf", "pdf"],
+  ["application/zip", "zip"],
+  ["application/json", "json"],
+];
+
+/**
+ * Best-effort file name: Content-Disposition (filename* first, then
+ * filename), else the last URL path segment, else a MIME-derived name.
+ */
+function fileNameFromResponse(response: Response, url: string, mimeType: string): string {
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const star = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/i.exec(disposition);
+  if (star) {
+    try {
+      const decoded = decodeURIComponent(star[1].trim());
+      if (decoded) return decoded;
+    } catch {
+      /* fall through */
+    }
+  }
+  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(disposition);
+  if (plain && plain[1].trim()) return plain[1].trim();
+  try {
+    const segment = new URL(url).pathname.split("/").filter(Boolean).pop();
+    if (segment) {
+      const decoded = decodeURIComponent(segment);
+      if (decoded && !/[\\/]$/.test(decoded)) return decoded;
+    }
+  } catch {
+    /* fall through */
+  }
+  const ext = MIME_EXTENSIONS.find(([mime]) => mime === mimeType)?.[1];
+  return ext ? `download.${ext}` : "download";
+}

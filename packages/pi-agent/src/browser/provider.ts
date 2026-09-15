@@ -13,6 +13,7 @@
  * migrating changes only the transport.
  */
 import {
+  BROWSER_DOWNLOAD_TIMEOUT_MS,
   BROWSER_SCREENSHOT_TIMEOUT_MS,
   BROWSER_TOOL_TIMEOUT_MS,
   isComposeTool,
@@ -88,6 +89,7 @@ export function normalizeToolResult(raw: unknown): NormalizedToolResult {
 
 function timeoutFor(tool: string): number {
   if (tool === "browser_screenshot") return BROWSER_SCREENSHOT_TIMEOUT_MS;
+  if (tool === "browser_download") return BROWSER_DOWNLOAD_TIMEOUT_MS;
   if (tool === "mail_get_attachment") return MAIL_ATTACHMENT_TIMEOUT_MS;
   if (isMailTool(tool)) return MAIL_TOOL_TIMEOUT_MS;
   if (isComposeTool(tool)) return COMPOSE_TOOL_TIMEOUT_MS;

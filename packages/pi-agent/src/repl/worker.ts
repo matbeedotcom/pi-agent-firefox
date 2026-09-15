@@ -25,8 +25,9 @@ import { createContext } from "node:vm";
 import { inspect } from "node:util";
 import { appendFileSync } from "node:fs";
 import { writeFile, rename } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
+import { createReplFs } from "./fs-sandbox.js";
 import type {
   ReplImage,
   ReplRequest,
@@ -46,6 +47,9 @@ const config = (await new Promise<ReplWorkerConfig>((resolve, reject) => {
 })) as ReplWorkerConfig;
 
 process.chdir(config.workspace);
+// The workspace-scoped fs is created once and shared between the realm's
+// `fs` global and the page.* primitives that write into it (page.download).
+const replFs = createReplFs(config.workspace);
 const clean = <T>(value: T): T => {
   // Redaction is applied to text in the sink; this guards tool-originated
   // values that are serialized into output.
@@ -113,6 +117,24 @@ function cleanText(text: string): string {
 // Tool channel: page/tabs primitives execute browser tools on the session's
 // current tab. The host owns routing, permissions and the add-on.
 // ---------------------------------------------------------------------------
+
+/**
+ * Lexical pre-check for page.download destinations: reject escapes BEFORE
+ * issuing the download (never fetch 50 MB of video only to fail at write
+ * time). The sandbox's fs.write applies the full check (incl. symlinks)
+ * again at write time; this only saves the round-trip.
+ */
+function assertDownloadPathInsideWorkspace(p: string): void {
+  if (p.includes("\0")) throw new Error("page.download: `path` contains a NUL byte.");
+  if (p.split(/[\\/]+/).includes(".."))
+    throw new Error(`page.download: path escapes the workspace: ${p}`);
+  if (isAbsolute(p)) {
+    const root = resolve(config.workspace);
+    const resolved = resolve(p);
+    if (resolved !== root && !resolved.startsWith(root + sep))
+      throw new Error(`page.download: path escapes the workspace: ${p}`);
+  }
+}
 
 let nextToolId = 0;
 const toolPending = new Map<
@@ -299,6 +321,42 @@ const page = {
     images.push({ type: "image", data, mimeType: result?.mimeType ?? "image/jpeg" });
     return images.length > count ? "Screenshot captured." : "Screenshot omitted; see warning.";
   },
+  /**
+   * Download a file (image, video, or any resource) using the browser's own
+   * network state — the extension issues the fetch with the user's cookies
+   * for the target origin, so authenticated URLs that a shell curl cannot
+   * reach download here. Saves into the task workspace (parent directories
+   * are created) and returns { path, bytes, mimeType, url }.
+   * @param url absolute http(s) URL to download (e.g. the src of an image on the page)
+   * @param path relative file path inside the task workspace (default: the
+   *        server-provided file name)
+   * @param options.maxBytes byte cap for oversized resources (default 10 MB,
+   *        cap 50 MB); larger downloads are rejected, never truncated — for
+   *        big files pass the `javascript` tool a matching timeoutMs (max 120000)
+   */
+  async download(url: string, path?: string, options: { maxBytes?: number } = {}) {
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url))
+      throw new Error("page.download requires an absolute http(s) URL.");
+    if (typeof path === "string") {
+      if (path.length === 0) throw new Error("page.download: `path` must be a non-empty string.");
+      assertDownloadPathInsideWorkspace(path);
+    }
+    const result = (await callTool("browser_download", {
+      url,
+      ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
+    })) as { fileName?: string; byteLength?: number; mimeType?: string; dataBase64?: string } | undefined;
+    const dataBase64 = result?.dataBase64;
+    if (typeof dataBase64 !== "string" || dataBase64.length === 0)
+      throw new Error("browser_download returned no data.");
+    const bytes = Buffer.from(dataBase64, "base64");
+    if (result && typeof result.byteLength === "number" && bytes.byteLength !== result.byteLength)
+      throw new Error(
+        `downloaded data is corrupt: expected ${result.byteLength} bytes, got ${bytes.byteLength}.`,
+      );
+    const relative = typeof path === "string" && path.length > 0 ? path : (result?.fileName ?? "download");
+    const written = await replFs.write(relative, bytes, "buffer");
+    return { path: relative, bytes: written, mimeType: result?.mimeType ?? "", url };
+  },
   /** Close the active REPL-opened tab and return to the bound tab. */
   async close() {
     if (activeTabId === undefined)
@@ -394,6 +452,10 @@ Object.assign(realm, {
   TextDecoder,
   console: new (await import("node:console")).Console(sink, sink),
   workspace: config.workspace,
+  // Workspace-scoped filesystem: every path resolves against the session's
+  // task workspace; escapes (.., outside absolute paths, symlinks out) are
+  // rejected. See fs-sandbox.ts.
+  fs: replFs,
   page,
   tabs,
   async screenshot(options?: { quality?: number }) {

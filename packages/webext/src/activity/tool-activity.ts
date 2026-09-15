@@ -24,7 +24,7 @@ export function resultParts(content: unknown): { text: string; images: ToolImage
 }
 
 export function isVisualTool(title: string): boolean {
-  return /^(browser_|mail_|contacts_|compose_|pi_)/.test(title) || title === "javascript" || title === "javascript_reset";
+  return /^(browser_|mail_|contacts_|compose_|pi_)/.test(title) || ["javascript", "javascript_reset", "bash", "powershell", "edit", "write"].includes(title);
 }
 
 const labels: Record<string, [string, string]> = {

@@ -475,3 +475,94 @@ test("worker crash: next call reports the reset, the call after starts fresh", a
     await cleanup();
   }
 });
+
+// fs global (workspace-scoped): realm wiring — the sandbox is rooted at the
+// runtime workspace, escapes surface as cell errors, files land in the dir.
+test("fs: workspace-scoped filesystem in the realm (write/read/list/escape)", async () => {
+  const { runtime, workspace, cleanup } = await makeRuntime(canned);
+  try {
+    const write = await runtime.call("await fs.write('notes/hello.txt', 'hi there'); await fs.append('notes/hello.txt', '!'); 1");
+    assert.match(write.text, /1/);
+    assert.equal(await readFile(path.join(workspace, "notes/hello.txt"), "utf8"), "hi there!");
+
+    const read = await runtime.call("await fs.read('notes/hello.txt')");
+    assert.match(read.text, /hi there!/);
+
+    const list = await runtime.call("(await fs.list()).map((e) => e.name).join(',')");
+    assert.match(list.text, /notes/);
+
+    const cwd = await runtime.call("await fs.cwd()");
+    assert.ok(cwd.text.includes(workspace), `cwd reports the workspace: ${cwd.text}`);
+
+    // Escape attempts surface as cell errors (not silent success).
+    const escape = await runtime.call("await fs.read('../outside.txt')");
+    assert.match(escape.error ?? "", /escapes the workspace/);
+    const abs = await runtime.call("await fs.stat('/etc/passwd')");
+    assert.match(abs.error ?? "", /escapes the workspace/);
+    const rmRoot = await runtime.call("await fs.rm('.')");
+    assert.match(rmRoot.error ?? "", /workspace root/);
+    // The workspace is untouched by the failed calls.
+    assert.ok((await stat(workspace)).isDirectory());
+  } finally {
+    await cleanup();
+  }
+});
+
+test("page.download: saves the browser-fetched file into the workspace", async () => {
+  const payload = Buffer.from("fake-mp4-bytes");
+  const downloadArgs: Record<string, unknown>[] = [];
+  const executor = async (tool: string, args: Record<string, unknown>) => {
+    if (tool === "browser_download") {
+      downloadArgs.push(args);
+      return {
+        url: String(args.url),
+        status: 200,
+        mimeType: "video/mp4",
+        fileName: "movie.mp4",
+        byteLength: payload.byteLength,
+        dataBase64: payload.toString("base64"),
+      };
+    }
+    return canned(tool, args);
+  };
+  const { runtime, workspace, cleanup } = await makeRuntime(executor);
+  try {
+    // Default name comes from the server-provided fileName.
+    const r1 = await runtime.call(
+      "await page.download('https://cdn.example.com/movie.mp4')",
+    );
+    assert.ok(!r1.error, `default-name download failed: ${r1.error}`);
+    assert.match(r1.text, /movie\.mp4/);
+    assert.ok(Buffer.compare(await readFile(path.join(workspace, "movie.mp4")), payload) === 0, "default-name file contents");
+    assert.equal(downloadArgs.length, 1);
+    assert.equal(downloadArgs[0].url, "https://cdn.example.com/movie.mp4");
+
+    // An explicit relative path is honored (parent dirs created).
+    const r2 = await runtime.call(
+      "await page.download('https://cdn.example.com/movie.mp4', 'media/clip.mp4')",
+    );
+    assert.ok(!r2.error, `explicit-path download failed: ${r2.error}`);
+    assert.match(r2.text, /media\/clip\.mp4/);
+    assert.ok(Buffer.compare(await readFile(path.join(workspace, "media/clip.mp4")), payload) === 0, "explicit-path file contents");
+
+    // maxBytes is forwarded to the browser tool.
+    const r3 = await runtime.call(
+      "await page.download('https://cdn.example.com/movie.mp4', 'big.mp4', { maxBytes: 20971520 })",
+    );
+    assert.ok(!r3.error, `maxBytes download failed: ${r3.error}`);
+    assert.equal(downloadArgs.at(-1)?.maxBytes, 20971520);
+
+    // A path escaping the workspace is rejected (fs sandbox).
+    const r4 = await runtime.call(
+      "await page.download('https://cdn.example.com/movie.mp4', '../escape.mp4')",
+    );
+    assert.match(r4.error ?? "", /escapes the workspace/);
+
+    // Non-http(s) URLs are rejected before any tool call.
+    const r5 = await runtime.call("await page.download('javascript:alert(1)')");
+    assert.match(r5.error ?? "", /absolute http\(s\) URL/);
+    assert.equal(downloadArgs.length, 3);
+  } finally {
+    await cleanup();
+  }
+});

@@ -88,7 +88,11 @@ Beyond the individual `browser_*` tools, the agent can call a persistent
 cell runs in a long-lived V8 realm (state persists across cells) with a
 `page` object (`goto`, `snapshot`, `evaluate`, `waitFor`, `click`, `clickAt`,
 `type`, `typeFocused`, `focus`, `scroll`, `screenshot`) and a `tabs` object
-(`list`, `open`, `get`). Typical cell:
+(`list`, `open`, `get`). Cells can also read and write files through `fs`
+(`read`, `write`, `append`, `list`, `stat`, `exists`, `mkdir`, `rename`,
+`unlink`, `rm`) — confined to the session's task workspace, the same
+directory `checkpoint()`/`artifact()` write into; paths outside it are
+rejected. Typical cell:
 
 ```js
 const s = await page.snapshot();

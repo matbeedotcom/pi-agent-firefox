@@ -14,7 +14,7 @@
  * transcript and renders ACP session/update streams pushed over the Port.
  */
 import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
-import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, isVisualTool, resultParts, type ToolImage, type ActivityCardData } from "@pi-browser/webext";
+import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData } from "@pi-browser/webext";
 import type { SessionUpdate, ToolCallUpdate } from "@pi-browser/protocol";
 
 interface StatusInfo {
@@ -573,29 +573,14 @@ function toolStatusClass(status: string): string {
 function buildBlockDom(block: Block, conv: HTMLElement): BlockDom {
   const wrap = document.createElement("div");
   let dom: BlockDom;
-  if (block.kind === "tool" && isVisualTool(block.title)) {
+  if (block.kind === "tool") {
     const card = createActivityCard(block);
     dom = { wrap: card.wrap, updateActivity: card.update };
     conv.append(card.wrap);
     blockDoms.set(block.id, dom);
     return dom;
   }
-  if (block.kind === "tool") {
-    wrap.className = "msg tool";
-    const head = document.createElement("div");
-    head.className = "tool-head";
-    const name = document.createElement("span");
-    name.textContent = block.title;
-    const status = document.createElement("span");
-    status.className = `tool-status ${toolStatusClass(block.status)}`;
-    status.textContent = block.status;
-    head.append(name, status);
-    const body = document.createElement("div");
-    body.classList.add("muted");
-    if (block.text) renderMarkdownInto(body, block.text);
-    wrap.append(head, body);
-    dom = { wrap, name, status, body, toolText: block.text, toolStatus: block.status, toolTitle: block.title };
-  } else {
+  else {
     wrap.className = `msg ${block.kind}`;
     let content: HTMLElement = wrap;
     if (block.kind === "thought") {
