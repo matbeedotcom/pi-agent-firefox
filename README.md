@@ -19,6 +19,9 @@ The product specification lives in **[PRODUCT.md](PRODUCT.md)** (single source o
 architecture and security invariants). Live verification evidence for the §52 Definition of Done:
 **[docs/VERIFICATION.md](docs/VERIFICATION.md)**.
 
+For focused tests, live probes, host logs, and Thunderbird debugger attachment,
+see **[Debugging ACP/MCP tools](docs/DEBUGGING-TOOLS.md)**.
+
 ## Layout
 
 ```

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createLogger } from "../src/logger.js";
 import { createMemoryTransportPair, type Dispatcher } from "../src/native-host/transport.js";
 import { CapabilityToolProvider, LegacyBrowserCallbackTransport, NativeMcpOverAcpTransport } from "../src/browser/provider.js";
+import { CapabilityRegistry } from "../src/capability-registry.js";
 import {
   BROWSER_TOOLS,
   REPL_TOOLS,
@@ -141,17 +142,17 @@ test("legacy transport: mail tool call round-trip over x-pi-browser/tool", async
 function setupFakeThunderbird(answerOptionId: string = PERMISSION_REJECT) {
   const { a, b } = createMemoryTransportPair(quiet, quiet);
   const provider = new CapabilityToolProvider(b.transport, quiet);
-  const permRequests: Array<{ sessionId: string; tool: string }> = [];
+  const permRequests: Array<{ sessionId: string; tool: string; title: string }> = [];
   const toolCalls: Array<{ tool: string }> = [];
   a.transport.onRequest = (method, params, id) => {
     if (method === CLIENT_METHODS.session_request_permission) {
       const p = params as {
         sessionId: string;
-        toolCall: { toolCallId: string };
+        toolCall: { toolCallId: string; title: string };
         _meta?: { piBrowser?: { tool?: string } };
       };
       const tool = p._meta?.piBrowser?.tool ?? "?";
-      permRequests.push({ sessionId: p.sessionId, tool });
+      permRequests.push({ sessionId: p.sessionId, tool, title: p.toolCall.title });
       if (answerOptionId === "cancelled") {
         a.transport.respond(id, { outcome: { outcome: "cancelled" } });
       } else {
@@ -187,6 +188,38 @@ test("approval gate: thunderbird mail tool is denied until the user approves", a
   assert.equal(tb.permRequests[0].sessionId, "s-tb");
   // ...and the dispatcher was never reached.
   assert.equal(tb.toolCalls.length, 0);
+});
+
+test("approval gate: parallel tool calls coalesce into ONE permission prompt", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_ALLOW_SESSION);
+  const tools = tb.provider.createTools({ id: "s-tb" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const get = tools.find((t) => t.name === "mail_get_message");
+  assert.ok(get);
+  // Same-turn parallel calls (the model reads two message bodies at once).
+  const [r1, r2] = await Promise.all([
+    get.execute("tc-1", { messageId: 42 }, undefined),
+    get.execute("tc-2", { messageId: 43 }, undefined),
+  ]);
+  assert.ok(r1 && r2, "both calls executed after the single approval");
+  assert.equal(tb.permRequests.length, 1, "parallel calls share one permission prompt");
+  assert.equal(tb.permRequests[0].title, "2 parallel calls: mail_get_message ×2", "the card names both calls");
+  assert.equal(tb.toolCalls.length, 2);
+  // The session-scope answer covered the tool for BOTH calls.
+  const again = await get.execute("tc-3", { messageId: 44 }, undefined);
+  assert.ok(again);
+  assert.equal(tb.permRequests.length, 1, "no second prompt within the session");
+});
+
+test("approval gate: sequential calls outside the coalesce window get separate prompts", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_ALLOW_ONCE);
+  const tools = tb.provider.createTools({ id: "s-tb" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const get = tools.find((t) => t.name === "mail_get_message");
+  assert.ok(get);
+  await get.execute("tc-a", { messageId: 1 }, undefined);
+  await new Promise((r) => setTimeout(r, 250)); // let the coalesce window elapse
+  await get.execute("tc-b", { messageId: 2 }, undefined);
+  assert.equal(tb.permRequests.length, 2, "allow_once does not persist, and the window elapsed");
+  assert.equal(tb.toolCalls.length, 2);
 });
 
 test("evaluation checks Firefox permission on every call, including after an earlier allow", async () => {
@@ -371,6 +404,124 @@ test("legacy transport: real timeout over a non-responding peer", async () => {
   const err = (await transport.call("s1", "browser_get_page", {}).catch((e) => e)) as PiBrowserProtocolError;
   assert.ok(err instanceof PiBrowserProtocolError);
   assert.equal(err.code, PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT);
+});
+
+// ---------------------------------------------------------------------------
+// Incremental tool progress (x-pi-browser/tool_update, protocol v3)
+// ---------------------------------------------------------------------------
+
+test("tool_update: batches forwarded in order; malformed/mismatched updates dropped", async () => {
+  const { a, b } = createMemoryTransportPair(quiet, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet);
+  // The ACP agent wires host-transport notifications to the provider in
+  // production; replicate that seam here.
+  b.transport.onNotification = (method, params) => {
+    if (method === X_PI_BROWSER.tool_update) {
+      provider.handleToolUpdate(params as never, undefined);
+    }
+  };
+  const seen: Array<{ toolCallId: string; kind: string; scanned?: number }> = [];
+  provider.onToolUpdate = (_sessionId, toolCallId, update) =>
+    seen.push({ toolCallId, kind: update.kind, ...(update.kind === "progress" ? { scanned: update.scanned } : {}) });
+
+  a.transport.onRequest = (method, params, id) => {
+    if (method === X_PI_BROWSER.tool) {
+      const p = params as { sessionId: string; tool: string; toolCallId: string };
+      assert.equal(p.tool, "mail_search");
+      assert.equal(p.toolCallId, "tc-mail"); // the host passes the active tool-call id
+      const send = (update: unknown, sequence: number) =>
+        a.transport.notify(X_PI_BROWSER.tool_update, {
+          sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence, update,
+        });
+      send({ kind: "batch", result: { messages: [{ messageId: 1, subject: "A" }], nextCursor: "sc-a", complete: false, sortComplete: false, scanned: 10 } }, 1);
+      send({ kind: "batch", result: { messages: [{ messageId: 2, subject: "B" }], nextCursor: null, complete: true, sortComplete: true, scanned: 20 } }, 2);
+      send({ kind: "progress", scanned: 21 }, 2); // duplicate sequence -> dropped
+      send({ kind: "progress", scanned: 30 }, 1); // regressed sequence -> dropped
+      send({ kind: "complete" }, 3);              // accepted
+      // Mismatched session -> dropped.
+      a.transport.notify(X_PI_BROWSER.tool_update, { sessionId: "other-session", toolCallId: p.toolCallId, tool: "mail_search", sequence: 4, update: { kind: "progress", scanned: 1 } });
+      // Non-streaming tool -> dropped.
+      a.transport.notify(X_PI_BROWSER.tool_update, { sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_get_message", sequence: 5, update: { kind: "progress", scanned: 1 } });
+      // Unknown toolCall -> dropped.
+      a.transport.notify(X_PI_BROWSER.tool_update, { sessionId: p.sessionId, toolCallId: "tc-unknown", tool: "mail_search", sequence: 1, update: { kind: "progress", scanned: 1 } });
+      a.transport.respond(id, { content: [{ type: "text", text: JSON.stringify({ messages: [{ messageId: 1 }, { messageId: 2 }], nextCursor: null, complete: true, sortComplete: true, scanned: 20 }) }] });
+      return;
+    }
+    a.transport.respondError(id, { code: -32601, message: `fake: unknown ${method}` });
+  };
+
+  const tools = provider.createTools({ id: "s-mail" }, "legacy", undefined, ["mail"]);
+  const search = tools.find((t) => t.name === "mail_search");
+  assert.ok(search);
+  const result = await search.execute("tc-mail", { text: "addon" }, undefined);
+  // The final completion still arrives for clients that ignore updates.
+  assert.equal(result.content.length, 1);
+  assert.match((result.content[0] as { text: string }).text, /"complete":true/);
+  assert.deepEqual(seen, [
+    { toolCallId: "tc-mail", kind: "batch" },
+    { toolCallId: "tc-mail", kind: "batch" },
+    { toolCallId: "tc-mail", kind: "complete" },
+  ]);
+});
+
+test("tool_update: broker mode drops updates from a client that is not executing the call", async () => {
+  // One pair: the provider (host) sends requests via the client's registered
+  // transport (b), which arrive at the fake Thunderbird handler (a). The peer
+  // Firefox client is registered too but never executes the call.
+  const { a, b } = createMemoryTransportPair(quiet, quiet);
+  const { a: ffA } = createMemoryTransportPair(quiet, quiet); // Firefox (peer)
+  const registry = new CapabilityRegistry(quiet);
+  registry.register({ clientId: "tb-1", application: "thunderbird", capabilities: ["mail"], transport: b.transport });
+  registry.register({ clientId: "ff-1", application: "firefox", capabilities: ["browser"], transport: ffA.transport });
+  const provider = new CapabilityToolProvider(b.transport, quiet, registry);
+  const seen: string[] = [];
+  provider.onToolUpdate = (_s, _id, update) => seen.push(update.kind);
+  a.transport.onRequest = (method, params, id) => {
+    if (method === CLIENT_METHODS.session_request_permission) {
+      a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
+      return;
+    }
+    if (method === X_PI_BROWSER.tool) {
+      const p = params as { sessionId: string; tool: string; toolCallId: string };
+      // From the executing client (tb-1): accepted.
+      provider.handleToolUpdate({ sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence: 1, update: { kind: "progress", scanned: 5 } }, "tb-1");
+      // From the peer client (ff-1): dropped — it is not executing this call.
+      provider.handleToolUpdate({ sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence: 2, update: { kind: "progress", scanned: 9 } }, "ff-1");
+      a.transport.respond(id, { content: [{ type: "text", text: "{}" }] });
+      return;
+    }
+    a.transport.respondError(id, { code: -32601, message: `fake: unknown ${method}` });
+  };
+  const search = provider.createTools({ id: "s-br" }, "legacy", undefined, ["mail"], "tb-1", "thunderbird").find((t) => t.name === "mail_search");
+  await search!.execute("tc-cl", { text: "x" }, undefined);
+  assert.deepEqual(seen, ["progress"]);
+});
+
+test("legacy transport: timed-out mail_search returns a resumable partial", async () => {
+  const { a, b } = createMemoryTransportPair(quiet, quiet);
+  // Short deadline so the test doesn't wait the 120s mail timeout.
+  const provider = new CapabilityToolProvider(b.transport, quiet, undefined, { timeoutMsFor: () => 40 });
+  b.transport.onNotification = (method, params) => {
+    if (method === X_PI_BROWSER.tool_update) provider.handleToolUpdate(params as never, undefined);
+  };
+  a.transport.onRequest = (method, params) => {
+    if (method === X_PI_BROWSER.tool) {
+      const p = params as { sessionId: string; tool: string; toolCallId: string };
+      // Stream one batch, then go silent: the request never answers.
+      setTimeout(() => {
+        a.transport.notify(X_PI_BROWSER.tool_update, {
+          sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence: 1,
+          update: { kind: "batch", result: { messages: [{ messageId: 1, subject: "A" }], nextCursor: "sc-abc", complete: false, sortComplete: false, scanned: 1200 } },
+        });
+      }, 10);
+      return; // no respond: genuine timeout
+    }
+  };
+  const search = provider.createTools({ id: "s-mail3" }, "legacy", undefined, ["mail"]).find((t) => t.name === "mail_search");
+  const err = (await search!.execute("tc-to", { text: "x" }, undefined).catch((e) => e)) as PiBrowserProtocolError;
+  assert.ok(err instanceof PiBrowserProtocolError);
+  assert.equal(err.code, PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT);
+  assert.deepEqual(err.data, { tool: "mail_search", partial: true, scanned: 1200, nextCursor: "sc-abc" });
 });
 
 // ---------------------------------------------------------------------------

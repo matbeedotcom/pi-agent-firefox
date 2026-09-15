@@ -64,7 +64,7 @@ const SCHEMAS: Record<string, TSchema> = {
 
   mail_search: Type.Object(
     {
-      text: Type.Optional(Type.String({ description: "Full-text search across the message." })),
+      text: Type.Optional(Type.String({ description: "Case-insensitive text search in subject, body, sender, and recipient addresses (To/Cc/Bcc). Runs on the Gloda full-text index (the search bar's engine): words are AND-combined and quoted spans match as phrases, so word forms matter — 'addon' does not match 'Add-ons'." })),
       from: Type.Optional(Type.String({ description: "Match the author/sender." })),
       to: Type.Optional(Type.String({ description: "Match the recipients." })),
       subject: Type.Optional(Type.String({ description: "Match the subject line." })),
@@ -75,7 +75,7 @@ const SCHEMAS: Record<string, TSchema> = {
       scope: Type.Optional(
         Type.Union([Type.Literal("inbox"), Type.Literal("all")], {
           description:
-            "Search scope when no folderId is given: 'inbox' (default) or 'all' (all folders).",
+            "Search scope when no folderId is given: 'inbox' or 'all'. Defaults to all folders for filtered searches, Inbox(es) for bare listings.",
         }),
       ),
       after: Type.Optional(isoDate("sent after")),
@@ -108,11 +108,37 @@ const SCHEMAS: Record<string, TSchema> = {
       cursor: Type.Optional(
         Type.String({
           description:
-            "Short opaque pagination token from a previous search result's nextCursor; pass it back unchanged to continue. It expires if the extension is reloaded — re-run mail_search for a fresh first page.",
+            "Short opaque pagination token from a previous search result's nextCursor; pass it back unchanged to continue the same search — including an unfinished one, where it resumes the in-flight scan. It expires after a while of disuse, if the mailbox changes, or if the extension is reloaded — re-run mail_search for a fresh first page.",
         }),
       ),
     },
     { additionalProperties: false },
+  ),
+
+  mail_debug_query: Type.Object(
+    {
+      query: Type.Object(
+        {},
+        {
+          description:
+            "Raw WDAPI messages.query() parameters: fullText, body, subject, author, recipients, folderId, accountId, fromDate, toDate, flagged, read, new, junk, attachment, size, tags, messagesPerPage, autoPaginationTimeout, returnMessageListId, includeSubFolders.",
+        },
+      ),
+      poll: Type.Optional(
+        Type.Object(
+          {
+            intervalMs: Type.Optional(Type.Number({ description: "Poll interval in ms (default 2000, max 10000)." })),
+            maxMs: Type.Optional(Type.Number({ description: "Stop polling after this many ms (default 60000, hard cap 110000)." })),
+          },
+          {
+            additionalProperties: false,
+            description:
+              "When the query returns a messageListId (returnMessageListId: true), poll continueList on an interval. { intervalMs (default 2000, max 10000), maxMs (default 60000, hard cap 110000) }.",
+          },
+        ),
+      ),
+    },
+    { additionalProperties: false, required: ["query"] },
   ),
 
   mail_list_attachments: Type.Object(

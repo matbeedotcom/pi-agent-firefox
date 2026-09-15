@@ -15,6 +15,7 @@ import {
   REPL_TOOLS,
   CLIENT_METHODS,
   JSONRPC_ERROR,
+  PERMISSION_ALLOW_ONCE,
   codeFromErrorObject,
   PROTOCOL_VERSION,
   X_PI_BROWSER,
@@ -96,8 +97,8 @@ test("initialize: capabilities + piBrowser metadata", async () => {
   assert.ok(caps.sessionCapabilities.resume);
   assert.ok(caps.sessionCapabilities.close);
   assert.equal(caps.mcpCapabilities.acp, true);
-  assert.equal(res._meta.piBrowser.protocolVersion, 2);
-  assert.equal(res._meta.piBrowser.browserToolVersion, 7);
+  assert.equal(res._meta.piBrowser.protocolVersion, 3);
+  assert.equal(res._meta.piBrowser.browserToolVersion, 8);
   assert.equal(res.agentInfo.name, "test-agent");
 });
 
@@ -120,9 +121,9 @@ test("initialize: pi.agent.hello (thunderbird, mail + compose) -> no browser too
   assert.equal(res._meta.piAgent.application, "thunderbird");
   assert.deepEqual(res._meta.piAgent.capabilities, ["mail", "compose", "attachments"]);
   // A mail+compose client receives the read-only mail tools AND the draft-first
-  // compose tools (11 + 6, incl. compose_add_attachment + mail_list_tags), and no browser tools.
+  // compose tools (12 + 6, incl. compose_add_attachment + mail_list_tags), and no browser tools.
   const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/m", mcpServers: [] })) as { sessionId: string };
-  assert.equal(h.lastCreateTools.length, 17);
+  assert.equal(h.lastCreateTools.length, 18);
   assert.ok(
     h.lastCreateTools.every((t) => /^(mail_|compose_)/.test((t as { name: string }).name)),
     "mail+compose client gets only mail/compose tools",
@@ -147,8 +148,8 @@ test("initialize: thunderbird mailModify + contacts capabilities register mutati
   });
   const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/mc", mcpServers: [] })) as { sessionId: string };
   const names = h.lastCreateTools.map((t) => (t as { name: string }).name);
-  // 11 mail + 6 compose + 4 mutation + 3 contacts = 24
-  assert.equal(names.length, 24);
+  // 12 mail + 6 compose + 4 mutation + 3 contacts = 25
+  assert.equal(names.length, 25);
   assert.ok(names.includes("mail_archive"), "mutation tool registered");
   assert.ok(names.includes("mail_set_tags"), "tag tool registered");
   assert.ok(names.includes("contacts_search"), "contacts search tool registered");
@@ -464,6 +465,92 @@ test("tool events map to tool_call / tool_call_update updates", async () => {
   ]);
 });
 
+test("mail_search: streamed batches become tool_call_update notifications; final result closes the call", async () => {
+  const h = setup();
+  await h.request(AGENT_METHODS.initialize, {
+    protocolVersion: PROTOCOL_VERSION,
+    _meta: buildAgentHelloMeta({
+      client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
+      capabilities: ["mail"],
+    }),
+  });
+  const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/p/mail", mcpServers: [] })) as { sessionId: string };
+  const sess = h.backend.sessions.get(s.sessionId) as MockSession;
+
+  // Fake Thunderbird: approve the gated call, then stream batches before the
+  // final response — exactly what the incremental dispatcher does.
+  h.a.transport.onRequest = (method, params, id) => {
+    if (method === CLIENT_METHODS.session_request_permission) {
+      h.a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
+      return;
+    }
+    if (method === X_PI_BROWSER.tool) {
+      const p = params as { sessionId: string; tool: string; toolCallId: string };
+      assert.equal(p.tool, "mail_search");
+      h.a.transport.notify(X_PI_BROWSER.tool_update, {
+        sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence: 1,
+        update: { kind: "batch", result: { messages: [{ messageId: 1, subject: "Mozilla Add-ons: Pi Coding Agent Browser" }], nextCursor: "sc-1", complete: false, sortComplete: false, scanned: 25 } },
+      });
+      h.a.transport.notify(X_PI_BROWSER.tool_update, {
+        sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence: 2,
+        update: { kind: "progress", scanned: 900 },
+      });
+      h.a.transport.respond(id, { content: [{ type: "text", text: JSON.stringify({ messages: [{ messageId: 1 }, { messageId: 2 }], nextCursor: null, complete: true, sortComplete: true, scanned: 1842 }) }] });
+      return;
+    }
+    h.a.transport.respondError(id, { code: -32601, message: `fake tb: unknown ${method}` });
+  };
+
+  sess.nextTurn = { toolCalls: [{ toolName: "mail_search", args: { text: "addon" } }] };
+  const res = (await h.request(AGENT_METHODS.session_prompt, {
+    sessionId: s.sessionId,
+    prompt: [{ type: "text", text: "search mail" }],
+  })) as { stopReason: string };
+  assert.equal(res.stopReason, "end_turn");
+
+  const updates = h.updates
+    .filter((u) => u.sessionId === s.sessionId)
+    .map((u) => u.update as SessionUpdate);
+  const start = updates.find((u) => u.sessionUpdate === "tool_call") as Extract<SessionUpdate, { sessionUpdate: "tool_call" }>;
+  assert.ok(start, "tool_call emitted");
+  assert.equal(start.title, "mail_search");
+  assert.equal(start.toolCallId, sess.executedTools[0].toolCallId);
+
+  const toolCallId = start.toolCallId;
+  const toolUpdates = updates
+    .filter((u) => u.sessionUpdate === "tool_call_update")
+    .map((u) => u as Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>);
+  assert.ok(toolUpdates.length >= 3, `expected streamed + final updates, got ${toolUpdates.length}`);
+  assert.ok(toolUpdates.every((u) => u.toolCallId === toolCallId), "updates target the same tool call");
+
+  // Batch 1 arrives as JSON text before the scan completes.
+  const batchBlock = toolUpdates[0].content?.[0];
+  assert.ok(batchBlock && batchBlock.type === "content" && batchBlock.content.type === "text", "batch is text content");
+  const parsed1 = JSON.parse((batchBlock.content as { text: string }).text) as {
+    complete: boolean; scanned: number; nextCursor: string; sortComplete: boolean;
+  };
+  assert.equal(parsed1.complete, false);
+  assert.equal(parsed1.sortComplete, false);
+  assert.equal(parsed1.scanned, 25);
+  assert.equal(parsed1.nextCursor, "sc-1");
+
+  // The progress update renders a human-readable scanned count.
+  const progressBlock = toolUpdates[1].content?.[0];
+  assert.ok(progressBlock && progressBlock.type === "content" && progressBlock.content.type === "text");
+  assert.ok((progressBlock.content as { text: string }).text.includes("900"));
+
+  // The final tool response closes the tool call with the complete result —
+  // clients that ignore the intermediate updates still receive everything.
+  const final = toolUpdates[toolUpdates.length - 1];
+  assert.equal(final.status, "completed");
+  const raw = final.rawOutput as { content: Array<{ type: string; text?: string }> } | undefined;
+  const rawText = raw?.content.map((c) => c.text ?? "").join("");
+  assert.match(rawText ?? "", /"complete":true/);
+  assert.match(rawText ?? "", /"scanned":1842/);
+  assert.match(rawText ?? "", /"sortComplete":true/);
+  assert.ok(final.content?.some((c) => c.type === "content"), "final update carries result content");
+});
+
 test("unknown ACP method -> METHOD_NOT_FOUND", async () => {
   const h = setup();
   const err = (await h.request("session/frobnicate", {}).catch((e) => e)) as JsonRpcErrorObject;
@@ -474,7 +561,7 @@ test("x-pi-browser/ping responds with integration metadata", async () => {
   const h = setup();
   const res = (await h.request(X_PI_BROWSER.ping, {})) as { pong: boolean; meta: { protocolVersion: number } };
   assert.equal(res.pong, true);
-  assert.equal(res.meta.protocolVersion, 2);
+  assert.equal(res.meta.protocolVersion, 3);
 });
 
 test("session/new: neutral cwd (\"/\") provisions a per-task workspace", async () => {

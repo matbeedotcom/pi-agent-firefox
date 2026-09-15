@@ -1,0 +1,53 @@
+{
+  "piSearch": {
+    "scopes": ["addon_parent"],
+    "paths": [["piSearch"]],
+    "functions": [
+      {
+        "name": "searchMessages",
+        "type": "function",
+        "description": "Full-text search over the Gloda global message index — the same engine the Thunderbird search bar uses. Terms are AND-combined by default (FTS3); quoted phrases match contiguously.",
+        "parameters": [
+          {
+            "name": "text",
+            "type": "string",
+            "description": "Search text; split into terms on spaces, double-quoted spans are phrases."
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 },
+              "andTerms": { "type": "boolean", "default": true }
+            }
+          }
+        ],
+        "returns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "uri": { "type": "string" },
+              "folderUri": { "type": "string" },
+              "messageKey": { "type": "integer" },
+              "subject": { "type": "string" },
+              "date": { "type": "integer" }
+            }
+          }
+        }
+      },
+      {
+        "name": "status",
+        "type": "function",
+        "description": "Gloda indexer status (is the global index enabled?).",
+        "returns": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    ]
+  }
+}

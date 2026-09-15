@@ -492,7 +492,7 @@ mail_search({
   subject?: string,
   accountId?: string,
   folderId?: string,           // overrides scope
-  scope?: "inbox" | "all",     // default "inbox" (account Inbox(es))
+  scope?: "inbox" | "all",     // default "all" for filtered searches, "inbox" for bare listings
   after?: string,
   before?: string,
   hasAttachments?: boolean,

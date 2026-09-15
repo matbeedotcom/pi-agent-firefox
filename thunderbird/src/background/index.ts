@@ -34,7 +34,7 @@ import {
   type SessionUpdate,
 } from "@pi-browser/protocol";
 import { AcpClient, fetchPiTheme, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
-import { dispatchMailTool } from "./mail-dispatcher.js";
+import { dispatchMailTool, type MailToolContext } from "./mail-dispatcher.js";
 import { dispatchComposeTool } from "./compose-dispatcher.js";
 import { dispatchMutationTool } from "./mutation-dispatcher.js";
 import { dispatchContactsTool } from "./contacts-dispatcher.js";
@@ -181,7 +181,29 @@ const client = new AcpClient(
     // error (no browser or compose tools are served in T2).
     onToolCall: async (params) => {
       if (isMailTool(params.tool)) {
-        const result = await dispatchMailTool(params.tool, params.arguments);
+        // Long searches stream batches over x-pi-browser/tool_update while the
+        // original request stays pending. The sequence is per toolCallId and
+        // strictly increasing; the host validates and maps each update. The
+        // callback only reports results of the already-approved call — it
+        // never authorizes anything.
+        let updateSeq = 0;
+        const context: MailToolContext | undefined = params.toolCallId
+          ? {
+              sessionId: params.sessionId,
+              toolCallId: params.toolCallId,
+              onUpdate: (update) => {
+                updateSeq += 1;
+                client.update({
+                  sessionId: params.sessionId,
+                  toolCallId: params.toolCallId!,
+                  tool: "mail_search",
+                  sequence: updateSeq,
+                  update,
+                });
+              },
+            }
+          : undefined;
+        const result = await dispatchMailTool(params.tool, params.arguments, context);
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       }
       if (isComposeTool(params.tool)) {

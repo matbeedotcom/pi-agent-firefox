@@ -23,6 +23,7 @@ import {
   type AgentCapability,
   type BrowserNotifyParams,
   type BrowserToolCallParams,
+  type BrowserToolUpdateParams,
   type ConnectMcpRequest,
   type ConnectMcpResponse,
   type DisconnectMcpRequest,
@@ -48,6 +49,13 @@ export type HostStatus =
 export interface AcpClientHandlers {
   onSessionUpdate(params: SessionNotification): void;
   onToolCall(params: BrowserToolCallParams): Promise<unknown>;
+  /**
+   * Optional: incremental progress for a tool call that is still in flight
+   * (e.g. a long mail_search streaming batches). The host maps these onto
+   * ACP tool_call_update notifications; the final tool response is
+   * unchanged. Display-only — this never authorizes anything.
+   */
+  onToolCallUpdate?(params: BrowserToolUpdateParams): void;
   onMcpConnect(params: ConnectMcpRequest): Promise<ConnectMcpResponse>;
   onMcpMessage(params: MessageMcpRequest): Promise<MessageMcpResponse>;
   onMcpDisconnect(params: DisconnectMcpRequest): Promise<void>;
@@ -88,6 +96,8 @@ export class AcpClient {
   private port: browser.runtime.Port | undefined;
   private nextId = 0;
   private pending = new Map<number, Pending>();
+  /** In-flight tool calls: toolCallId → last accepted update sequence (client-side monotonicity guard). */
+  private toolCallUpdateSeq = new Map<string, number>();
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
   private connecting = false;
@@ -234,7 +244,13 @@ export class AcpClient {
     try {
       let result: unknown;
       if (method === X_PI_BROWSER.tool) {
-        result = await this.handlers.onToolCall(params as BrowserToolCallParams);
+        const callParams = params as BrowserToolCallParams;
+        if (callParams.toolCallId) this.toolCallUpdateSeq.set(callParams.toolCallId, 0);
+        try {
+          result = await this.handlers.onToolCall(callParams);
+        } finally {
+          if (callParams.toolCallId) this.toolCallUpdateSeq.delete(callParams.toolCallId);
+        }
       } else if (method === CLIENT_METHODS.mcp_connect) {
         result = await this.handlers.onMcpConnect(params as ConnectMcpRequest);
       } else if (method === CLIENT_METHODS.mcp_message) {
@@ -260,6 +276,26 @@ export class AcpClient {
           : toErrorObject(PI_BROWSER_ERROR.INTERNAL, err instanceof Error ? err.message : String(err));
       this.send({ jsonrpc: "2.0", id, error: errorObject });
     }
+  }
+
+  /**
+   * Report incremental progress for an in-flight tool call (x-pi-browser/
+   * tool_update). Fire-and-forget: an update never blocks, fails, or
+   * extends the tool call — the host independently validates the session,
+   * the active toolCallId, and the monotonic sequence. Out-of-order or
+   * stale updates (call finished/unknown) are dropped locally too.
+   */
+  update(params: BrowserToolUpdateParams): void {
+    if (!this.port) return;
+    if (params.toolCallId) {
+      const last = this.toolCallUpdateSeq.get(params.toolCallId);
+      if (last === undefined) return; // call no longer in flight (or none with a toolCallId)
+      if (params.sequence !== undefined) {
+        if (params.sequence <= last) return; // duplicate/out-of-order — drop
+        this.toolCallUpdateSeq.set(params.toolCallId, params.sequence);
+      }
+    }
+    this.send({ jsonrpc: "2.0", method: X_PI_BROWSER.tool_update, params });
   }
 
   request<T = unknown>(method: string, params?: unknown, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<T> {

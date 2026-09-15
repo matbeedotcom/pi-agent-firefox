@@ -85,7 +85,7 @@ test("browser tool registry: names are unique and well-formed", () => {
   assert.equal(isMutatingBrowserTool("browser_navigate"), true);
 });
 
-test("mail tool registry: 11 read-only tools, unique names, disjoint from browser tools", () => {
+test("mail tool registry: 12 read-only tools, unique names, disjoint from browser tools", () => {
   const names = MAIL_TOOLS.map((t) => t.name);
   assert.equal(new Set(names).size, names.length);
   for (const name of names) {
@@ -102,6 +102,7 @@ test("mail tool registry: 11 read-only tools, unique names, disjoint from browse
       "mail_search",
       "mail_list_attachments",
       "mail_get_attachment",
+      "mail_debug_query",
       "mail_list_accounts",
       "mail_list_folders",
       "mail_list_tags",
@@ -228,9 +229,35 @@ test("error codes map to unique reserved JSON-RPC codes", () => {
 test("integration metadata is stable and complete", () => {
   assert.equal(PI_BROWSER.nativeHost, "dev.pi.browser");
   assert.equal(PI_BROWSER.extensionId, "pi-agent-firefox@matbee.com");
-  assert.equal(PI_BROWSER_META.protocolVersion, 2);
-  assert.equal(PI_BROWSER_META.browserToolVersion, 7);
+  assert.equal(PI_BROWSER_META.protocolVersion, 3);
+  assert.equal(PI_BROWSER_META.browserToolVersion, 8);
   assert.equal(X_PI_BROWSER.tool, "x-pi-browser/tool");
+  // v3: the incremental progress channel for long-running tool calls.
+  assert.equal(X_PI_BROWSER.tool_update, "x-pi-browser/tool_update");
+});
+
+test("mail_search result contract: incremental fields are optional", () => {
+  const tool = getMailTool("mail_search");
+  assert.ok(tool);
+  // The result fields are documented; the tool surface is unchanged.
+  assert.equal(tool.readOnly, true);
+  // A minimal result (pre-incremental callers) stays valid; the
+  // incremental fields are optional.
+  const minimal = { messages: [], nextCursor: null };
+  const full: import("../src/mail-tools.js").MailSearchResult = {
+    messages: [],
+    nextCursor: null,
+    complete: true,
+    sortComplete: true,
+    scanned: 1842,
+  };
+  for (const r of [minimal, full]) {
+    assert.ok(Array.isArray(r.messages));
+    assert.ok(r.nextCursor === null || typeof r.nextCursor === "string");
+  }
+  assert.equal(full.complete, true);
+  assert.equal(full.sortComplete, true);
+  assert.equal(full.scanned, 1842);
 });
 
 test("jsonrpc guards discriminate messages", () => {

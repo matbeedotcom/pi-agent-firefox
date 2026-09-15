@@ -40,6 +40,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
   type ToolKind,
+  type BrowserToolUpdateParams,
 } from "@pi-browser/protocol";
 import type { AcpTransport } from "../native-host/transport.js";
 import type { Logger } from "../logger.js";
@@ -143,6 +144,32 @@ export class AcpAgent {
     opts.transport.onNotification = (method, params) => {
       void this.handleNotification(method, params as never);
     };
+    // Incremental tool progress (mail_search batches) → ACP tool_call_update.
+    // The final tool response still completes the tool call, so clients that
+    // ignore updates keep working.
+    opts.provider.onToolUpdate = (sessionId, toolCallId, update) => {
+      this.emitToolUpdate(sessionId, toolCallId, update);
+    };
+  }
+
+  /** Map one validated tool update onto a session/update notification. */
+  private emitToolUpdate(sessionId: string, toolCallId: string, update: BrowserToolUpdateParams["update"]): void {
+    if (!this.sessions.has(sessionId)) return;
+    if (update.kind === "batch") {
+      this.sendSessionUpdate(sessionId, {
+        sessionUpdate: "tool_call_update",
+        toolCallId,
+        content: [{ type: "content", content: { type: "text", text: JSON.stringify(update.result) } }],
+      });
+    } else if (update.kind === "progress") {
+      this.sendSessionUpdate(sessionId, {
+        sessionUpdate: "tool_call_update",
+        toolCallId,
+        content: [{ type: "content", content: { type: "text", text: `mail_search: scanned ${update.scanned} messages so far…` } }],
+      });
+    }
+    // "complete" emits nothing: the final tool response is the authoritative
+    // close for ACP clients.
   }
 
   private transport(): AcpTransport {
@@ -207,6 +234,13 @@ export class AcpAgent {
   private async handleNotification(method: string, params: unknown): Promise<void> {
     if (method === X_PI_BROWSER.notify) {
       this.opts.provider.handleNotify(params as import("@pi-browser/protocol").BrowserNotifyParams);
+      return;
+    }
+    if (method === X_PI_BROWSER.tool_update) {
+      // This agent's transport IS the registered client connection (one
+      // agent per client), so source-client identity is structural here;
+      // the provider validates session, call identity, tool, and sequence.
+      this.opts.provider.handleToolUpdate(params as BrowserToolUpdateParams, this.opts.clientId);
       return;
     }
     // ACP notifications the agent does not use are ignored by design.

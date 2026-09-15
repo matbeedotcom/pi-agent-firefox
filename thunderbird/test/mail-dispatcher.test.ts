@@ -10,7 +10,7 @@ import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
-import { dispatchMailTool } from "../src/background/mail-dispatcher.js";
+import { dispatchMailTool, __tests } from "../src/background/mail-dispatcher.js";
 
 // ---------------------------------------------------------------------------
 // Fake mail store + browser stub
@@ -23,6 +23,8 @@ interface MsgHeader {
   author?: string;
   recipients?: string[];
   ccList?: string[];
+  bccList?: string[];
+  body?: string;
   date?: string | number;
   read?: boolean;
   flagged?: boolean;
@@ -59,9 +61,26 @@ interface Store {
   tags: Array<{ key: string; tag: string; color?: string }>;
   lastQuery?: Record<string, unknown>;
   search: MsgHeader[];
+  evaluateSearch?: boolean;
+  queryPages?: Record<string, { id: string | null; messages: MsgHeader[] }>;
   searchByFolder?: Record<string, MsgHeader[]>;
   searchCursor?: MsgHeader | MsgHeader[];
   searchCursorId?: string | null;
+  /** Fake state: the searchCursor page has already been served once. */
+  searchCursorServed?: boolean;
+  /** Fake state: how many times messages.query() was called. */
+  queryCalls?: number;
+  /** Delay and concurrency counters for continuation-page tests. */
+  continueDelayMs?: number;
+  activeContinues?: number;
+  maxActiveContinues?: number;
+  /** Gloda (piSearch experiment API) hits to return for text searches. */
+  glodaHits?: Array<Record<string, unknown>>;
+  /** Fake state: how many times piSearch.searchMessages() was called. */
+  glodaCalls?: number;
+  lastGlodaQuery?: { text: string; options?: Record<string, unknown> };
+  /** When true, the piSearch API is exposed (Gloda path). */
+  glodaEnabled?: boolean;
 }
 
 function freshStore(): Store {
@@ -102,6 +121,17 @@ function installStub(): void {
         return { id: null, messages: store.displayedMessages ?? [] };
       },
     },
+    piSearch: {
+      get searchMessages() {
+        if (store.glodaEnabled !== true) return undefined;
+        return async (text: string, options?: { limit?: number; andTerms?: boolean }) => {
+          store.glodaCalls = (store.glodaCalls ?? 0) + 1;
+          store.lastGlodaQuery = { text, options };
+          return (store.glodaHits ?? []).slice(0, options?.limit ?? 100);
+        };
+      },
+      status: () => ({ enabled: true }),
+    },
     messages: {
       async get(id: number) {
         const h = store.headers[id];
@@ -125,9 +155,19 @@ function installStub(): void {
       },
       async query(queryInfo?: Record<string, unknown>) {
         store.lastQuery = queryInfo;
+        store.queryCalls = (store.queryCalls ?? 0) + 1;
         const fid = queryInfo?.folderId as string | undefined;
-        const pool = fid && store.searchByFolder?.[fid] ? store.searchByFolder[fid] : store.search;
-        return { id: "list-1", messages: pool };
+        let pool = Array.isArray(fid)
+          ? fid.flatMap((id) => store.searchByFolder?.[id] ?? [])
+          : fid && store.searchByFolder?.[fid] ? store.searchByFolder[fid] : store.search;
+        if (store.evaluateSearch) {
+          const text = String(queryInfo?.fullText ?? "").toLowerCase();
+          pool = pool.filter((h) => !text || [h.subject, h.author, h.body]
+            .some((field) => field?.toLowerCase().includes(text)));
+        }
+        // The backend reports a continuation id only when more pages exist.
+        const hasMore = !!(store.searchCursor || store.queryPages);
+        return { id: hasMore ? "list-1" : null, messages: pool };
       },
       // Emulates messages.list(): a server-side SORTED folder view.
       async list(folderId: string, options?: Record<string, unknown>) {
@@ -150,7 +190,14 @@ function installStub(): void {
         return { id: "list-1", messages: pool as never[] };
       },
       async continueList(listId: string) {
+        store.activeContinues = (store.activeContinues ?? 0) + 1;
+        store.maxActiveContinues = Math.max(store.maxActiveContinues ?? 0, store.activeContinues);
+        if (store.continueDelayMs) await new Promise((resolve) => setTimeout(resolve, store.continueDelayMs));
+        store.activeContinues -= 1;
+        if (store.queryPages?.[listId]) return store.queryPages[listId];
         assert.equal(listId, "list-1");
+        if (store.searchCursorServed) return { id: null, messages: [] as never[] };
+        store.searchCursorServed = true;
         const cur = store.searchCursor;
         const msgs: MsgHeader[] = cur ? (Array.isArray(cur) ? cur : [cur]) : [];
         return { id: store.searchCursorId ?? null, messages: msgs as never[] };
@@ -183,6 +230,7 @@ before(() => installStub());
 after(() => delete (globalThis as { browser?: unknown }).browser);
 beforeEach(() => {
   store = freshStore();
+  __tests.clearCursors();
 });
 
 async function call(tool: string, args: Record<string, unknown> = {}): Promise<any> {
@@ -339,30 +387,82 @@ test("mail_search: returns a page + an opaque continuation cursor", async () => 
     { id: 11, subject: "old", date: "2024-01-01T00:00:00Z" },
     { id: 10, subject: "new", date: "2024-06-01T00:00:00Z" },
   ];
-  const res = await call("mail_search", { text: "match" });
-  // Each page is date-desc by default, even when the backend returns another order.
-  assert.deepEqual(res.messages.map((m: any) => m.messageId), [10, 11]);
+  store.searchCursor = { id: 12, subject: "older", date: "2023-06-01T00:00:00Z" };
+  const res = await call("mail_search", { text: "match", limit: 2 });
+  // The first page is a TRUE early page: backend order, no global sort promise.
+  assert.deepEqual(res.messages.map((m: any) => m.messageId), [11, 10]);
+  assert.equal(res.complete, false);
+  assert.equal(res.sortComplete, false);
+  assert.equal(res.scanned, 2);
   // The cursor is a short opaque registry token, not the raw list id and
   // not an embedded payload (no more multi-KB base64 blobs in the LLM context).
   assert.match(res.nextCursor, /^sc[0-9a-f]{16}$/);
   assert.notEqual(res.nextCursor, "list-1");
 
-  // Continuing with the returned cursor resumes the same underlying list…
-  store.searchCursor = { id: 12, subject: "older", date: "2023-06-01T00:00:00Z" };
+  // Continuing drains the remaining backend pages (and the header phase);
+  // once complete, the remaining matches are globally sorted.
   const cont = await call("mail_search", { cursor: res.nextCursor });
   assert.equal(cont.messages.length, 1);
   assert.equal(cont.messages[0].messageId, 12);
   assert.equal(cont.nextCursor, null); // fake reports end of list
+  assert.equal(cont.complete, true);
+  assert.equal(cont.sortComplete, true);
+});
+
+test("mail_search: a text query uses the Gloda index when available (complete, sorted, no WDAPI scan)", async () => {
+  store.glodaEnabled = true;
+  store.glodaHits = [
+    { uri: "imap://u@h/INBOX:42", folderUri: "imap://u@h/INBOX", messageKey: 42, subject: "Pi Coding Agent Browser", date: 1700000000000000 },
+    { uri: "imap://u@h/Archive:7", folderUri: "imap://u@h/Archive", messageKey: 7, subject: "pi and browser again" },
+    // Duplicate key — must be deduped.
+    { uri: "imap://u@h/INBOX:42", folderUri: "imap://u@h/INBOX", messageKey: 42, subject: "Pi Coding Agent Browser", date: 1700000000000000 },
+  ];
+  // The WDAPI path would have found these — it must NOT be used.
+  store.search = [{ id: 99, subject: "should not appear" }];
+
+  const res = await call("mail_search", { text: "pi browser", limit: 2 });
+  assert.equal(store.glodaCalls, 1);
+  assert.equal(store.lastGlodaQuery?.text, "pi browser");
+  assert.equal(store.lastQuery, undefined, "WDAPI messages.query must not be called");
+  assert.equal(res.complete, true);
+  assert.equal(res.sortComplete, true);
+  assert.equal(res.scanned, 2, "duplicate messageKey deduped");
+  assert.equal(res.messages.length, 2);
+  assert.match(String(res.note), /Gloda/);
+  const first = res.messages[0] as { messageId: number; subject?: string; date?: string; folderId?: string };
+  assert.ok([42, 7].includes(first.messageId));
+  const hit42 = (res.messages as Array<Record<string, unknown>>).find((m) => m.messageId === 42);
+  assert.equal(hit42?.subject, "Pi Coding Agent Browser");
+  assert.equal(hit42?.date, new Date(1700000000000).toISOString(), "PRTime µs → ISO ms");
+  assert.equal(hit42?.folderId, "imap://u@h/INBOX");
+
+  // The remainder pages through a carry cursor.
+  const cont = await call("mail_search", { cursor: res.nextCursor as string });
+  assert.equal(cont.messages.length, 1);
+  assert.equal(cont.complete, true);
+  assert.equal(cont.nextCursor, null);
+});
+
+test("mail_search: without piSearch the text query falls back to the WDAPI scan", async () => {
+  store.search = [{ id: 11, subject: "old" }];
+  store.searchCursor = { id: 12, subject: "older" };
+  const res = await call("mail_search", { text: "pi browser" });
+  assert.equal(store.glodaCalls ?? 0, 0);
+  assert.notEqual(store.lastQuery, undefined, "WDAPI messages.query is used");
+  assert.equal(res.complete, false, "the WDAPI path streams incrementally");
 });
 
 test("mail_search: sort settings are carried through the continuation cursor", async () => {
   store.search = [{ id: 10, subject: "banana" }];
-  const res = await call("mail_search", { sort: "subject", order: "asc" });
-
   store.searchCursor = [{ id: 12, subject: "cherry" }, { id: 13, subject: "avocado" }];
+  const res = await call("mail_search", { sort: "subject", order: "asc", limit: 1 });
+  assert.equal(res.complete, false); // early page — banana (id 10) is already sent
   const cont = await call("mail_search", { cursor: res.nextCursor });
-  // The continuation page is sorted with the SAME settings, not the defaults.
+  // The final page is sorted with the SAME settings (asc: avocado, cherry),
+  // not the defaults.
   assert.deepEqual(cont.messages.map((m: any) => m.messageId), [13, 12]);
+  assert.equal(cont.complete, true);
+  assert.equal(cont.sortComplete, true);
 });
 
 test("mail_search: sort=subject orders by subject, missing subjects sink to the bottom", async () => {
@@ -457,7 +557,7 @@ test("mail_search: unknown tag name -> PI_NOT_FOUND", async () => {
   );
 });
 
-test("mail_search: defaults to the account Inbox when no folderId is given", async () => {
+test("mail_search: explicit Inbox scope restricts a filtered search", async () => {
   store.accounts = [
     { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
   ];
@@ -465,7 +565,7 @@ test("mail_search: defaults to the account Inbox when no folderId is given", asy
     { id: "acct1-inbox", name: "Inbox", path: "/INBOX", accountId: "a1" },
   ];
   store.search = [{ id: 10 }];
-  await call("mail_search", { text: "x" });
+  await call("mail_search", { text: "x", scope: "inbox" });
   assert.equal(store.lastQuery?.folderId, "acct1-inbox");
 });
 
@@ -539,7 +639,7 @@ test("mail_search: unfiltered sort=from order=asc maps to list sortType=author a
   assert.deepEqual(res.messages.map((m: any) => m.messageId), [11, 10]);
 });
 
-test("mail_search: a filtered search still uses messages.query with per-page sort", async () => {
+test("mail_search: a filtered search uses messages.query and includes all folders", async () => {
   store.accounts = [
     { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "acct1-inbox" } },
   ];
@@ -552,8 +652,15 @@ test("mail_search: a filtered search still uses messages.query with per-page sor
   ];
   const res = await call("mail_search", { text: "x" });
   assert.equal(store.lastList, undefined);
-  assert.equal(store.lastQuery?.fullText, "x");
-  assert.deepEqual(res.messages.map((m: any) => m.messageId), [10, 11]);
+  assert.equal(store.lastQuery?.folderId, undefined);
+  // Single-page text scan: the first page is early (header phase pending),
+  // the continuation finishes the search and sorts the remainder.
+  assert.equal(res.complete, false);
+  const cont = await call("mail_search", { cursor: res.nextCursor });
+  assert.equal(cont.complete, true);
+  assert.equal(cont.sortComplete, true);
+  const seen = [...res.messages, ...cont.messages].map((m: any) => m.messageId).sort();
+  assert.deepEqual(seen, [10, 11]);
 });
 
 test("mail_search: list() continuation keeps the folder-view order via the cursor carry", async () => {
@@ -632,7 +739,7 @@ test("mail_search: falls back to messages.query when list() is unavailable", asy
   }
 });
 
-test("mail_search: multiple inboxes are merged date-desc and not paginated", async () => {
+test("mail_search: multiple inboxes are merged date-desc and paginated", async () => {
   store.accounts = [
     { id: "a1", name: "Work", type: "imap", identities: [], rootFolder: { id: "in1" } },
     { id: "a2", name: "Home", type: "pop3", identities: [], rootFolder: { id: "in2" } },
@@ -645,16 +752,17 @@ test("mail_search: multiple inboxes are merged date-desc and not paginated", asy
     in1: [{ id: 1, subject: "old work", date: "2024-01-01T00:00:00Z" }],
     in2: [{ id: 2, subject: "new home", date: "2024-06-01T00:00:00Z" }],
   };
-  const res = await call("mail_search", { text: "x" });
-  assert.deepEqual(res.messages.map((m: any) => m.messageId), [2, 1]);
-  assert.equal(res.nextCursor, null);
-  assert.match(res.note, /2 inboxes/);
+  const res = await call("mail_search", { scope: "inbox", limit: 1 });
+  assert.deepEqual(res.messages.map((m: any) => m.messageId), [2]);
+  const next = await call("mail_search", { cursor: res.nextCursor });
+  assert.deepEqual(next.messages.map((m: any) => m.messageId), [1]);
+  assert.equal(next.nextCursor, null);
 });
 
 test("mail_search: no real mail account falls back to all folders with a note", async () => {
   store.accounts = [{ id: "a1", name: "Local Folders", type: "none", identities: [] }];
   store.search = [{ id: 10 }];
-  const res = await call("mail_search", { text: "x" });
+  const res = await call("mail_search", { scope: "inbox", text: "x" });
   assert.equal(store.lastQuery?.folderId, undefined);
   assert.equal(res.messages.length, 1);
   assert.match(res.note, /searched all folders/);
@@ -731,4 +839,165 @@ test("mail_list_folders: normalizes folders", async () => {
   assert.equal(folders.length, 2);
   assert.equal(folders[0].name, "Inbox");
   assert.equal(folders[1].isRoot, true);
+});
+
+
+test("mail_search: addons matches subject/body/sender/To/Cc/Bcc outside Inbox without duplicates", async () => {
+  store.evaluateSearch = true;
+  store.accounts = [{ id: "a1", name: "Work", type: "imap", identities: [] }];
+  store.folders = [{ id: "inbox", name: "Inbox", path: "/INBOX", accountId: "a1" }];
+  store.searchByFolder = { inbox: [] };
+  store.search = [
+    { id: 1, subject: "ADDONS release" },
+    { id: 2, body: "install addons here" },
+    { id: 3, author: "team@addons.example" },
+    { id: 4, recipients: ["addons@example.org"] },
+    { id: 5, ccList: ["team@ADDONS.example"] },
+    { id: 6, bccList: ["addons@example.org"] },
+    { id: 7, subject: "unrelated" },
+  ];
+  const result = await call("mail_search", { text: "addons", sort: "date", order: "desc", limit: 25 });
+  // Phase 1 (fullText): subject/body/sender matches arrive on the first page.
+  assert.deepEqual(result.messages.map((m: any) => m.messageId).sort(), [1, 2, 3]);
+  assert.equal(result.complete, false);
+  assert.ok(result.nextCursor);
+  assert.equal(store.lastQuery?.folderId, undefined);
+  // Phase 2 (header-only scan): To/Cc/Bcc partial matches, deduped, and the
+  // header "unrelated" message is filtered out by the client-side needle.
+  const cont = await call("mail_search", { cursor: result.nextCursor });
+  assert.deepEqual(cont.messages.map((m: any) => m.messageId).sort(), [4, 5, 6]);
+  assert.equal(cont.complete, true);
+  assert.equal(cont.sortComplete, true);
+  assert.equal(cont.nextCursor, null);
+  const scoped = await call("mail_search", { text: "addons", scope: "inbox" });
+  assert.deepEqual(scoped.messages, []);
+});
+
+// ---------------------------------------------------------------------------
+// mail_search — incremental behavior (progress channel, expiration)
+// ---------------------------------------------------------------------------
+
+test("mail_search: first batch returns before the scan finishes; onUpdate streams batches", async () => {
+  store.search = [
+    { id: 10, subject: "new", date: "2024-06-01T00:00:00Z" },
+    { id: 11, subject: "older", date: "2024-01-01T00:00:00Z" },
+  ];
+  store.searchCursor = [{ id: 12, subject: "oldest", date: "2023-01-01T00:00:00Z" }];
+  const updates: unknown[] = [];
+  const push = (u: unknown) => updates.push(u);
+  const res = (await dispatchMailTool(
+    "mail_search",
+    { text: "x", limit: 2 },
+    { sessionId: "s1", toolCallId: "c1", onUpdate: push },
+  )) as any;
+  // The first batch arrived while the scan was still open (2 of 3 seen).
+  assert.equal(res.messages.length, 2);
+  assert.equal(res.complete, false);
+  assert.equal(res.sortComplete, false);
+  assert.equal(res.scanned, 2);
+  assert.ok(res.nextCursor);
+  const batches = updates.filter((u: any) => u.kind === "batch") as any[];
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0].result.messages.length, 2);
+
+  const cont = (await dispatchMailTool(
+    "mail_search",
+    { cursor: res.nextCursor },
+    { sessionId: "s1", toolCallId: "c1", onUpdate: push },
+  )) as any;
+  assert.equal(cont.messages.length, 1);
+  assert.equal(cont.complete, true);
+  assert.equal(cont.sortComplete, true);
+  assert.ok(updates.some((u: any) => u.kind === "complete"));
+});
+
+test("mail_search: partial results always carry a resumable nextCursor", async () => {
+  store.search = [{ id: 1, date: "2024-01-01T00:00:00Z" }];
+  store.searchCursor = [{ id: 2, date: "2024-02-01T00:00:00Z" }];
+  const res = (await call("mail_search", { text: "x", limit: 5 })) as any;
+  assert.equal(res.complete, false);
+  assert.match(res.nextCursor, /^sc[0-9a-f]{16}$/);
+  const cont = (await call("mail_search", { cursor: res.nextCursor })) as any;
+  assert.equal(cont.complete, true);
+  assert.equal(cont.nextCursor, null);
+  const seen = [...res.messages, ...cont.messages].map((m: any) => m.messageId).sort();
+  assert.deepEqual(seen, [1, 2]);
+});
+
+test("mail_search: abandoned cursors expire and are swept on the next issuance", async () => {
+  store.search = [{ id: 1 }];
+  store.searchCursor = [{ id: 2 }];
+  const res = (await call("mail_search", { text: "x" })) as any;
+  assert.ok(res.nextCursor);
+  __tests.touchCursor(res.nextCursor, Date.now() - 31 * 60 * 1000);
+  await assert.rejects(
+    call("mail_search", { cursor: res.nextCursor }),
+    (e: unknown) =>
+      e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.MAIL_CURSOR_EXPIRED,
+  );
+  const res2 = (await call("mail_search", { text: "x" })) as any;
+  assert.ok(res2.nextCursor);
+  // The stale entry was evicted when the new cursor was issued.
+  assert.equal(__tests.cursorCount(), 1);
+});
+
+test("mail_search: streams early pages through empty backend pages, sorts only the final page", async () => {
+  store.search = [{ id: 1, date: "2023-01-01" }];
+  store.queryPages = {
+    "list-1": { id: "list-2", messages: [] },
+    "list-2": { id: null, messages: [{ id: 2, date: "2025-01-01" }, { id: 3, date: "2024-01-01" }] },
+  };
+  const first = await call("mail_search", { scope: "all", limit: 1 });
+  // Early page: whatever the backend returned first — NOT globally sorted.
+  assert.deepEqual(first.messages.map((m: any) => m.messageId), [1]);
+  assert.equal(first.complete, false);
+  assert.equal(first.sortComplete, false);
+  assert.equal(first.scanned, 1);
+  const second = await call("mail_search", { cursor: first.nextCursor, limit: 1 });
+  // The scan is complete: the remaining matches are globally sorted (2025 first),
+  // and the page limit keeps the rest as a snapshot carry.
+  assert.deepEqual(second.messages.map((m: any) => m.messageId), [2]);
+  assert.equal(second.complete, true);
+  assert.equal(second.sortComplete, true);
+  assert.equal(second.scanned, 3);
+  assert.ok(second.nextCursor);
+  const third = await call("mail_search", { cursor: second.nextCursor, limit: 1 });
+  assert.deepEqual(third.messages.map((m: any) => m.messageId), [3]);
+  assert.equal(third.complete, true);
+  assert.equal(third.sortComplete, true);
+  assert.equal(third.nextCursor, null);
+});
+
+test("mail_search: parallel continuation scans are serialized and both cursors remain independent", async () => {
+  store.continueDelayMs = 25;
+  store.search = [{ id: 1, subject: "first" }];
+  store.searchCursor = [{ id: 2, subject: "first tail" }];
+  const first = (await call("mail_search", { text: "first", limit: 1 })) as any;
+  store.search = [{ id: 3, subject: "second" }];
+  store.searchCursor = [{ id: 4, subject: "second tail" }];
+  const second = (await call("mail_search", { text: "second", limit: 1 })) as any;
+  const [firstTail, secondTail] = await Promise.all([
+    call("mail_search", { cursor: first.nextCursor, limit: 1 }),
+    call("mail_search", { cursor: second.nextCursor, limit: 1 }),
+  ]) as any[];
+  assert.ok(firstTail.nextCursor || firstTail.complete);
+  assert.ok(secondTail.nextCursor || secondTail.complete);
+  assert.equal(store.maxActiveContinues, 1);
+});
+
+
+test("mail_search: accountId limits explicit Inbox scope to that account", async () => {
+  store.accounts = [
+    { id: "a1", name: "Work", type: "imap", identities: [] },
+    { id: "a2", name: "Home", type: "imap", identities: [] },
+  ];
+  store.folders = [
+    { id: "in1", name: "Inbox", path: "/INBOX", accountId: "a1" },
+    { id: "in2", name: "Inbox", path: "/INBOX", accountId: "a2" },
+  ];
+  store.searchByFolder = { in1: [{ id: 1 }], in2: [{ id: 2 }] };
+  const result = await call("mail_search", { accountId: "a2", scope: "inbox", text: "addons" });
+  assert.equal(store.lastQuery?.accountId, "a2");
+  assert.equal(store.lastQuery?.folderId, "in2");
+  assert.deepEqual(result.messages.map((m: any) => m.messageId), [2]);
 });

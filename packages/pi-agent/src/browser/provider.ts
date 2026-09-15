@@ -37,9 +37,11 @@ import {
   type AcpTransportLike,
   type AgentApplication,
   type BrowserNotifyParams,
+  type BrowserToolUpdateParams,
   type PermissionPromptedParams,
   type RequestPermissionResponse,
 } from "@pi-browser/protocol";
+import type { MailSearchResult } from "@pi-browser/protocol";
 import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS, type BrowserToolSchema } from "./schemas.js";
 import { MAIL_TOOL_SCHEMAS, type MailToolSchema } from "../mail/schemas.js";
 import { COMPOSE_TOOL_SCHEMAS, type ComposeToolSchema } from "../compose/schemas.js";
@@ -62,9 +64,12 @@ export interface NormalizedToolResult {
 
 export interface BrowserToolTransport {
   readonly kind: "legacy" | "mcp-acp";
-  call(sessionId: string, tool: string, args: Record<string, unknown>): Promise<NormalizedToolResult>;
+  call(sessionId: string, tool: string, args: Record<string, unknown>, toolCallId?: string): Promise<NormalizedToolResult>;
   dispose(): Promise<void>;
 }
+
+/** Incremental progress for an in-flight tool call (x-pi-browser/tool_update). */
+export type BrowserToolUpdate = BrowserToolUpdateParams["update"];
 
 // ---------------------------------------------------------------------------
 // Normalization
@@ -107,6 +112,12 @@ export interface LegacyTransportOptions {
   timeoutMs?: (tool: string) => number;
   /** Host-side backstop buffer over the timeout hint (default 5s). */
   slackMs?: number;
+  /**
+   * Last streamed progress for a timed-out call (mail_search batches). When
+   * present, the timeout error carries `partial` + the resumable cursor so
+   * the caller can continue instead of losing the work.
+   */
+  getPartial?: (toolCallId: string) => { scanned?: number; nextCursor?: string } | undefined;
 }
 
 export class LegacyBrowserCallbackTransport implements BrowserToolTransport {
@@ -117,17 +128,34 @@ export class LegacyBrowserCallbackTransport implements BrowserToolTransport {
     private readonly options: LegacyTransportOptions = {},
   ) {}
 
-  async call(sessionId: string, tool: string, args: Record<string, unknown>): Promise<NormalizedToolResult> {
+  async call(sessionId: string, tool: string, args: Record<string, unknown>, toolCallId?: string): Promise<NormalizedToolResult> {
     const timeoutMs = (this.options.timeoutMs ?? timeoutFor)(tool);
     const slackMs = this.options.slackMs ?? 5_000;
     try {
       const raw = await this.transport.request(
         X_PI_BROWSER.tool,
-        { sessionId, tool, arguments: args, timeoutMs },
+        { sessionId, tool, arguments: args, timeoutMs, ...(toolCallId ? { toolCallId } : {}) },
         timeoutMs + slackMs,
       );
       return normalizeToolResult(raw);
     } catch (err) {
+      // A timed-out incremental search still has a resumable cursor: surface
+      // the partial progress so the model can continue with `cursor`.
+      if (err instanceof TransportTimeoutError && toolCallId) {
+        const partial = this.options.getPartial?.(toolCallId);
+        if (partial && (partial.scanned !== undefined || partial.nextCursor)) {
+          throw new PiBrowserProtocolError(
+            PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT,
+            `browser tool timed out: ${tool}`,
+            {
+              tool,
+              partial: true,
+              ...(partial.scanned !== undefined ? { scanned: partial.scanned } : {}),
+              ...(partial.nextCursor ? { nextCursor: partial.nextCursor } : {}),
+            },
+          );
+        }
+      }
       throw translateTransportError(err, tool);
     }
   }
@@ -159,7 +187,7 @@ export class NativeMcpOverAcpTransport implements BrowserToolTransport {
     });
   }
 
-  async call(_sessionId: string, tool: string, args: Record<string, unknown>): Promise<NormalizedToolResult> {
+  async call(_sessionId: string, tool: string, args: Record<string, unknown>, _toolCallId?: string): Promise<NormalizedToolResult> {
     try {
       const raw = await this.client.call(tool, args);
       return normalizeToolResult(raw);
@@ -228,7 +256,55 @@ interface SessionBrowserState {
   mcp?: NativeMcpOverAcpTransport;
 }
 
-/** How long to wait for the user to answer a permission prompt. */
+/** In-flight tool call state for tool_update validation + timeout recovery. */
+interface ActiveToolCallState {
+  sessionId: string;
+  tool: string;
+  /** Client executing the call (undefined in single-client legacy mode). */
+  clientId: string | undefined;
+  /** Last accepted x-pi-browser/tool_update sequence (0 = none). */
+  lastSequence: number;
+  lastBatch: MailSearchResult | undefined;
+  lastScanned: number | undefined;
+  /** Dispatch time; tool_update log lines report age since dispatch. */
+  startedAt: number;
+}
+
+/**
+ * Window during which parallel permission requests for the same session are
+ * collected into one prompt. Models emit same-turn parallel tool calls within
+ * the same tick, so 150 ms comfortably groups them with no perceptible delay.
+ */
+const PERMISSION_COALESCE_WINDOW_MS = 150;
+
+/** One member of a coalesced permission group (one pending tool call). */
+interface PermissionGroupMember {
+  toolCallId: string;
+  toolName: string;
+  resolve: () => void;
+  reject: (err: PiBrowserProtocolError) => void;
+}
+
+/** A session's in-flight coalesced permission prompt. */
+interface PermissionGroup {
+  members: PermissionGroupMember[];
+  /** browser_evaluate has its own option set; it never mixes with the rest. */
+  hasEvaluate: boolean;
+  target: AcpTransportLike;
+  settled: boolean;
+  flushTimer?: ReturnType<typeof setTimeout>;
+}
+
+/** Compact, bounded JSON summary of tool args for permission log lines. */
+function summarizeArgs(args?: Record<string, unknown>): string | undefined {
+  if (!args) return undefined;
+  try {
+    const s = JSON.stringify(args);
+    return s.length > 300 ? `${s.slice(0, 300)}…` : s;
+  } catch {
+    return "[unserializable args]";
+  }
+}
 const PERMISSION_TIMEOUT_MS = 120_000;
 
 /**
@@ -251,6 +327,19 @@ export class CapabilityToolProvider {
    * session id. Cleared when the session is disposed.
    */
   private readonly sessionAllowed = new Map<string, Set<string>>();
+  /**
+   * In-flight legacy tool calls: toolCallId → routing/sequence state.
+   * Used to validate x-pi-browser/tool_update notifications (session, call
+   * identity, client, monotonic sequence) and to recover the last streamed
+   * batch when a call times out.
+   */
+  private readonly activeToolCalls = new Map<string, ActiveToolCallState>();
+  /**
+   * Set by the ACP agent: maps a validated tool update onto an ACP
+   * `tool_call_update` session/update notification. Display-only — the
+   * update never authorizes anything.
+   */
+  onToolUpdate: ((sessionId: string, toolCallId: string, update: BrowserToolUpdate) => void) | undefined;
   /** The host-side `javascript` REPL (BROWSER-USE-REPL-PLAN.md, option C). */
   private readonly repl = new ReplProvider({
     log: (line) => this.log.debug(line),
@@ -267,7 +356,12 @@ export class CapabilityToolProvider {
     private readonly transport: AcpTransportLike | undefined,
     private readonly log: Logger,
     private readonly registry: CapabilityRegistry | undefined = undefined,
-  ) {}
+    /** Test seam: override per-tool deadlines (default: protocol constants). */
+    options: { timeoutMsFor?: (tool: string) => number } = {},
+  ) {
+    this.timeoutForTool = options.timeoutMsFor ?? timeoutFor;
+  }
+  private readonly timeoutForTool: (tool: string) => number;
 
   /** The ACP transport a tool call / permission prompt goes to (legacy mode). */
   private legacyTransport(): AcpTransportLike {
@@ -418,7 +512,7 @@ export class CapabilityToolProvider {
     // of the client that EXECUTES the tool — the routed target in broker
     // mode, the owner otherwise.
     const executingApp = target ? target.application : ownerApplication;
-    if (toolRequiresApproval(executingApp, toolName)) {
+    if (toolRequiresApproval(executingApp, toolName) && !this.autoApproves(toolName)) {
       // Cross-app: the prompt shows in ANOTHER app than the one the user is
       // watching. Tell the session owner so its UI can point the user at the
       // mail/browser client (display-only; the executing client owns the
@@ -439,17 +533,80 @@ export class CapabilityToolProvider {
           toolName,
         });
       }
-      await this.requestPermission(sessionId, toolCallId, toolName, targetTransport);
+      await this.requestPermission(sessionId, toolCallId, toolName, targetTransport, args);
+    }
+    if (toolRequiresApproval(executingApp, toolName) && this.autoApproves(toolName)) {
+      this.log.info(`${toolName}: approval auto-granted via PI_BROWSER_AUTO_APPROVE (test seam)`);
     }
     const state = this.ensureState(sessionId, mode, mcpServerId, isOwnerPath ? targetTransport : undefined);
     // The session's own MCP-over-ACP connection is used only for the owner's
     // own tools; cross-app tools always go over the target client's legacy
     // x-pi-browser/tool callback.
     const useOwnerMcp = isOwnerPath && state.mode === "mcp-acp" && state.mcp !== undefined;
-    const transport = useOwnerMcp
+    const transport: BrowserToolTransport = useOwnerMcp
       ? (state.mcp as NativeMcpOverAcpTransport)
-      : new LegacyBrowserCallbackTransport(targetTransport);
-    const result = await transport.call(sessionId, toolName, args);
+      : new LegacyBrowserCallbackTransport(targetTransport, {
+          timeoutMs: this.timeoutForTool,
+          // Last streamed batch for the timed-out call (mail_search).
+          getPartial: (id) => this.partialFor(id),
+        });
+    // Track the call so tool_update notifications can be validated against
+    // (and cleaned up after) it.
+    this.activeToolCalls.set(toolCallId, {
+      sessionId,
+      tool: toolName,
+      clientId: target?.clientId ?? ownerClientId,
+      lastSequence: 0,
+      lastBatch: undefined,
+      lastScanned: undefined,
+      startedAt: Date.now(),
+    });
+    const t0 = Date.now();
+    try {
+      const result = await this.executeWithTracking(transport, sessionId, toolName, args, toolCallId);
+      this.log.info(
+        `${toolName}: tool round-trip ${Date.now() - t0}ms (client=${target?.clientId ?? "legacy"}, transport=${useOwnerMcp ? "mcp-acp" : "callback"}, isError=${result.isError ?? false})`,
+      );
+      return result;
+    } catch (err) {
+      this.log.info(`${toolName}: tool round-trip FAILED after ${Date.now() - t0}ms: ${String(err)}`);
+      throw err;
+    } finally {
+      this.activeToolCalls.delete(toolCallId);
+    }
+  }
+
+  /**
+   * Test-only approval seam: PI_BROWSER_AUTO_APPROVE (comma list of tool
+   * names or "*") grants the host-side approval gate WITHOUT prompting a
+   * user. Never read in production paths — the launcher must opt in.
+   * Used by .probe/live-mail-search.mjs, which has no UI to click.
+   */
+  private autoApproves(toolName: string): boolean {
+    const raw = process.env.PI_BROWSER_AUTO_APPROVE;
+    if (!raw) return false;
+    const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    return list.includes("*") || list.includes(toolName);
+  }
+
+  /** The last streamed progress for an in-flight call (timeout recovery). */
+  private partialFor(toolCallId: string): { scanned?: number; nextCursor?: string } | undefined {
+    const call = this.activeToolCalls.get(toolCallId);
+    if (!call) return undefined;
+    const scanned = call.lastBatch?.scanned ?? call.lastScanned;
+    const nextCursor = call.lastBatch?.nextCursor ?? undefined;
+    if (scanned === undefined && !nextCursor) return undefined;
+    return { ...(scanned !== undefined ? { scanned } : {}), ...(nextCursor ? { nextCursor } : {}) };
+  }
+
+  private async executeWithTracking(
+    transport: BrowserToolTransport,
+    sessionId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    toolCallId: string,
+  ): Promise<NormalizedToolResult> {
+    const result = await transport.call(sessionId, toolName, args, toolCallId);
     if (result.isError) {
       const text = result.content
         .filter((c) => c.type === "text")
@@ -463,10 +620,74 @@ export class CapabilityToolProvider {
   }
 
   /**
+   * Validate one x-pi-browser/tool_update notification (client → host) and
+   * forward it to the ACP mapping hook. Drops (never throws) when any check
+   * fails:
+   *   - the toolCallId is not an in-flight call;
+   *   - the sessionId does not match the pending call;
+   *   - the tool is not mail_search (the only streaming tool today);
+   *   - the source client is not the client executing the call;
+   *   - the sequence is not strictly greater than the last accepted one.
+   * The update never authorizes anything — it only reports results of the
+   * already-approved call.
+   */
+  handleToolUpdate(params: BrowserToolUpdateParams, sourceClientId: string | undefined): void {
+    const call = this.activeToolCalls.get(params.toolCallId);
+    if (!call) {
+      this.log.debug(`tool_update dropped: unknown toolCall ${params.toolCallId}`);
+      return;
+    }
+    if (params.sessionId !== call.sessionId) {
+      this.log.debug(`tool_update dropped: session mismatch for ${params.toolCallId}`);
+      return;
+    }
+    if (params.tool !== "mail_search" || call.tool !== "mail_search") {
+      this.log.debug(`tool_update dropped: tool ${params.tool} does not stream`);
+      return;
+    }
+    if (call.clientId !== undefined && sourceClientId !== undefined && call.clientId !== sourceClientId) {
+      this.log.debug(`tool_update dropped: client ${sourceClientId} is not executing ${params.toolCallId}`);
+      return;
+    }
+    if (params.sequence !== undefined) {
+      if (params.sequence <= call.lastSequence) {
+        this.log.debug(`tool_update dropped: non-monotonic sequence ${params.sequence} for ${params.toolCallId}`);
+        return;
+      }
+      call.lastSequence = params.sequence;
+    }
+    if (params.update.kind === "batch") call.lastBatch = params.update.result as MailSearchResult;
+    else if (params.update.kind === "progress") call.lastScanned = params.update.scanned;
+    const extra =
+      params.update.kind === "progress"
+        ? ` scanned=${params.update.scanned} elapsedMs=${params.update.elapsedMs ?? "?"} pageMs=${params.update.pageMs ?? "?"}`
+        : params.update.kind === "batch"
+          ? ` messages=${params.update.result.messages.length} scanned=${params.update.result.scanned ?? "?"} complete=${params.update.result.complete ?? "?"}`
+          : "";
+    this.log.info(
+      `mail_search tool_update kind=${params.update.kind} seq=${params.sequence ?? "-"}${extra} at ${Date.now() - call.startedAt}ms`,
+    );
+    this.onToolUpdate?.(call.sessionId, params.toolCallId, params.update);
+  }
+
+  /**
+   * Coalesced permission groups: parallel tool calls that arrive while a
+   * session's approval prompt is being assembled share ONE prompt card.
+   * Models routinely emit several tool calls in the same turn (e.g. two
+   * mail_get_message_body calls for two messages); without coalescing the
+   * client UI shows only the last card and the other request times out.
+   */
+  private permissionGroups = new Map<string, PermissionGroup>();
+
+  /**
    * Ask the client for permission to run a sensitive tool. Blocks until the
    * user responds (or the prompt times out). "Always allow" is remembered for
    * the rest of the host lifetime. A denial/timeout surfaces a structured
    * BROWSER_PERMISSION_DENIED error so the agent can react.
+   *
+   * Concurrent requests for the same session are coalesced: a short window
+   * collects parallel calls, then ONE request_permission is sent whose card
+   * names every coalesced call; the single answer applies to all of them.
    */
   /** True when a permission prompt WILL be sent for this tool call. */
   private willPrompt(sessionId: string, toolName: string): boolean {
@@ -517,53 +738,115 @@ export class CapabilityToolProvider {
     toolCallId: string,
     toolName: string,
     target: AcpTransportLike,
+    args?: Record<string, unknown>,
   ): Promise<void> {
     if (!this.willPrompt(sessionId, toolName)) {
       this.log.debug(`${toolName}: already allowed (session or host scope); skipping permission prompt`);
       return;
     }
-    const request = buildPermissionRequest({ sessionId, toolCallId, toolName });
-    this.log.info(`${toolName}: requesting user permission (toolCall=${toolCallId})`);
-    let response: RequestPermissionResponse;
+    const argsSummary = summarizeArgs(args);
+    this.log.info(
+      `${toolName}: requesting user permission (toolCall=${toolCallId}${argsSummary ? ` args=${argsSummary}` : ""})`,
+    );
+
+    return new Promise<void>((resolve, reject) => {
+      const isEvaluate = toolName === "browser_evaluate";
+      let group = this.permissionGroups.get(sessionId);
+      // browser_evaluate has a different option set (Firefox owns the grant);
+      // it never joins a group of regular tools, and vice versa.
+      if (group && group.hasEvaluate !== isEvaluate) group = undefined;
+      if (!group) {
+        group = { members: [], hasEvaluate: isEvaluate, target, settled: false };
+        this.permissionGroups.set(sessionId, group);
+        const captured = group;
+        group.flushTimer = setTimeout(
+          () => { void this.sendPermissionRequest(sessionId, captured); },
+          PERMISSION_COALESCE_WINDOW_MS,
+        );
+      }
+      group.members.push({ toolCallId, toolName, resolve, reject });
+    });
+  }
+
+  /**
+   * Send the single coalesced permission prompt for a group's members and
+   * settle every member with the user's one decision.
+   */
+  private async sendPermissionRequest(
+    sessionId: string,
+    group: PermissionGroup,
+  ): Promise<void> {
+    if (group.settled) return;
+    group.settled = true;
+    if (group.flushTimer) clearTimeout(group.flushTimer);
+    this.permissionGroups.delete(sessionId);
+    const { members } = group;
+    const first = members[0];
+    const title = members.length === 1
+      ? first.toolName
+      : `${members.length} parallel calls: ` +
+        [...new Set(members.map((m) => m.toolName))].map((n) => {
+          const c = members.filter((m) => m.toolName === n).length;
+          return c > 1 ? `${n} ×${c}` : n;
+        }).join(", ");
+    this.log.info(
+      `permission: prompting for ${members.length} call(s) [${title}] (session=${sessionId})`,
+    );
+    const request = buildPermissionRequest({
+      sessionId,
+      toolCallId: first.toolCallId,
+      title,
+      toolName: first.toolName,
+    });
+    let response: RequestPermissionResponse | undefined;
+    let failure: string | undefined;
     try {
-      response = await target.request<RequestPermissionResponse>(
+      response = await group.target.request<RequestPermissionResponse>(
         REQUEST_PERMISSION_METHOD,
         request,
         PERMISSION_TIMEOUT_MS,
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
-        `permission request for ${toolName} failed or timed out: ${message}`,
-        { tool: toolName },
-      );
+      failure = `permission request for ${first.toolName} failed or timed out: ${err instanceof Error ? err.message : String(err)}`;
     }
-    if (permissionAllowed(response)) {
+    const allowed = failure === undefined && permissionAllowed(response);
+    if (allowed && response) {
       const optionId = response.outcome.outcome === "selected" ? response.outcome.optionId : "";
-      if (toolName === "browser_evaluate") return; // Never cache Firefox's revocable userScripts grant.
-      if (optionId === "allow_always") {
-        this.alwaysAllowed.add(toolName);
-        this.log.info(`${toolName}: user chose Always allow`);
-      } else if (optionId === "allow_session") {
-        let set = this.sessionAllowed.get(sessionId);
-        if (!set) {
-          set = new Set();
-          this.sessionAllowed.set(sessionId, set);
+      // The card named every coalesced tool — the answer applies to all of
+      // them, including the remembered scopes.
+      for (const toolName of new Set(members.map((m) => m.toolName))) {
+        if (toolName === "browser_evaluate") continue; // Never cache Firefox's revocable userScripts grant.
+        if (optionId === "allow_always") {
+          this.alwaysAllowed.add(toolName);
+          this.log.info(`${toolName}: user chose Always allow`);
+        } else if (optionId === "allow_session") {
+          let set = this.sessionAllowed.get(sessionId);
+          if (!set) {
+            set = new Set();
+            this.sessionAllowed.set(sessionId, set);
+          }
+          set.add(toolName);
+          this.log.info(`${toolName}: user chose Allow for this session (${sessionId})`);
+        } else {
+          this.log.info(`${toolName}: user chose Allow once`);
         }
-        set.add(toolName);
-        this.log.info(`${toolName}: user chose Allow for this session (${sessionId})`);
-      } else {
-        this.log.info(`${toolName}: user chose Allow once`);
       }
-      return;
+    } else if (!allowed) {
+      this.log.warn(`permission: user denied (or prompt failed) for [${title}]`);
     }
-    this.log.warn(`${toolName}: user denied permission`);
-    throw new PiBrowserProtocolError(
-      PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
-      `user denied permission to run ${toolName}`,
-      { tool: toolName },
-    );
+    for (const m of members) {
+      if (allowed) {
+        m.resolve();
+      } else {
+        m.reject(
+          new PiBrowserProtocolError(
+            PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+            failure ?? `user denied permission to run ${m.toolName}`,
+            { tool: m.toolName },
+          ),
+        );
+      }
+    }
   }
 
   /** Ensure per-session transport state exists (called at tool execution). */

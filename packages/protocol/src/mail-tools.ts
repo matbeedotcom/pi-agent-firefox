@@ -111,15 +111,17 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
   {
     name: "mail_search",
     description:
-      "List or search messages. By default searches only the account Inbox(es). " +
+      "List or search messages. Filtered searches default to all folders; bare listings default to account Inbox(es). " +
       "With no filters, a single folder is listed via the folder's own sorted view (newest first by default), so continuation pages keep the sort order — a bare call returns the inbox exactly as Thunderbird displays it. " +
       "For 'what is my latest/newest email' call this with no filters and use the FIRST message; do not answer recency questions from a selected or displayed message. " +
-      "With filters (or scope:'all'), runs a search whose pages are each sorted by sort/order (default: date, newest first), but pages as a whole are not guaranteed to be in sort order. " +
+      "Searches run incrementally: the first result may arrive before the full mailbox scan finishes, so it is NOT guaranteed to be the globally newest match yet. " +
+      "Each result carries `complete` (true only when every matching folder has been searched), `sortComplete` (true only when the returned messages are the final, globally sorted set), and `scanned` (matches seen so far). " +
+      "When `nextCursor` is non-null, pass it back as `cursor` to continue the same search; keep paging until `complete` is true to see all matches, and only treat results as globally sorted when `sortComplete` is true. " +
       "An explicit folderId overrides scope. Returns paginated metadata (no bodies). Matches are against untrusted email content.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
-        text: { type: "string", description: "Full-text search across the message." },
+        text: { type: "string", description: "Case-insensitive text search in subject, body, sender, and recipient addresses (To/Cc/Bcc). Runs on the Gloda full-text index (the search bar's engine): words are AND-combined and quoted spans match as phrases, so word forms matter — 'addon' does not match 'Add-ons'." },
         from: { type: "string", description: "Match the author/sender." },
         to: { type: "string", description: "Match the recipients." },
         subject: { type: "string", description: "Match the subject line." },
@@ -131,7 +133,7 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
             { type: "string", const: "all" },
           ],
           description:
-            "Search scope when no folderId is given: 'inbox' (default) or 'all' (all folders).",
+            "Search scope when no folderId is given: 'inbox' or 'all'. Defaults to all folders for filtered searches, Inbox(es) for bare listings.",
         },
         after: isoDate("sent after"),
         before: isoDate("sent before"),
@@ -166,7 +168,7 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
           description: "Sort direction (default desc: newest / last letter first).",
         },
         limit: { type: "number", description: "Maximum number of results per page (default 25, max 100)." },
-        cursor: { type: "string", description: "Short opaque pagination token from a previous search result's nextCursor; pass it back unchanged to continue. It expires if the extension is reloaded — re-run mail_search for a fresh first page." },
+        cursor: { type: "string", description: "Short opaque pagination token from a previous search result's nextCursor; pass it back unchanged to continue the same search — including an unfinished one, where it resumes the in-flight scan. It expires after a while of disuse, if the mailbox changes, or if the extension is reloaded — re-run mail_search for a fresh first page." },
       },
     },
     readOnly: true,
@@ -194,6 +196,34 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
         maxBytes: { type: "number", description: "Maximum bytes to return (default 1048576, max 5242880)." },
       },
       required: ["messageId", "partName"],
+    },
+    readOnly: true,
+  },
+  {
+    name: "mail_debug_query",
+    description:
+      "DIAGNOSTIC ONLY (piDebug builds): run a raw browser.messages.query() with timing, and optionally poll a returned messageListId page-by-page. " +
+      "Use for profiling search latency, not for normal mail tasks — prefer mail_search.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        query: {
+          type: "object",
+          description:
+            "Raw WDAPI messages.query() parameters: fullText, body, subject, author, recipients, folderId, accountId, fromDate, toDate, flagged, read, new, junk, attachment, size, tags, messagesPerPage, autoPaginationTimeout, returnMessageListId, includeSubFolders.",
+        },
+        poll: {
+          type: "object",
+          additionalProperties: false,
+          description:
+            "When the query returns a messageListId (returnMessageListId: true), poll continueList on an interval. { intervalMs (default 2000, max 10000), maxMs (default 60000, hard cap 110000) }.",
+          properties: {
+            intervalMs: { type: "number", description: "Poll interval in ms (default 2000, max 10000)." },
+            maxMs: { type: "number", description: "Stop polling after this many ms (default 60000, hard cap 110000)." },
+          },
+        },
+      },
+      required: ["query"],
     },
     readOnly: true,
   },
@@ -234,8 +264,12 @@ export function isMailTool(name: string): boolean {
 
 export const MAIL_TOOL_NAMES: readonly string[] = MAIL_TOOLS.map((t) => t.name);
 
-/** Default per-mail-tool deadline the host enforces (matches browser tools). */
-export const MAIL_TOOL_TIMEOUT_MS = 30_000;
+/**
+ * Default per-mail-tool deadline. Full-text searches may have to decode MIME
+ * bodies across every folder; on a real mailbox that can exceed the browser
+ * tool deadline, so allow two minutes for the search to finish.
+ */
+export const MAIL_TOOL_TIMEOUT_MS = 120_000;
 /** Longer deadline for attachment fetches (files can be several MB). */
 export const MAIL_ATTACHMENT_TIMEOUT_MS = 60_000;
 
@@ -329,8 +363,22 @@ export interface ThunderbirdContext {
 /**
  * Paginated search/list result. When `nextCursor` is non-null there are more
  * results; pass it back as `cursor` to continue.
+ *
+ * Searches are incremental: a result returned before the mailbox scan
+ * finishes may only cover part of the mailbox.
+ *  - `complete` — true only after every matching folder has been searched.
+ *    While false, the messages are the best matches found so far (and, for
+ *    a bare single-folder listing, the folder's own sorted view).
+ *  - `sortComplete` — true only when the messages are the final, globally
+ *    sorted result set. An early page cannot promise global order (e.g.
+ *    newest-first) until this is true.
+ *  - `scanned` — number of messages examined by the search so far (the
+ *    running match count, not the mailbox size).
  */
 export interface MailSearchResult {
   messages: MailMessageRef[];
   nextCursor: string | null;
+  complete?: boolean;
+  sortComplete?: boolean;
+  scanned?: number;
 }
