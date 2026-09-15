@@ -407,7 +407,7 @@ test("tool events map to tool_call / tool_call_update updates", async () => {
   sess.nextTurn = {
     events: [
       { type: "tool_start", toolCallId: "tc1", toolName: "browser_get_page", args: {} },
-      { type: "tool_end", toolCallId: "tc1", toolName: "browser_get_page", result: { content: [{ type: "text", text: "page data" }] }, isError: false },
+      { type: "tool_end", toolCallId: "tc1", toolName: "browser_get_page", result: { content: [{ type: "text", text: "page data" }, { type: "image", mimeType: "image/png", data: "QUJD" }, { type: "text", text: "after capture" }, { type: "image", mimeType: "image/jpeg", data: "REVG" }] }, isError: false },
     ],
     delayMs: 5,
   };
@@ -428,6 +428,12 @@ test("tool events map to tool_call / tool_call_update updates", async () => {
   assert.equal(start.kind, "fetch");
   assert.equal(end.status, "completed");
   assert.equal((end.content as Array<{ content: { text?: string } }>)[0].content.text, "page data");
+  assert.deepEqual(end.content, [
+    { type: "content", content: { type: "text", text: "page data" } },
+    { type: "content", content: { type: "image", mimeType: "image/png", data: "QUJD" } },
+    { type: "content", content: { type: "text", text: "after capture" } },
+    { type: "content", content: { type: "image", mimeType: "image/jpeg", data: "REVG" } },
+  ]);
 });
 
 test("unknown ACP method -> METHOD_NOT_FOUND", async () => {

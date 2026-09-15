@@ -351,6 +351,20 @@ test("permission-aware timeout: a long screenshot block (permission prompt) does
 
 // WS2/T2.1 (review P1): ordinary browser work is NOT permission work — a slow
 // non-permission tool must be bounded by the cell deadline as usual.
+test("permission-aware timeout: page.evaluate waits for approval without exhausting the cell budget", async () => {
+  const { runtime, cleanup } = await makeRuntime(async (tool) => {
+    assert.equal(tool, "browser_evaluate");
+    await new Promise(r => setTimeout(r, 900));
+    return { value: 42, world: "page" };
+  });
+  try {
+    const result = await runtime.call("await page.evaluate(() => 42)", { timeoutMs: 400 });
+    assert.match(result.text, /42/);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("permission-aware timeout: a slow ordinary tool is bounded by the cell deadline", async () => {
   const { runtime, cleanup } = await makeRuntime(async (tool) => {
     assert.equal(tool, "browser_get_page");

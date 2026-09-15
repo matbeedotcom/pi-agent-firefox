@@ -88,3 +88,7 @@ for (const name of readdirSync(path.join(root, "src", "experiments"))) {
 }
 
 console.log("thunderbird add-on built to", dist);
+
+for (const surface of ["pane", "space"]) {
+  await cp(path.join(root, "..", "packages", "webext", "src", "activity", "activity.css"), path.join(dist, surface, "activity.css"));
+}

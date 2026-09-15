@@ -1,7 +1,6 @@
 /**
- * Shared helpers for the two content-script bundles (isolated-world
- * content.js and MAIN-world console-capture.js). Each bundle is built
- * separately, so this module is bundled into both — no runtime coupling.
+ * Serialization and expression helpers for page evaluation and console capture.
+ * toJsonSafe is also serialized into injected source: keep it self-contained.
  */
 
 /** True when the expression looks like a function (used by browser_evaluate). */

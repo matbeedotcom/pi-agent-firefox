@@ -7,12 +7,9 @@
  *   - pi:dom        (expanded selector summary: types, checked, level, classes)
  *   - pi:a11y       (accessibility outline: roles, names, refs, pruning)
  *   - pi:elementAt  (elementFromPoint hit summary)
- *   - pi:evaluate   (page-world round-trip via the REAL console-capture.js
- *                    MAIN-world helper, incl. function expressions + errors)
  *   - pi:console    (ring buffer read, level filter, clear)
  *
  * Run:  node .probe/smoke-content-dom.mjs          (fast paths)
- *       SLOW=1 node .probe/smoke-content-dom.mjs   (+ 15 s isolated fallback)
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -400,51 +397,6 @@ const tick = () => new Promise((r) => setTimeout(r, 25));
   assert.equal(bad.ok, false, "non-numeric x rejected");
   assert.equal(bad.error.code, "INTERNAL");
   process.stdout.write("ok pi:elementAt\n");
-}
-
-// ---------------------------------------------------------------------------
-// pi:evaluate — page world via the REAL console-capture.js helper
-// ---------------------------------------------------------------------------
-
-{
-  // 1) function expression + arg, executed by the MAIN-world helper
-  const fnRes = await call({ type: "pi:evaluate", expression: "(t) => t + '-ok'", arg: "hi" });
-  assert.equal(fnRes.ok, true, `eval fn: ${JSON.stringify(fnRes)}`);
-  assert.equal(fnRes.data.value, "hi-ok");
-  assert.equal(fnRes.data.world, "page");
-
-  // 2) plain expression
-  const plain = await call({ type: "pi:evaluate", expression: "1 + 2" });
-  assert.equal(plain.data.value, 3);
-  assert.equal(plain.data.world, "page");
-
-  // 3) throwing expression -> reported as data, not a protocol error
-  const errRes = await call({ type: "pi:evaluate", expression: "nopeIsDefined()" });
-  assert.equal(errRes.ok, true, "eval errors are data");
-  assert.equal(errRes.data.value, null);
-  assert.match(errRes.data.error, /ReferenceError: nopeIsDefined is not defined/);
-  assert.equal(errRes.data.world, "page");
-
-  // 4) promise is awaited
-  const asyncRes = await call({ type: "pi:evaluate", expression: "async () => 'later'" });
-  assert.equal(asyncRes.data.value, "later");
-
-  process.stdout.write("ok pi:evaluate (page world: fn/arg, error-as-data, async)\n");
-
-  if (process.env.SLOW) {
-    // 5) helper unreachable -> isolated-world fallback (15 s internal deadline)
-    for (const fn of [...window._listeners]) {
-      if (fn.toString().includes("__piBrowserEval")) window._listeners.delete(fn);
-    }
-    const t0 = Date.now();
-    const slow = await call({ type: "pi:evaluate", expression: "40 + 2" });
-    const tookMs = Date.now() - t0;
-    assert.equal(slow.ok, true);
-    assert.equal(slow.data.value, 42, "isolated fallback computed the value");
-    assert.match(slow.data.world, /isolated/);
-    assert.ok(tookMs >= 14_000, `waited for the page-eval deadline (${tookMs}ms)`);
-    process.stdout.write(`ok pi:evaluate (isolated fallback after ${tookMs}ms)\n`);
-  }
 }
 
 // ---------------------------------------------------------------------------

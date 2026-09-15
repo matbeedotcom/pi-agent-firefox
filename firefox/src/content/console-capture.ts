@@ -7,9 +7,6 @@
  *   - wraps console.* before any page script runs (document_start),
  *   - records uncaught window errors, unhandled promise rejections and
  *     failed resource loads (capture-phase `error`),
- *   - serves browser_evaluate in the page's JS world (page globals such as
- *     window.* are visible), via a postMessage request/response round-trip
- *     with the isolated-world content script,
  *   - exposes a ring buffer on window.__PI_BROWSER_CONSOLE__ that the
  *     content script reads (directly, or via the __piBrowserConsoleRead
  *     round-trip as a fallback).
@@ -19,10 +16,10 @@
  *
  * Security (PRODUCT.md §37): everything read back is UNTRUSTED tool data.
  * A hostile page can replace or empty this state; that only degrades the
- * DATA the agent sees (stale/empty logs, a spoofed eval result) — it can
+ * DATA the agent sees (stale/empty logs) — it can
  * never reach the control flow, bindings, or the ACP channel.
  */
-import { isFunctionExpression, stringifyLogArg, toJsonSafe } from "./shared.js";
+import { stringifyLogArg } from "./shared.js";
 
 interface ConsoleEntry {
   t: number;
@@ -95,39 +92,7 @@ interface ConsoleEntry {
       }) as EventListener,
     );
 
-    // 3) browser_evaluate in the page world (postMessage round-trip).
-    window.addEventListener("message", ((e: MessageEvent) => {
-      const d = e.data as
-        | { __piBrowserEval?: boolean; id?: number; expression?: unknown; arg?: unknown }
-        | null;
-      if (!d || d.__piBrowserEval !== true || typeof d.id !== "number") return;
-      void (async () => {
-        let payload: { ok: true; value: unknown } | { ok: false; error: string };
-        try {
-          const expression = String(d.expression ?? "");
-          const factory = new Function(
-            "arg",
-            isFunctionExpression(expression)
-              ? `return (${expression})(arg);`
-              : `return (${expression});`,
-          );
-          let result: unknown = factory(d.arg);
-          if (result && typeof result === "object" && typeof (result as { then?: unknown }).then === "function") {
-            result = await result;
-          }
-          payload = { ok: true, value: toJsonSafe(result) };
-        } catch (err) {
-          payload = { ok: false, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) };
-        }
-        try {
-          window.postMessage({ __piBrowserEvalResult: true, id: d.id, ...payload }, "*");
-        } catch {
-          /* document gone */
-        }
-      })();
-    }));
-
-    // 4) Console buffer access for the isolated-world content script:
+    // 3) Console buffer access for the isolated-world content script:
     //    direct window.__PI_BROWSER_CONSOLE__ read, plus a postMessage
     //    read/clear fallback (cross-world object access is the unusual
     //    case; structured-clone messages always work).

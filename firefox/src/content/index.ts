@@ -14,7 +14,6 @@
  * agent as tool output, never concatenated into a user prompt (PRODUCT.md
  * §37).
  */
-import { isFunctionExpression, toJsonSafe } from "./shared.js";
 
 // ---------------------------------------------------------------------------
 // Stable element references
@@ -60,11 +59,12 @@ function stale(ref: string): never {
   throw new ContentError("BROWSER_ELEMENT_STALE", `element reference ${ref} is stale (page changed or element removed)`);
 }
 
-function describe(el: Element): { tag: string; role: string; text: string } {
+function describe(el: Element): { tag: string; role: string; text: string; name: string } {
   return {
     tag: el.tagName.toLowerCase(),
     role: inferRole(el),
     text: visibleText(el).slice(0, 120),
+    name: accessibleName(el),
   };
 }
 
@@ -383,13 +383,14 @@ function viewport(): { width: number; height: number } {
 function click(ref: unknown): { clicked: { tag: string; role: string; text: string } } {
   const el = refOf(ref);
   if (!el || !el.isConnected) stale(String(ref));
+  const target = describe(el);
   try {
     (el as HTMLElement).focus?.({ preventScroll: false });
     (el as HTMLElement).click();
   } catch (err) {
     throw new ContentError("BROWSER_PERMISSION_DENIED", `click failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  return { clicked: describe(el) };
+  return { clicked: target };
 }
 
 /** The proven typing path (value-setter + input/change, else insertText). */
@@ -501,6 +502,7 @@ function clickAt(x: unknown, y: unknown): {
   }
   const el = document.elementFromPoint(x, y);
   if (!el) return { found: false, x, y };
+  const target = { ...summarize(el), name: accessibleName(el), ref: assignRef(el) };
   const html = el as HTMLElement;
   try {
     html.focus?.({ preventScroll: false });
@@ -508,7 +510,7 @@ function clickAt(x: unknown, y: unknown): {
   } catch (err) {
     throw new ContentError("BROWSER_PERMISSION_DENIED", `clickAt failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  return { found: true, x, y, clicked: { ...summarize(el), ref: assignRef(el) } };
+  return { found: true, x, y, clicked: target };
 }
 
 function waitFor(selector: unknown, state: unknown, timeoutMs: unknown): Promise<{ found: boolean; waitedMs: number; state: string }> {
@@ -534,97 +536,6 @@ function waitFor(selector: unknown, state: unknown, timeoutMs: unknown): Promise
       setTimeout(tick, 100);
     };
     tick();
-  });
-}
-
-// ---------------------------------------------------------------------------
-// browser_evaluate
-// ---------------------------------------------------------------------------
-
-const PAGE_EVAL_TIMEOUT_MS = 15_000;
-let pageEvalSeq = 0;
-
-interface PageEvalResult {
-  __piBrowserEvalResult: true;
-  id: number;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-}
-
-/**
- * Ask the MAIN-world helper (console-capture.js) to run the expression in
- * the PAGE's JS world, where page globals (window.*) are visible.
- * Resolves "unavailable" when the helper is not answering (older Firefox,
- * blocked injection) so the caller can fall back to the isolated world.
- */
-function requestPageEval(expression: string, arg: unknown): Promise<PageEvalResult | "unavailable"> {
-  return new Promise((resolve) => {
-    const id = ++pageEvalSeq;
-    let settled = false;
-    const onMessage = (e: MessageEvent) => {
-      const d = e.data as PageEvalResult | null;
-      if (d && d.__piBrowserEvalResult === true && d.id === id) {
-        settled = true;
-        window.removeEventListener("message", onMessage);
-        clearTimeout(timer);
-        resolve(d);
-      }
-    };
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        window.removeEventListener("message", onMessage);
-        resolve("unavailable");
-      }
-    }, PAGE_EVAL_TIMEOUT_MS);
-    window.addEventListener("message", onMessage);
-    try {
-      window.postMessage({ __piBrowserEval: true, id, expression, arg }, "*");
-    } catch {
-      window.removeEventListener("message", onMessage);
-      clearTimeout(timer);
-      resolve("unavailable");
-    }
-  });
-}
-
-/** Run the expression in this (isolated) world: shared DOM, no page JS globals. */
-async function evalIsolated(expression: string, arg: unknown): Promise<unknown> {
-  const factory = new Function(
-    "arg",
-    isFunctionExpression(expression) ? `return (${expression})(arg);` : `return (${expression});`,
-  );
-  let result: unknown = factory(arg);
-  if (result && typeof result === "object" && typeof (result as { then?: unknown }).then === "function") {
-    result = await result;
-  }
-  return toJsonSafe(result);
-}
-
-/**
- * browser_evaluate: page world first (page globals visible), isolated world
- * as fallback. A throwing expression is reported as data ({error}) so the
- * agent can react — only a malformed TOOL call (non-string expression) is
- * a protocol error.
- */
-function evaluate(expression: unknown, arg: unknown): Promise<{ value: unknown; error?: string; world: string }> {
-  if (typeof expression !== "string" || expression.trim() === "") {
-    return Promise.reject(new ContentError("INTERNAL", "evaluate requires a non-empty expression string"));
-  }
-  return requestPageEval(expression, arg).then(async (page) => {
-    if (page !== "unavailable") {
-      return page.ok ? { value: page.value, world: "page" } : { value: null, error: page.error, world: "page" };
-    }
-    try {
-      return { value: await evalIsolated(expression, arg), world: "isolated (page-world helper unavailable)" };
-    } catch (err) {
-      return {
-        value: null,
-        error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-        world: "isolated (page-world helper unavailable)",
-      };
-    }
   });
 }
 
@@ -1268,8 +1179,6 @@ async function handle(msg: ContentMessage): Promise<unknown> {
       return type(msg.ref, msg.text, msg.submit as boolean | undefined);
     case "pi:wait":
       return await waitFor(msg.selector, msg.state, msg.timeoutMs as number | undefined);
-    case "pi:evaluate":
-      return await evaluate(msg.expression, msg.arg);
     case "pi:a11y":
       return a11yTree(msg.maxNodes as number | undefined, msg.maxDepth as number | undefined);
     case "pi:a11yNodes":

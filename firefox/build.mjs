@@ -55,7 +55,7 @@ await esbuild.build({
   outfile: path.join(dist, "content.js"),
 });
 
-// MAIN-world console capture + page-world eval helper (manifest world:
+// MAIN-world console capture (manifest world:
 // "MAIN", document_start) — bundled separately from the isolated-world
 // content script.
 await esbuild.build({
@@ -75,3 +75,5 @@ await cp(path.join(root, "src", "sidebar", "index.html"), path.join(dist, "sideb
 await cp(path.join(root, "src", "sidebar", "style.css"), path.join(dist, "sidebar", "style.css"));
 
 console.log("firefox add-on built to", dist);
+
+await cp(path.join(root, "..", "packages", "webext", "src", "activity", "activity.css"), path.join(dist, "sidebar", "activity.css"));

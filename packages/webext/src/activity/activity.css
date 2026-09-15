@@ -1,0 +1,92 @@
+/* Browser activity is the visual foreground; diagnostics stay within reach. */
+.msg.tool.activity-card {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 0;
+  overflow: hidden;
+  white-space: normal;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  animation: activity-arrive 220ms ease-out;
+}
+.activity-card > .tool-head { padding: 12px; align-items: center; }
+.activity-name { font-weight: 600; }
+.activity-card .tool-status { font-size: 10px; flex-shrink: 0; }
+.activity-card[data-status="in_progress"] > .tool-head::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-2);
+  animation: activity-pulse 1.4s ease-in-out infinite;
+}
+.activity-card[data-status="completed"] > .tool-head .tool-status { color: var(--ok); }
+.activity-card[data-status="failed"] > .tool-head .tool-status, .activity-error { color: var(--err); }
+.activity-card[data-status="interrupted"] > .tool-head .tool-status { color: var(--warn); }
+.activity-stage { padding: 14px; background: var(--bg); border-block: 1px solid var(--border); }
+.activity-context { display: block; color: var(--muted); font-size: 10px; margin-bottom: 9px; }
+.activity-target { position: relative; overflow-wrap: anywhere; }
+.click .activity-target, .type .activity-target {
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+  background: var(--bg-3); display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.click-indicator { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+[data-status="completed"] > .activity-stage .click-indicator,
+.activity-card[data-status="completed"] > .activity-evidence > .activity-preview > .activity-stage .click-indicator { color: var(--ok); animation: click-feedback 550ms ease-out; }
+.typing-indicator { letter-spacing: 3px; color: var(--muted); }
+[data-status="in_progress"] > .activity-stage .typing-indicator,
+.activity-card[data-status="in_progress"] > .activity-evidence > .activity-preview > .activity-stage .typing-indicator { animation: activity-pulse 1s ease-in-out infinite; }
+.activity-details { border-top: 1px solid var(--border); color: var(--muted); }
+.activity-details > summary { padding: 9px 12px; cursor: pointer; font-size: 10px; }
+.activity-output { padding: 0 12px 12px; max-height: 320px; overflow: auto; }
+.activity-output pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.capture { background: var(--bg); }
+.capture summary { cursor: zoom-in; list-style: none; }
+.capture img { display: block; width: 100%; max-height: 220px; object-fit: contain; object-position: top; }
+.capture[open] summary { cursor: zoom-out; }
+.capture[open] img { max-height: none; }
+.capture-caption { display: block; color: var(--muted); font-size: 10px; padding: 8px 12px; }
+.nested-heading { padding: 10px 12px; font-size: 11px; color: var(--muted); }
+.activity-error { padding: 0 12px; overflow-wrap: anywhere; }
+.msg.thought { padding-block: 3px; }
+.msg.thought summary { cursor: pointer; font-style: normal; font-size: 11px; }
+@keyframes activity-arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes activity-pulse { 50% { opacity: .35; } }
+@keyframes click-feedback { from { box-shadow: 0 0 0 0 var(--ok); } to { box-shadow: 0 0 0 10px transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .activity-card, .activity-card *, .activity-card *::before { animation: none !important; transition: none !important; }
+}
+
+.activity-nested > .activity-card { margin: 0 8px 8px; border-radius: 9px; animation: none; }
+
+/* Structured evidence and a compact, expandable execution timeline. */
+.activity-result { padding: 12px; border-top: 1px solid var(--border); background: var(--bg); }
+.result-heading { margin: 0 0 8px; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.result-caption { font-size: 11px; color: var(--muted); margin: 4px 0; overflow-wrap: anywhere; }
+.result-list { padding: 0; margin: 0; list-style: none; max-height: 300px; overflow: auto; }
+.result-row { display: flex; gap: 9px; padding: 10px 0; align-items: flex-start; border-bottom: 1px solid var(--border); }
+.result-row:last-child { border-bottom: 0; }
+.result-row-content { min-width: 0; flex: 1; }
+.result-row-label { overflow-wrap: anywhere; white-space: pre-wrap; }
+.result-badge { font-size: 9px; padding: 3px 6px; border-radius: 5px; background: var(--bg-3); color: var(--muted); max-width: 90px; overflow-wrap: anywhere; flex-shrink: 0; }
+.result-row[data-tone="active"] .result-badge { background: var(--accent); color: white; }
+.result-row[data-tone="error"] .result-badge { color: var(--err); border: 1px solid currentColor; }
+.result-row meter { width: 65%; height: 5px; margin-right: 6px; }
+.result-duration { font-size: 9px; color: var(--muted); }
+.result-scalar { font-family: inherit; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; max-height: 280px; overflow: auto; }
+.result-quote .result-scalar { border-left: 3px solid var(--accent); padding-left: 12px; line-height: 1.6; }
+.result-properties { padding-left: 10px; border-left: 1px solid var(--border); }
+.result-property { cursor: pointer; padding: 5px 0; overflow-wrap: anywhere; }
+.result-empty { color: var(--muted); font-size: 11px; }
+.capture-open { display: inline-block; margin: 0 12px 12px; color: var(--accent); font-size: 11px; }
+.capture-dialog { max-width: 94vw; max-height: 90vh; overflow: auto; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+.capture-dialog::backdrop { background: rgb(0 0 0 / 70%); }
+.capture-dialog button { display: block; position: sticky; top: 0; margin-bottom: 12px; }
+.capture-dialog img { display: block; max-width: none; }
+.activity-step { margin: 0 12px; border-left: 1px solid var(--border); }
+.activity-step-summary { position: relative; cursor: pointer; padding: 10px 10px 10px 16px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; list-style: none; }
+.activity-step-summary::before { content: ""; position: absolute; left: -4px; top: 14px; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.activity-step[data-status="completed"] > summary::before { background: var(--ok); }
+.activity-step[data-status="in_progress"] > summary::before { background: var(--accent); animation: activity-pulse 1.4s ease-in-out infinite; }
+.activity-step[data-status="failed"] > summary::before { background: var(--err); }
+.activity-step[data-status="interrupted"] > summary::before { background: var(--warn); }
+.activity-step[open] > summary { color: var(--text); }
+.activity-step > .activity-card { margin: 0 0 10px 12px; border-radius: 8px; animation: none; }
+.activity-step > .activity-card > .tool-head { display: none; }
+.activity-step-summary:focus-visible, .capture summary:focus-visible, .activity-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

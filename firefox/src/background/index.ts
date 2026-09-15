@@ -21,10 +21,12 @@ import {
   type SessionUpdate,
 } from "@pi-browser/protocol";
 import { AcpClient, bindingRefId, fetchPiTheme, notifyHost, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
+import { PromptRecovery } from "./prompt-recovery.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
 import { McpServer, type ControlHandler } from "./mcp-server.js";
 import { networkLog } from "./network-log.js";
 import { ReplTabs } from "./repl-tabs.js";
+import { requestBrowserToolPermission } from "../page-evaluation-permission.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -33,7 +35,9 @@ import { ReplTabs } from "./repl-tabs.js";
 const store = new SessionStore();
 /** REPL-owned tabs (javascript tool, BROWSER-USE-REPL-PLAN.md P2.3). */
 const replTabs = new ReplTabs();
-const dispatcher = new ToolDispatcher(store, replTabs);
+const dispatcher = new ToolDispatcher(store, replTabs, (sessionId, activity) => {
+  void browser.runtime.sendMessage({ type: "pi/browser_activity", sessionId, activity }).catch(() => {});
+});
 
 /**
  * A REPL-owned tab was closed (by the user or browser_close_tab). Restore
@@ -191,6 +195,7 @@ function requestPermissionFromUser(
 
 interface UiState {
   status: HostStatus;
+  recoveringSessionIds: string[];
   activeSessionId?: string;
   sessions: ReturnType<SessionStore["snapshot"]>["sessions"];
   lastSessionId?: string;
@@ -206,6 +211,7 @@ function pendingPermissionRequests(): RequestPermissionRequest[] {
 function pushState(): void {
   const state: UiState = {
     status: hostStatus,
+    recoveringSessionIds: recovery.pendingSessions(),
     ...(activeSessionId ? { activeSessionId } : {}),
     sessions: store.snapshot().sessions,
     ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
@@ -271,7 +277,7 @@ async function createSession(cwd: string): Promise<string> {
   return sessionId;
 }
 
-async function openExistingSession(sessionId: string, cwd: string, load: boolean): Promise<void> {
+async function openExistingSession(sessionId: string, cwd: string, load: boolean, activate = true): Promise<void> {
   const decl = mcpServer.declarePending();
   const mcpServers = [{ name: "firefox-browser", type: "acp", serverId: decl.serverId }];
   const method = load ? AGENT_METHODS.session_load : AGENT_METHODS.session_resume;
@@ -289,15 +295,18 @@ async function openExistingSession(sessionId: string, cwd: string, load: boolean
     decl.discard();
     throw err;
   }
-  store.setLastSession(sessionId);
-  activeSessionId = sessionId;
+  if (activate) {
+    store.setLastSession(sessionId);
+    activeSessionId = sessionId;
+  }
   pushState();
 }
 
-async function sendPrompt(sessionId: string, text: string): Promise<void> {
+async function sendPrompt(sessionId: string, text: string, automatic = false): Promise<void> {
   const view = store.get(sessionId);
   if (!view) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
   if (view.streaming) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, "session is busy");
+  if (!automatic) recovery.begin(sessionId);
   store.setStreaming(sessionId, true);
   pushState();
   try {
@@ -331,7 +340,7 @@ const client = new AcpClient(
   onMcpConnect: (params) => mcpServer.handleConnect(params),
   onMcpMessage: (params) => mcpServer.handleMessage(params),
   onMcpDisconnect: (params) => mcpServer.handleDisconnect(params),
-  onRequestPermission: (params) => requestPermissionFromUser(params),
+  onRequestPermission: (params) => requestBrowserToolPermission(params, requestPermissionFromUser),
   // Cross-app heads-up: a tool's approval prompt is showing in ANOTHER app
   // (e.g. Thunderbird). The sidebar draws the user's attention there. This
   // client does NOT answer the prompt — the executing client owns it.
@@ -343,6 +352,9 @@ const client = new AcpClient(
       });
   },
   onStatus(status: HostStatus) {
+    if (hostStatus.state === "connected" && status.state !== "connected") {
+      for (const view of store.all()) if (view.streaming) recovery.interrupt(view.sessionId);
+    }
     hostStatus = status;
     pushState();
     // The port is up: drive the ACP initialize handshake (which flips the
@@ -362,6 +374,21 @@ const client = new AcpClient(
     }
   },
   });
+
+const recovery = new PromptRecovery({
+  ready: () => initialized && hostStatus.state === "connected",
+  restore: async (sessionId) => {
+    const view = store.get(sessionId);
+    if (!view) throw new Error("Session no longer exists");
+    if (view.streaming) throw new Error("Session is already continuing");
+    await openExistingSession(sessionId, view.cwd, false, false);
+  },
+  changed: () => pushState(),
+  prompt: (sessionId, text) => sendPrompt(sessionId, text, true),
+  notice: (sessionId, text) => pushSessionUpdate(sessionId, {
+    sessionUpdate: "agent_message_chunk", content: { type: "text", text: `\n\n${text}\n\n` },
+  }),
+});
 
 async function bootstrap(): Promise<void> {
   if (!client.connected) return; // port dropped during boot; reconnect cycle retries
@@ -395,6 +422,7 @@ async function bootstrap(): Promise<void> {
     }
   }
   pushState();
+  if (initialized && hostStatus.state === "connected") void recovery.resumePending();
 }
 
 // ---------------------------------------------------------------------------
@@ -471,6 +499,7 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
     case "get_state": {
       return {
         status: hostStatus,
+        recoveringSessionIds: recovery.pendingSessions(),
         ...(activeSessionId ? { activeSessionId } : {}),
         sessions: store.snapshot().sessions,
         ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
@@ -501,16 +530,19 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
       const sessionId = String(payload.sessionId);
       const text = String(payload.text ?? "");
       if (!text.trim()) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "empty prompt");
-      void sendPrompt(sessionId, text);
+      void sendPrompt(sessionId, text).catch((err) => console.warn("[pi-browser] prompt ended", err));
       return { accepted: true };
     }
     case "cancel": {
       const sessionId = String(payload.sessionId);
-      await client.request(AGENT_METHODS.session_cancel, { sessionId });
+      recovery.cancel(sessionId);
+      pushState();
+      if (hostStatus.state === "connected") await client.request(AGENT_METHODS.session_cancel, { sessionId });
       return {};
     }
     case "close_session": {
       const sessionId = String(payload.sessionId);
+      recovery.cancel(sessionId);
       await client.request(AGENT_METHODS.session_close, { sessionId });
       store.setStreaming(sessionId, false);
       if (activeSessionId === sessionId) activeSessionId = undefined;

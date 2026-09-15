@@ -102,26 +102,18 @@ function toolKindFor(toolName: string): ToolKind {
   return "other";
 }
 
-/** Map a Pi tool result content array into a single ACP Content block. */
-function toToolCallContent(result: unknown): { type: "content"; content: ContentBlock } {
+/** Preserve every text/image result, including mixed-output JavaScript cells. */
+function toToolCallContent(result: unknown): Array<{ type: "content"; content: ContentBlock }> {
   const r = result as { content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }> } | undefined;
-  let block: ContentBlock | undefined;
-  if (r && Array.isArray(r.content)) {
-    for (const c of r.content) {
-      if (c?.type === "text" && typeof c.text === "string") {
-        block = { type: "text", text: c.text };
-        break;
-      }
-      if (c?.type === "image" && typeof c.data === "string" && typeof c.mimeType === "string") {
-        block = { type: "image", data: c.data, mimeType: c.mimeType };
-        break;
-      }
+  const blocks: Array<{ type: "content"; content: ContentBlock }> = [];
+  for (const c of Array.isArray(r?.content) ? r.content : []) {
+    if (c?.type === "text" && typeof c.text === "string") {
+      blocks.push({ type: "content", content: { type: "text", text: c.text } });
+    } else if (c?.type === "image" && typeof c.data === "string" && typeof c.mimeType === "string") {
+      blocks.push({ type: "content", content: { type: "image", data: c.data, mimeType: c.mimeType } });
     }
   }
-  if (!block) {
-    block = { type: "text", text: result === undefined ? "" : JSON.stringify(result) };
-  }
-  return { type: "content", content: block };
+  return blocks.length ? blocks : [{ type: "content", content: { type: "text", text: result === undefined ? "" : JSON.stringify(result) } }];
 }
 
 export class AcpAgent {
@@ -538,7 +530,7 @@ export class AcpAgent {
             sessionUpdate: "tool_call_update",
             toolCallId: event.toolCallId,
             status: event.isError ? "failed" : "completed",
-            content: [toToolCallContent(event.result)],
+            content: toToolCallContent(event.result),
             rawOutput: event.result,
           },
         ];

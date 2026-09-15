@@ -5,7 +5,8 @@
  * for connection state, sessions, and bindings; the sidebar keeps the
  * in-memory transcript and renders ACP session/update streams.
  */
-import { applicationDisplayName } from "@pi-browser/protocol";
+import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
+import { grantEvaluationPermission } from "../page-evaluation-permission.js";
 import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme } from "@pi-browser/webext";
 import type {
   SessionConfigOption,
@@ -14,6 +15,9 @@ import type {
   SessionUpdate,
   ToolCallUpdate,
 } from "@pi-browser/protocol";
+
+import { isVisualTool, resultParts, type BrowserActivity, type ToolImage } from "../tool-activity.js";
+import { createActivityCard, type ActivityCardData } from "./activity-card.js";
 
 interface StatusInfo {
   state: string;
@@ -35,6 +39,7 @@ interface SessionUi {
 
 interface UiState {
   status: StatusInfo;
+  recoveringSessionIds?: string[];
   activeSessionId?: string;
   sessions: SessionUi[];
   /** Active browser theme (LWT colors); undefined when the API is unavailable. */
@@ -49,7 +54,7 @@ interface UiState {
 
 type Block =
   | { id: number; kind: "user" | "assistant" | "thought"; text: string }
-  | { id: number; kind: "tool"; toolCallId: string; title: string; status: string; text: string; input?: unknown };
+  | { id: number; kind: "tool"; toolCallId: string; title: string; status: string; text: string; input?: unknown; images?: ToolImage[]; activities?: BrowserActivity[] };
 
 let blockCounter = 0;
 const transcripts = new Map<string, Block[]>();
@@ -127,8 +132,8 @@ function applySessionUpdate(sessionId: string, update: SessionUpdate): void {
         toolCallId: update.toolCallId,
         title: update.title ?? "tool",
         status: update.status ?? "in_progress",
-        text: "",
         input: update.rawInput,
+        ...resultParts(update.content),
       });
       break;
     }
@@ -138,8 +143,8 @@ function applySessionUpdate(sessionId: string, update: SessionUpdate): void {
       if (!block || block.kind !== "tool") break;
       if (update.status) block.status = update.status;
       if (update.title) block.title = update.title;
-      const text = toolUpdateText(update);
-      if (text) block.text = text;
+      if (update.rawInput !== undefined) block.input = update.rawInput;
+      if (update.content !== undefined) Object.assign(block, resultParts(update.content));
       // The tool finished (approved or denied elsewhere): the remote
       // approval banner for it is stale.
       if (update.status && isTerminalToolStatus(update.status)) {
@@ -192,7 +197,7 @@ function markInterruptedToolBlocks(): void {
       if (b.kind === "tool" && (b.status === "pending" || b.status === "in_progress")) {
         b.status = "interrupted";
         if (!b.text) {
-          b.text = "Interrupted — the native host connection dropped before this tool finished. Send a nudge to continue.";
+          b.text = "Interrupted — the native host connection dropped. Automatic recovery will check the page before continuing.";
         }
         changed = true;
       }
@@ -255,18 +260,6 @@ function renderRemotePromptBanner(): void {
 function chunkText(update: SessionUpdate): string {
   const chunk = update as { content?: { type?: string; text?: string } };
   return chunk.content?.type === "text" ? (chunk.content.text ?? "") : "";
-}
-
-function toolUpdateText(update: SessionUpdate): string {
-  const u = update as ToolCallUpdate;
-  if (!Array.isArray(u.content)) return "";
-  const parts: string[] = [];
-  for (const c of u.content as Array<{ type?: string; content?: { type?: string; text?: string } }>) {
-    if (c?.type === "content" && c.content?.type === "text" && typeof c.content.text === "string") {
-      parts.push(c.content.text);
-    }
-  }
-  return parts.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -468,7 +461,8 @@ function renderBindingRow(session: SessionUi): void {
 }
 
 function updateComposerState(session: SessionUi): void {
-  $<HTMLButtonElement>("stop").classList.toggle("hidden", !session.streaming);
+  const recovering = uiState.recoveringSessionIds?.includes(session.sessionId) ?? false;
+  $<HTMLButtonElement>("stop").classList.toggle("hidden", !session.streaming && !recovering);
   $<HTMLButtonElement>("send").disabled = session.streaming || uiState.status.state !== "connected";
 }
 
@@ -495,6 +489,7 @@ function flash(text: string): void {
 
 interface BlockDom {
   wrap: HTMLElement;
+  updateActivity?: (data: ActivityCardData) => void;
   /** Live markdown view for text blocks; undefined for tool blocks. */
   md?: MarkdownView;
   /** Chars of block.text already written into `md`. */
@@ -519,6 +514,13 @@ function toolStatusClass(status: string): string {
 function buildBlockDom(block: Block, conv: HTMLElement): BlockDom {
   const wrap = document.createElement("div");
   let dom: BlockDom;
+  if (block.kind === "tool" && isVisualTool(block.title)) {
+    const card = createActivityCard(block);
+    dom = { wrap: card.wrap, updateActivity: card.update };
+    conv.append(card.wrap);
+    blockDoms.set(block.id, dom);
+    return dom;
+  }
   if (block.kind === "tool") {
     wrap.className = "msg tool";
     const head = document.createElement("div");
@@ -536,7 +538,16 @@ function buildBlockDom(block: Block, conv: HTMLElement): BlockDom {
     dom = { wrap, name, status, body, toolText: block.text, toolStatus: block.status, toolTitle: block.title };
   } else {
     wrap.className = `msg ${block.kind}`;
-    const md = new MarkdownView(wrap);
+    let content: HTMLElement = wrap;
+    if (block.kind === "thought") {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Reasoning";
+      content = document.createElement("div");
+      details.append(summary, content);
+      wrap.append(details);
+    }
+    const md = new MarkdownView(content);
     md.write(block.text);
     dom = { wrap, md, written: block.text.length };
   }
@@ -545,8 +556,30 @@ function buildBlockDom(block: Block, conv: HTMLElement): BlockDom {
   return dom;
 }
 
+function updateToolDom(block: Extract<Block, { kind: "tool" }>, dom: BlockDom): void {
+  if (dom.updateActivity) {
+    dom.updateActivity(block);
+    return;
+  }
+  if (dom.toolTitle !== block.title && dom.name) {
+    dom.name.textContent = block.title;
+    dom.toolTitle = block.title;
+  }
+  if (dom.toolStatus !== block.status && dom.status) {
+    dom.status.className = `tool-status ${toolStatusClass(block.status)}`;
+    dom.status.textContent = block.status;
+    dom.toolStatus = block.status;
+  }
+  if (dom.toolText !== block.text && dom.body) {
+    dom.body.textContent = "";
+    if (block.text) renderMarkdownInto(dom.body, block.text);
+    dom.toolText = block.text;
+  }
+}
+
 function renderConversation(): void {
   const conv = $<HTMLDivElement>("conversation");
+  const followTail = domSession !== activeSessionId || conv.scrollHeight - conv.scrollTop - conv.clientHeight < 48;
   const blocks = activeSessionId ? blocksFor(activeSessionId) : [];
   if (domSession !== activeSessionId) {
     // Page load or session switch: rebuild from scratch.
@@ -566,20 +599,7 @@ function renderConversation(): void {
         prev?.md?.end();
         dom = buildBlockDom(block, conv);
       } else if (block.kind === "tool") {
-        if (dom.toolTitle !== block.title && dom.name) {
-          dom.name.textContent = block.title;
-          dom.toolTitle = block.title;
-        }
-        if (dom.toolStatus !== block.status && dom.status) {
-          dom.status.className = `tool-status ${toolStatusClass(block.status)}`;
-          dom.status.textContent = block.status;
-          dom.toolStatus = block.status;
-        }
-        if (dom.toolText !== block.text && dom.body) {
-          dom.body.textContent = "";
-          if (block.text) renderMarkdownInto(dom.body, block.text);
-          dom.toolText = block.text;
-        }
+        updateToolDom(block, dom);
       } else if (dom.md && block.text.length > (dom.written ?? 0)) {
         dom.md.write(block.text.slice(dom.written ?? 0));
         dom.written = block.text.length;
@@ -594,7 +614,7 @@ function renderConversation(): void {
     const last = blocks[blocks.length - 1];
     if (last) blockDoms.get(last.id)?.md?.end();
   }
-  conv.scrollTop = conv.scrollHeight;
+  if (followTail) conv.scrollTop = conv.scrollHeight;
 }
 
 // ---------------------------------------------------------------------------
@@ -609,6 +629,7 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     sessionId?: string;
     update?: SessionUpdate;
     request?: PermissionRequestUi;
+    activity?: BrowserActivity;
     params?: { sessionId: string; toolCallId: string; tool: string; application: string };
   };
   if (msg.type === "pi/state" && msg.state) {
@@ -628,6 +649,8 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     syncPermissionPrompt(state.permissionRequests);
   } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update as SessionNotification["update"]);
+  } else if (msg.type === "pi/browser_activity" && msg.sessionId && msg.activity) {
+    applyBrowserActivity(msg.sessionId, msg.activity);
   } else if (msg.type === "pi/permission_request" && msg.request) {
     showPermissionPrompt(msg.request);
   } else if (msg.type === "pi/permission_prompted" && msg.params) {
@@ -636,6 +659,18 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     renderRemotePromptBanner();
   }
 });
+
+function applyBrowserActivity(sessionId: string, activity: BrowserActivity): void {
+  const blocks = blocksFor(sessionId);
+  const existing = blocks.find((b) => b.kind === "tool" && b.activities?.some((a) => a.id === activity.id));
+  const parent = existing ?? [...blocks].reverse().find((b) => b.kind === "tool" && b.title === "javascript" && b.status === "in_progress");
+  if (!parent || parent.kind !== "tool") return;
+  const activities = parent.activities ??= [];
+  const index = activities.findIndex((a) => a.id === activity.id);
+  if (index < 0) activities.push(activity);
+  else activities[index] = activity;
+  if (activeSessionId === sessionId) renderConversation();
+}
 
 // ---------------------------------------------------------------------------
 // Permission prompt (sensitive tools, §43)
@@ -668,10 +703,8 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
   const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
 
   // Friendly per-tool description.
-  desc.textContent =
-    tool === "browser_screenshot"
-      ? "Pi wants to take a screenshot of the bound tab. Approving brings the tab to the front and captures what is visible."
-      : `Pi wants to run: ${tool}.`;
+  desc.textContent = permissionPromptDescription(tool);
+  $("perm-title").textContent = tool === "browser_evaluate" ? "Enable UI automation?" : "Allow this action?";
 
   optionsWrap.textContent = "";
   // Order: Allow once (primary), Allow for this session, Always allow, Deny.
@@ -702,14 +735,29 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
       default:
         btn.className = opt.kind.startsWith("allow") ? "perm-always" : "perm-reject";
     }
-    btn.addEventListener("click", () => {
-      browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId: opt.optionId }).catch(() => {});
-      activePermId = undefined;
-      hidePermissionPrompt();
-    });
+    btn.addEventListener("click", () => answerPermissionOption(tool, permId, opt));
     optionsWrap.append(btn);
   }
   overlay.classList.remove("hidden");
+}
+
+function answerPermissionOption(tool: string, permId: string, opt: PermissionOptionUi): void {
+  const answer = (optionId: string) => {
+    void browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId }).catch(() => {});
+    if (activePermId === permId) {
+      activePermId = undefined;
+      hidePermissionPrompt();
+    }
+  };
+  if (tool !== "browser_evaluate" || !opt.kind.startsWith("allow")) {
+    answer(opt.optionId);
+    return;
+  }
+  // Firefox requires the request to originate synchronously from this click.
+  const granted = grantEvaluationPermission();
+  $("perm-options").querySelectorAll("button").forEach((button) => { button.disabled = true; });
+  void granted.then((allowed) => answer(allowed ? opt.optionId : "cancelled"))
+    .catch(() => answer("cancelled"));
 }
 
 function hidePermissionPrompt(): void {

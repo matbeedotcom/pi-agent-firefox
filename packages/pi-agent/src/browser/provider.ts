@@ -387,7 +387,7 @@ export class CapabilityToolProvider {
     ownerApplication: AgentApplication,
   ): ToolSpec {
     const executor: ReplToolExecutor = (sessionId, tool, args) =>
-      this.routeTool(sessionId, `repl:${tool}`, tool, args, mode, mcpServerId, ownerClientId, ownerApplication);
+      this.routeTool(sessionId, `repl:${tool}:${crypto.randomUUID()}`, tool, args, mode, mcpServerId, ownerClientId, ownerApplication);
     return this.repl.toolSpec(idRef, executor);
   }
 
@@ -468,6 +468,7 @@ export class CapabilityToolProvider {
    */
   /** True when a permission prompt WILL be sent for this tool call. */
   private willPrompt(sessionId: string, toolName: string): boolean {
+    if (toolName === "browser_evaluate") return true; // Firefox checks the current browser grant.
     return !this.alwaysAllowed.has(toolName) && !this.sessionAllowed.get(sessionId)?.has(toolName);
   }
 
@@ -538,6 +539,7 @@ export class CapabilityToolProvider {
     }
     if (permissionAllowed(response)) {
       const optionId = response.outcome.outcome === "selected" ? response.outcome.optionId : "";
+      if (toolName === "browser_evaluate") return; // Never cache Firefox's revocable userScripts grant.
       if (optionId === "allow_always") {
         this.alwaysAllowed.add(toolName);
         this.log.info(`${toolName}: user chose Always allow`);

@@ -7,7 +7,7 @@
  * out as a full Space tab (session rail + conversation pane).
  */
 import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
-import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme } from "@pi-browser/webext";
+import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, isVisualTool, resultParts, type ToolImage, type ActivityCardData } from "@pi-browser/webext";
 import type {
   SessionConfigOption,
   SessionConfigSelect,
@@ -48,7 +48,7 @@ interface UiState {
 
 type Block =
   | { id: number; kind: "user" | "assistant" | "thought"; text: string }
-  | { id: number; kind: "tool"; toolCallId: string; title: string; status: string; text: string; input?: unknown };
+  | { id: number; kind: "tool"; toolCallId: string; title: string; status: string; text: string; input?: unknown; images?: ToolImage[] };
 
 let blockCounter = 0;
 const transcripts = new Map<string, Block[]>();
@@ -128,7 +128,7 @@ function applySessionUpdate(sessionId: string, update: SessionUpdate): void {
         toolCallId: update.toolCallId,
         title: update.title ?? "tool",
         status: update.status ?? "in_progress",
-        text: "",
+        ...resultParts(update.content),
         input: update.rawInput,
       });
       break;
@@ -139,8 +139,8 @@ function applySessionUpdate(sessionId: string, update: SessionUpdate): void {
       if (!block || block.kind !== "tool") break;
       if (update.status) block.status = update.status;
       if (update.title) block.title = update.title;
-      const text = toolUpdateText(update);
-      if (text) block.text = text;
+      if (update.rawInput !== undefined) block.input = update.rawInput;
+      if (update.content !== undefined) Object.assign(block, resultParts(update.content));
       // The tool finished (approved or denied elsewhere): the remote
       // approval banner for it is stale.
       if (update.status && isTerminalToolStatus(update.status)) {
@@ -213,17 +213,6 @@ function chunkText(update: SessionUpdate): string {
   return chunk.content?.type === "text" ? (chunk.content.text ?? "") : "";
 }
 
-function toolUpdateText(update: SessionUpdate): string {
-  const u = update as ToolCallUpdate;
-  if (!Array.isArray(u.content)) return "";
-  const parts: string[] = [];
-  for (const c of u.content as Array<{ type?: string; content?: { type?: string; text?: string } }>) {
-    if (c?.type === "content" && c.content?.type === "text" && typeof c.content.text === "string") {
-      parts.push(c.content.text);
-    }
-  }
-  return parts.join("\n");
-}
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -407,6 +396,7 @@ function flash(text: string): void {
 // ---------------------------------------------------------------------------
 
 interface BlockDom {
+  updateActivity?: (data: ActivityCardData) => void;
   wrap: HTMLElement;
   /** Live markdown view for text blocks; undefined for tool blocks. */
   md?: MarkdownView;
@@ -432,6 +422,13 @@ function toolStatusClass(status: string): string {
 function buildBlockDom(block: Block, conv: HTMLElement): BlockDom {
   const wrap = document.createElement("div");
   let dom: BlockDom;
+  if (block.kind === "tool" && isVisualTool(block.title)) {
+    const card = createActivityCard(block);
+    dom = { wrap: card.wrap, updateActivity: card.update };
+    conv.append(card.wrap);
+    blockDoms.set(block.id, dom);
+    return dom;
+  }
   if (block.kind === "tool") {
     wrap.className = "msg tool";
     const head = document.createElement("div");
@@ -449,7 +446,16 @@ function buildBlockDom(block: Block, conv: HTMLElement): BlockDom {
     dom = { wrap, name, status, body, toolText: block.text, toolStatus: block.status, toolTitle: block.title };
   } else {
     wrap.className = `msg ${block.kind}`;
-    const md = new MarkdownView(wrap);
+    let content: HTMLElement = wrap;
+    if (block.kind === "thought") {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Reasoning";
+      content = document.createElement("div");
+      details.append(summary, content);
+      wrap.append(details);
+    }
+    const md = new MarkdownView(content);
     md.write(block.text);
     dom = { wrap, md, written: block.text.length };
   }
@@ -461,6 +467,7 @@ function buildBlockDom(block: Block, conv: HTMLElement): BlockDom {
 function renderConversation(): void {
   const conv = $<HTMLDivElement>("conversation");
   const blocks = activeSessionId ? blocksFor(activeSessionId) : [];
+  const follow = domSession !== activeSessionId || conv.scrollHeight - conv.scrollTop - conv.clientHeight < 48;
   if (domSession !== activeSessionId) {
     // Page load or session switch: rebuild from scratch.
     domSession = activeSessionId;
@@ -478,6 +485,8 @@ function renderConversation(): void {
         // A new block started: the previous text block is final.
         prev?.md?.end();
         dom = buildBlockDom(block, conv);
+      } else if (block.kind === "tool" && dom.updateActivity) {
+        dom.updateActivity(block);
       } else if (block.kind === "tool") {
         if (dom.toolTitle !== block.title && dom.name) {
           dom.name.textContent = block.title;
@@ -507,7 +516,7 @@ function renderConversation(): void {
     const last = blocks[blocks.length - 1];
     if (last) blockDoms.get(last.id)?.md?.end();
   }
-  conv.scrollTop = conv.scrollHeight;
+  if (follow) conv.scrollTop = conv.scrollHeight;
 }
 
 // ---------------------------------------------------------------------------

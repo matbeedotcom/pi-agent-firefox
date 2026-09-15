@@ -17,8 +17,10 @@ import {
   type BrowserToolCallParams,
 } from "@pi-browser/protocol";
 import { bindingOwner, bindingRefId, type SessionStore } from "@pi-browser/webext";
+import type { BrowserActivity } from "../tool-activity.js";
 import { networkLog } from "./network-log.js";
 import { ReplTabs } from "./repl-tabs.js";
+import { evaluateInPage } from "./page-evaluate.js";
 
 interface ContentResult {
   ok: boolean;
@@ -49,6 +51,7 @@ export class ToolDispatcher {
   constructor(
     private readonly store: SessionStore,
     private readonly replTabs: ReplTabs = new ReplTabs(),
+    private readonly onActivity?: (sessionId: string, activity: BrowserActivity) => void,
   ) {}
 
   private async openTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
@@ -118,6 +121,27 @@ export class ToolDispatcher {
 
   /** Entry point for x-pi-browser/tool requests from the host. */
   async handleToolCall(params: BrowserToolCallParams): Promise<unknown> {
+    const activity: BrowserActivity = {
+      id: crypto.randomUUID(), title: params.tool, status: "in_progress", input: params.arguments,
+    };
+    // Presentation must never change the outcome of a browser action.
+    const notify = () => { try { this.onActivity?.(params.sessionId, { ...activity }); } catch { /* view unavailable */ } };
+    notify();
+    try {
+      const result = await this.executeToolCall(params);
+      activity.status = "completed";
+      activity.result = result;
+      return result;
+    } catch (error) {
+      activity.status = "failed";
+      activity.result = { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
+      throw error;
+    } finally {
+      notify();
+    }
+  }
+
+  private async executeToolCall(params: BrowserToolCallParams): Promise<unknown> {
     const { sessionId, tool, arguments: args } = params;
     const def = getBrowserTool(tool);
     if (!def) {
@@ -194,18 +218,7 @@ export class ToolDispatcher {
       }
       case "browser_evaluate": {
         const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
-        // Page-world eval has its own 15 s internal deadline plus the
-        // isolated-world fallback, so give the round-trip some slack.
-        return textResult(
-          (
-            await this.content(
-              tab,
-              { type: "pi:evaluate", expression: args?.expression, arg: args?.arg },
-              Math.max(timeoutMs, 25_000),
-              frameId,
-            )
-          ).data,
-        );
+        return textResult(await evaluateInPage(tab.id as number, frameId ?? 0, args?.expression, args?.arg, timeoutMs));
       }
       case "browser_get_accessibility_tree": {
         const frameId = await this.resolveFrameId(tab.id as number, args?.frame);

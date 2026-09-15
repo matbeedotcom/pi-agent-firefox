@@ -278,6 +278,7 @@ test("permission helpers: request shape + outcome classification", () => {
 });
 
 test("toolRequiresApproval: per-application approval policy", () => {
+  assert.equal(toolRequiresApproval("firefox", "browser_evaluate"), true);
   // Firefox: only the pixel-capture tool is gated (live-gesture requirement).
   assert.equal(toolRequiresApproval("firefox", "browser_screenshot"), true);
   assert.equal(toolRequiresApproval("firefox", "browser_get_page"), false);
@@ -307,6 +308,9 @@ test("cross-app remote-prompt notification: method + app display names", () => {
 });
 
 test("permissionPromptDescription: friendly text for known tools, safe fallback", () => {
+  const evaluation = buildPermissionRequest({ sessionId: "s", toolCallId: "eval-1", toolName: "browser_evaluate" });
+  assert.deepEqual(evaluation.options.map(o => o.name), ["Enable page evaluation", "Not now"]);
+  assert.match(permissionPromptDescription("browser_evaluate"), /automate the UI/);
   assert.match(permissionPromptDescription("mail_get_message"), /email/i);
   assert.match(permissionPromptDescription("compose_prepare_reply"), /draft/i);
   assert.match(permissionPromptDescription("mail_move"), /move/i);

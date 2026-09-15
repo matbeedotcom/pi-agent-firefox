@@ -383,25 +383,29 @@ test("ToolDispatcher: screenshot that stays invisible raises structured BROWSER_
   delete (globalThis as { __captureFail?: number }).__captureFail;
 });
 
-test("ToolDispatcher: browser_evaluate routes expression+arg to the content script", async () => {
+test("ToolDispatcher: browser_evaluate targets the bound tab via userScripts", async () => {
   const store = new SessionStore();
   await store.hydrate();
   store.bind("s1", { tabId: 5, windowId: 1 });
   stub.tabs.get = async () => tab(5);
-  (globalThis as { __contentReply?: unknown }).__contentReply = { ok: true, data: { value: 42, world: "page" } };
-  const d = new ToolDispatcher(store);
-  const result = (await d.handleToolCall({
-    sessionId: "s1",
-    tool: "browser_evaluate",
-    arguments: { expression: "document.querySelectorAll('.x').length", arg: null },
-  })) as { content: Array<{ text: string }> };
-  const parsed = JSON.parse(result.content[0].text) as { value: number; world: string };
-  assert.equal(parsed.value, 42);
-  assert.equal(parsed.world, "page");
-  const sent = (globalThis as { __lastContentMsg?: { message: { type: string; expression?: string } } }).__lastContentMsg;
-  assert.equal(sent?.message.type, "pi:evaluate");
-  assert.equal(sent?.message.expression, "document.querySelectorAll('.x').length");
-  delete (globalThis as { __contentReply?: unknown }).__contentReply;
+  const extended = stub as typeof stub & { userScripts?: { execute: (o: any) => Promise<any> } };
+  let injection: any;
+  extended.userScripts = { execute: async (o) => {
+    injection = o;
+    return [{ frameId: 0, result: { value: 42, world: "page" } }];
+  } };
+  try {
+    const result = await new ToolDispatcher(store).handleToolCall({
+      sessionId: "s1", tool: "browser_evaluate",
+      arguments: { expression: "document.querySelectorAll('.x').length", arg: null },
+    }) as { content: Array<{ text: string }> };
+    assert.deepEqual(JSON.parse(result.content[0].text), { value: 42, world: "page" });
+    assert.deepEqual(injection.target, { tabId: 5, frameIds: [0] });
+    assert.equal(injection.world, "MAIN");
+    assert.match(injection.js[0].code, /document.querySelectorAll/);
+  } finally {
+    delete extended.userScripts;
+  }
 });
 
 test("ToolDispatcher: browser_get_accessibility_tree passes maxNodes/maxDepth through", async () => {
@@ -989,4 +993,26 @@ test("AcpClient: auto-detects a host installed after the add-on loaded", async (
   assert.equal(rt.connectNativeCalls, 4);
 
   client.stop(); // clear any pending reconnect timers
+});
+
+test("ToolDispatcher: activity lifecycle preserves results and is isolated from UI failure", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("activity-session", { tabId: 7, windowId: 1 });
+  stub.tabs.get = async () => ({ id: 7, windowId: 1, title: "Example", url: "https://example.com" });
+  const events: import("../src/tool-activity.js").BrowserActivity[] = [];
+  const dispatcher = new ToolDispatcher(store, new ReplTabs(), (sessionId, activity) => {
+    assert.equal(sessionId, "activity-session");
+    events.push(activity);
+  });
+  const result = await dispatcher.handleToolCall({ sessionId: "activity-session", tool: "browser_get_page", arguments: {} });
+  assert.deepEqual(events.map((e) => e.status), ["in_progress", "completed"]);
+  assert.equal(events[0].id, events[1].id);
+  assert.equal(events[1].result, result);
+  const brokenView = new ToolDispatcher(store, new ReplTabs(), () => { throw new Error("view closed"); });
+  assert.deepEqual(await brokenView.handleToolCall({ sessionId: "activity-session", tool: "browser_get_page", arguments: {} }), result);
+  events.length = 0;
+  await assert.rejects(dispatcher.handleToolCall({ sessionId: "activity-session", tool: "missing", arguments: {} }));
+  assert.deepEqual(events.map((e) => e.status), ["in_progress", "failed"]);
+  assert.ok(events[1].result);
 });

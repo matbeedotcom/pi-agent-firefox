@@ -189,6 +189,21 @@ test("approval gate: thunderbird mail tool is denied until the user approves", a
   assert.equal(tb.toolCalls.length, 0);
 });
 
+test("evaluation checks Firefox permission on every call, including after an earlier allow", async () => {
+  const fake = setupFakeThunderbird(PERMISSION_ALLOW_ALWAYS);
+  const tools = fake.provider.createTools({ id: "s-ff" }, "legacy", undefined, ["browser"], undefined, "firefox");
+  const evaluate = tools.find(t => t.name === "browser_evaluate")!;
+  await evaluate.execute("eval-1", { expression: "1" }, undefined);
+  await evaluate.execute("eval-2", { expression: "2" }, undefined);
+  assert.equal(fake.permRequests.length, 2, "the host never caches the revocable Firefox grant");
+  assert.equal(fake.toolCalls.length, 2);
+  const denied = setupFakeThunderbird(PERMISSION_REJECT);
+  const deniedTool = denied.provider.createTools({ id: "s-ff" }, "legacy", undefined, ["browser"], undefined, "firefox")
+    .find(t => t.name === "browser_evaluate")!;
+  await assert.rejects(deniedTool.execute("eval-denied", { expression: "1" }, undefined), /denied permission/);
+  assert.equal(denied.toolCalls.length, 0);
+});
+
 test("approval gate: allow_once executes the tool; next call asks again", async () => {
   const tb = setupFakeThunderbird(PERMISSION_ALLOW_ONCE);
   const tools = tb.provider.createTools({ id: "s-tb" }, "legacy", undefined, ["mail"], undefined, "thunderbird");

@@ -5,7 +5,7 @@ plus a Pi package (`@pi-browser/agent`) that provides the **`com.matbee.agent` N
 
 Pi can inspect and operate a tab bound to a session — read page content/DOM (or a compact
 accessibility tree), click and type into referenced elements, wait for selectors, evaluate page
-JavaScript (page world, with isolated-world fallback), read the page console (JS errors, unhandled
+JavaScript (page world, via Firefox user scripts), read the page console (JS errors, unhandled
 rejections, failed loads) and the tab's network requests (4xx/5xx, blocked, timing), hit-test
 viewport coordinates, navigate, reload, and take permission-gated screenshots — including inside
 child frames (an optional `frame` argument targets any frame by id or URL; `browser_get_dom`
@@ -71,6 +71,17 @@ With an MCP-capable client, the add-on also serves `pi_new_session`, `pi_select_
 handlers the sidebar uses.
 
 ### Browser scripting: the `javascript` REPL
+
+Page evaluation requires Firefox 153+ and the optional **user scripts** permission.
+The first `page.evaluate` call shows an **Enable UI automation?** tool permission
+request in the Pi sidebar. Click **Enable page evaluation**, then accept Firefox’s
+permission prompt (check the user-scripts box, then click **Allow**). The waiting
+call continues automatically; later calls skip the prompt while permission is granted.
+Existing tabs work immediately. `page.evaluate` uses
+`userScripts.execute` to compile scripts directly in the page world, preserving
+page globals even when a site’s CSP blocks `eval`/`Function`. The site’s CSP and
+the extension’s CSP remain unchanged. Other navigation and DOM tools work
+without this optional permission.
 
 Beyond the individual `browser_*` tools, the agent can call a persistent
 `javascript` tool — a Browser-Use-style REPL bound to the session's tab. A

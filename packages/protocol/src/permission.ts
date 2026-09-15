@@ -65,6 +65,13 @@ export function buildPermissionRequest(params: {
     { optionId: PERMISSION_ALLOW_ALWAYS, name: "Always allow", kind: "allow_always" },
     { optionId: PERMISSION_REJECT, name: "Deny", kind: "reject_once" },
   ];
+  if (params.toolName === "browser_evaluate") {
+    // Firefox owns this persistent extension permission, not the host cache.
+    options.splice(0, options.length,
+      { optionId: PERMISSION_ALLOW_ONCE, name: "Enable page evaluation", kind: "allow_once" },
+      { optionId: PERMISSION_REJECT, name: "Not now", kind: "reject_once" },
+    );
+  }
   return {
     sessionId: params.sessionId,
     toolCall: {
@@ -95,7 +102,7 @@ export function permissionAllowed(response: RequestPermissionResponse | undefine
  * the application of the client that EXECUTES the tool (not the session
  * owner — in broker mode a call is routed to the peer that serves it).
  *
- *   - firefox: only browser_screenshot (live-gesture pixel capture).
+ *   - firefox: browser_screenshot and browser_evaluate (Firefox checks its user-scripts grant).
  *   - thunderbird: every tool on the mail surface (read-only mail, compose,
  *     mail mutations, contacts) — the LLM's access to the user's mailbox and
  *     address book is approval-gated per tool.
@@ -109,12 +116,16 @@ export function toolRequiresApproval(application: AgentApplication, toolName: st
       isContactsTool(toolName)
     );
   }
-  return toolName === "browser_screenshot";
+  return toolName === "browser_screenshot" || toolName === "browser_evaluate";
 }
 
 /** Short human-facing labels for the permission prompt's description line. */
 const TOOL_PROMPT_TEXT: Record<string, string> = {
   // Browser
+  browser_evaluate:
+    "In order to automate the UI on this page, Pi needs permission to run browser scripts. " +
+    "Firefox will ask you to allow user scripts. Once enabled, Pi can continue automatically; " +
+    "you can revoke this permission in Firefox’s extension settings.",
   browser_screenshot:
     "Pi wants to take a screenshot of the bound tab. Approving brings the tab to the front and captures what is visible.",
   // Read-only mail

@@ -80,7 +80,7 @@ const CLOSE_TIMEOUT_MS = 2_000;
  */
 const PERMISSION_BLOCK_CAP_MS = 120_000;
 /** Only these tools may block on the user's permission overlay (WS2/T2.1). */
-const DEFAULT_PERMISSION_TOOLS = ["browser_screenshot"];
+const DEFAULT_PERMISSION_TOOLS = ["browser_screenshot", "browser_evaluate"];
 
 /**
  * Per-cell accounting for permission-prompt pauses (WS2/T2.1). Cell-scoped on

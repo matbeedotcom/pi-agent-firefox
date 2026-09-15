@@ -115,7 +115,7 @@ in `firefox/src/content/`):
 |---|---|
 | `page.goto` | `browser_navigate {url}` (absolute URL validated; `tab_navigated` host notification invalidates refs) |
 | `page.info` | `browser_get_page` |
-| `page.evaluate` (page world) | `browser_evaluate {expression, arg, frame}` — MAIN-world helper (real page globals), isolated-world fallback, 15 s deadline, JSON-safe `{value,error,world}`, 20 KB cap |
+| `page.evaluate` (page world) | `browser_evaluate {expression, arg, frame}` — `userScripts.execute` in MAIN (Firefox 153+, optional user-scripts permission), direct source compilation works under strict page CSP; JSON-safe `{value,error,world}`, 20 KB cap, tool timeout without retries |
 | `page.snapshot` (AX) | `browser_get_accessibility_tree {maxNodes,maxDepth,frame}` — structured walker (roles, accessible names, **refs**, pruning, shadow-DOM traversal) — **serializes to a text outline today; we need the structured node list** |
 | `page.clickAt(x,y)` | `browser_click {ref}` (content `focus()+click()`), `browser_element_at {x,y}` → ref — **no atomic coordinate click** |
 | typing | `browser_type {ref,text,submit}` (value-setter + input/change; `execCommand('insertText')`/InputEvent fallback) — solid, ref-based |
