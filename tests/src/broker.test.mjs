@@ -69,6 +69,8 @@ function spawnHost(brokerDirPath, extraEnv = {}) {
       PI_BROWSER_BACKEND: "mock",
       PI_BROWSER_LOG_LEVEL: "silent",
       PI_BROWSER_BROKER_DIR: brokerDirPath,
+      PI_BROWSER_HEARTBEAT_FILE: path.join(brokerDirPath, "heartbeat"),
+      PI_BROWSER_LOG_FILE: "off",
       ...extraEnv,
     },
   });
@@ -195,21 +197,17 @@ class FakeMail {
 // Scenario setup: broker (host A) + relay (host B) + both fake apps
 // ---------------------------------------------------------------------------
 
-async function startScenario(script) {
+async function startScenario(script, firstApp = "firefox", simultaneous = false) {
   const brokerDirPath = freshBrokerDir();
   const browser = new FakeBrowser();
   const mail = new FakeMail();
 
   const hostA = spawnHost(brokerDirPath, { PI_BROWSER_MOCK_SCRIPT: script });
-  const ff = hostA; // fake Firefox talks to the broker over stdio
+  if (!simultaneous) await waitForBroker(brokerDirPath);
+  const hostB = spawnHost(brokerDirPath, { PI_BROWSER_MOCK_SCRIPT: script });
+  const ff = firstApp === "firefox" ? hostA : hostB;
+  const tb = firstApp === "firefox" ? hostB : hostA;
   browser.attach(ff);
-
-  // host A must become the broker (state file with pid + token).
-  const brokerState = await waitForBroker(brokerDirPath);
-
-  // host B starts later and must attach as a relay.
-  const hostB = spawnHost(brokerDirPath);
-  const tb = hostB; // fake Thunderbird talks through the relay
   mail.attach(tb);
 
   // Initialize both clients exactly like the real add-ons.
@@ -247,6 +245,7 @@ async function startScenario(script) {
     ["mail", "attachments", "compose", "mailModify", "contacts"],
   );
 
+  const brokerState = await waitForBroker(brokerDirPath);
   return { brokerDirPath, brokerState, hostA, hostB, ff, tb, browser, mail };
 }
 
@@ -529,3 +528,27 @@ test("stdout invariant: relay host stdout carries only framed protocol data", as
     await shutdown(sc.hostA);
   }
 });
+
+for (const firstApp of ["firefox", "thunderbird"]) {
+  for (const simultaneous of [false, true]) {
+    test(`startup: ${firstApp} first, simultaneous=${simultaneous}`, async () => {
+      const sc = await startScenario(writeScript([{
+        match: "startup check",
+        toolCalls: [{ toolName: "browser_get_page" }, { toolName: "mail_get_selected_messages" }],
+      }]), firstApp, simultaneous);
+      try {
+        const { sessionId } = await sc.ff.request(AGENT_METHODS.session_new, { cwd: "/work/startup" });
+        await sc.ff.request(AGENT_METHODS.session_prompt, {
+          sessionId, prompt: [{ type: "text", text: "startup check" }],
+        });
+        assert.ok(sc.browser.calls.includes("browser_get_page"));
+        assert.ok(sc.mail.calls.includes("mail_get_selected_messages"), "both apps share the elected broker");
+        const state = await waitForBroker(sc.brokerDirPath);
+        assert.ok([sc.hostA.child.pid, sc.hostB.child.pid].includes(state.pid));
+      } finally {
+        await shutdown(sc.hostB);
+        await shutdown(sc.hostA);
+      }
+    });
+  }
+}

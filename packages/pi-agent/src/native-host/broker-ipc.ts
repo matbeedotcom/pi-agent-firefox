@@ -100,6 +100,30 @@ class RelayChannel extends Duplex {
   }
 }
 
+/** Reclaim only sockets whose broker and listener have both gone away. */
+async function reclaimBrokerSocket(paths: ReturnType<typeof brokerPaths>): Promise<void> {
+  if (existsSync(paths.socket)) {
+    const state = readBrokerState(paths.state);
+    if (state && isPidAlive(state.pid)) {
+      throw new Error(`another broker is already running (pid ${state.pid})`);
+    }
+    // A listener can exist before its state file is published. Never unlink
+    // a live socket during that startup window.
+    const probe = new net.Socket();
+    let listening = false;
+    try {
+      await connectWithTimeout(probe, paths.socket, 500);
+      listening = true;
+    } catch {
+      // No listener remains at the stale socket.
+    } finally {
+      probe.destroy();
+    }
+    if (listening) throw new Error("another broker is starting");
+    rmSync(paths.socket, { force: true });
+  }
+}
+
 /**
  * Start the broker socket server. Creates the 0700 run dir, reclaims a
  * stale socket when the previous broker is gone, writes the 0600 state
@@ -115,14 +139,7 @@ export async function startBrokerServer(opts: StartBrokerServerOptions): Promise
     /* best-effort */
   }
 
-  // Reclaim a stale socket (previous broker crashed without cleanup).
-  if (existsSync(paths.socket)) {
-    const state = readBrokerState(paths.state);
-    if (state && isPidAlive(state.pid)) {
-      throw new Error(`another broker is already running (pid ${state.pid})`);
-    }
-    rmSync(paths.socket, { force: true });
-  }
+  await reclaimBrokerSocket(paths);
 
   const token = randomBytes(24).toString("hex");
   const server = net.createServer((socket) => handleConnection(socket));
@@ -165,7 +182,7 @@ export async function startBrokerServer(opts: StartBrokerServerOptions): Promise
       }
       try {
         decoder.push(chunk);
-        for (const frame of decoder.readAll()) {
+        for (let frame = decoder.read(); frame !== null; frame = decoder.read()) {
           if (handshakeDone) {
             chan.push(frame);
             continue;
@@ -274,7 +291,7 @@ async function readHandshakeAck(socket: net.Socket, timeoutMs: number): Promise<
     }, timeoutMs);
     function onData(chunk: Buffer): void {
       decoder.push(chunk);
-      for (const frame of decoder.readAll()) {
+      for (let frame = decoder.read(); frame !== null; frame = decoder.read()) {
         let msg: { type?: unknown } | undefined;
         try {
           msg = JSON.parse(frame.toString("utf8"));

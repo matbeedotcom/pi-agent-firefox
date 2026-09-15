@@ -181,9 +181,6 @@ async function main(): Promise<void> {
     };
   };
 
-  const stdioDispatcher = createStdioTransport(process.stdin, process.stdout, log);
-  wireClient("stdio", stdioDispatcher);
-
   let brokerServer: BrokerServerHandle | undefined;
   if (isBrokerIpcSupported()) {
     try {
@@ -206,9 +203,16 @@ async function main(): Promise<void> {
         await runRelay(attachment.channel, attachment.initial, process.stdin, process.stdout, log);
         process.exit(0);
       }
-      log.error("no broker available; continuing single-client mode (cross-app disabled)");
+      // Let the add-on reconnect after an election failure instead of keeping
+      // an isolated host alive with cross-app routing permanently disabled.
+      throw new Error("broker election failed; reconnect to retry", { cause: err });
     }
   }
+
+  // Elect the broker before consuming stdin: a race loser must relay the
+  // original initialize request, with no competing dispatcher on its pipes.
+  const stdioDispatcher = createStdioTransport(process.stdin, process.stdout, log);
+  wireClient("stdio", stdioDispatcher);
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));

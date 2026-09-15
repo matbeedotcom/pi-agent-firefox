@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import net from "node:net";
+import { once } from "node:events";
 
 import { createLogger } from "../src/logger.js";
 import { encodeFrame, FrameDecoder } from "../src/native-host/framing.js";
@@ -202,5 +204,59 @@ test("broker: dir permissions enforced despite umask", async () => {
   } finally {
     await server.close();
     process.env.PI_BROWSER_BROKER_DIR = brokerDir;
+  }
+});
+
+test("broker: a live socket without published state cannot be reclaimed", async () => {
+  const server = await startBrokerServer({ log: quiet, onClient: () => {} });
+  try {
+    rmSync(brokerPaths().state);
+    await assert.rejects(startBrokerServer({ log: quiet, onClient: () => {} }), /another broker is starting/);
+    assert.ok(existsSync(brokerPaths().socket));
+  } finally {
+    await server.close();
+  }
+});
+
+test("broker: preserves an ACP frame coalesced with the relay handshake", { timeout: 4000 }, async () => {
+  let resolvePayload!: (chunk: Buffer) => void;
+  const payload = new Promise<Buffer>((resolve) => { resolvePayload = resolve; });
+  const server = await startBrokerServer({
+    log: quiet,
+    onClient: (channel) => channel.once("data", resolvePayload),
+  });
+  const socket = net.createConnection(brokerPaths().socket);
+  try {
+    await once(socket, "connect");
+    const request = encodeFrame({ jsonrpc: "2.0", id: 1, method: "initialize" });
+    socket.write(Buffer.concat([
+      encodeFrame({ type: PI_BROKER.handshake, token: readBrokerState(brokerPaths().state)!.token }),
+      request,
+    ]));
+    assert.deepEqual(await payload, request);
+  } finally {
+    socket.destroy();
+    await server.close();
+  }
+});
+
+test("relay: preserves an ACP frame coalesced with the handshake ack", { timeout: 4000 }, async () => {
+  const response = encodeFrame({ jsonrpc: "2.0", id: 1, result: {} });
+  const server = net.createServer((socket) => {
+    socket.once("data", () => socket.write(Buffer.concat([
+      encodeFrame({ type: PI_BROKER.handshakeAck, version: PI_BROKER.version }), response,
+    ])));
+  });
+  server.listen(brokerPaths().socket);
+  await once(server, "listening");
+  writeFileSync(brokerPaths().state, JSON.stringify({ pid: process.pid, token: "test", socket: brokerPaths().socket }));
+  try {
+    const attachment = await tryRelayAttach(quiet);
+    assert.ok(attachment);
+    assert.deepEqual(attachment.initial, response);
+    attachment.channel.destroy();
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(brokerPaths().state, { force: true });
   }
 });
