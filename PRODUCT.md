@@ -1670,11 +1670,14 @@ for diagnostics.
 
 Firefox forwards native-host stderr into browser debugging output, making it useful for troubleshooting.
 
-Optionally write persistent logs to:
+Persistent logs are written by default to:
 
 ```text
-~/.pi/browser/logs/
+~/.pi/browser/logs/host-<pid>.log
 ```
+
+Files older than 7 days are pruned at broker start. Set `PI_BROWSER_LOG_FILE`
+to a path to override, or to `off` to disable (stderr stays on).
 
 ---
 

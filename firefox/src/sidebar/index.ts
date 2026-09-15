@@ -39,6 +39,8 @@ interface UiState {
   sessions: SessionUi[];
   /** Active browser theme (LWT colors); undefined when the API is unavailable. */
   theme?: PiTheme;
+  /** Still-pending permission prompts; the modal is re-derived from this. */
+  permissionRequests?: PermissionRequestUi[];
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +175,51 @@ function isTerminalToolStatus(status: string): boolean {
 
 function clearRemotePrompt(sessionId: string, toolCallId: string): void {
   if (remotePrompts.delete(`${sessionId}:${toolCallId}`)) renderRemotePromptBanner();
+}
+
+/** Last seen status.state (from pi/state) — used to detect a mid-turn drop. */
+let prevStatusState: string | undefined;
+
+/**
+ * Mark orphaned tool blocks after a connection drop: a dead host never sends
+ * the final tool_call_update, so "in_progress" would spin forever and the
+ * conversation would look stuck until the user manually nudged.
+ */
+function markInterruptedToolBlocks(): void {
+  let changed = false;
+  for (const blocks of transcripts.values()) {
+    for (const b of blocks) {
+      if (b.kind === "tool" && (b.status === "pending" || b.status === "in_progress")) {
+        b.status = "interrupted";
+        if (!b.text) {
+          b.text = "Interrupted — the native host connection dropped before this tool finished. Send a nudge to continue.";
+        }
+        changed = true;
+      }
+    }
+  }
+  if (changed) renderConversation();
+}
+
+/**
+ * The permission prompt is re-derivable from state: the background carries
+ * every still-pending prompt in each pi/state (the prompt is LOST if the
+ * sidebar was closed when it arrived), so the modal syncs against that list
+ * — show the newest pending prompt, hide the modal once its prompt has been
+ * answered / timed out / cancelled.
+ */
+let activePermId: string | undefined;
+
+function syncPermissionPrompt(requests: PermissionRequestUi[] | undefined): void {
+  if (!requests || requests.length === 0) {
+    if (activePermId !== undefined) {
+      activePermId = undefined;
+      hidePermissionPrompt();
+    }
+    return;
+  }
+  const req = requests[requests.length - 1];
+  if (activePermId !== req.toolCall.toolCallId) showPermissionPrompt(req);
 }
 
 function renderRemotePromptBanner(): void {
@@ -453,7 +500,9 @@ function renderConversation(): void {
       const name = document.createElement("span");
       name.textContent = block.title;
       const status = document.createElement("span");
-      status.className = `tool-status ${block.status === "completed" ? "done" : block.status === "failed" ? "failed" : ""}`;
+      const statusClass =
+        block.status === "completed" ? "done" : block.status === "failed" ? "failed" : block.status === "interrupted" ? "interrupted" : "";
+      status.className = `tool-status ${statusClass}`;
       status.textContent = block.status;
       head.append(name, status);
       div.append(head);
@@ -549,10 +598,20 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     params?: { sessionId: string; toolCallId: string; tool: string; application: string };
   };
   if (msg.type === "pi/state" && msg.state) {
-    uiState = msg.state;
-    activeSessionId = msg.state.activeSessionId;
-    applyPiTheme(msg.state.theme);
+    const state = msg.state;
+    // The connection dropped mid-turn (host exit, port EOF, event-page
+    // reload): tool blocks left at "in_progress" will never receive a final
+    // tool_call_update — mark them so the transcript tells the truth and the
+    // user knows the turn is over and a nudge is safe.
+    if (prevStatusState === "connected" && state.status.state !== "connected") {
+      markInterruptedToolBlocks();
+    }
+    prevStatusState = state.status.state;
+    uiState = state;
+    activeSessionId = state.activeSessionId;
+    applyPiTheme(state.theme);
     renderAll();
+    syncPermissionPrompt(state.permissionRequests);
   } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update as SessionNotification["update"]);
   } else if (msg.type === "pi/permission_request" && msg.request) {
@@ -585,6 +644,7 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
   const desc = $("perm-desc");
   const optionsWrap = $("perm-options");
   const permId = request.toolCall.toolCallId;
+  activePermId = permId;
   // Guard against a stale sidebar (no modal markup): answer "cancelled" so the
   // host never hangs, rather than crashing the message handler.
   if (!overlay || !desc || !optionsWrap) {
@@ -630,6 +690,7 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
     }
     btn.addEventListener("click", () => {
       browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId: opt.optionId }).catch(() => {});
+      activePermId = undefined;
       hidePermissionPrompt();
     });
     optionsWrap.append(btn);
@@ -736,8 +797,10 @@ void (async () => {
     const state = (await action<UiState>("get_state")) as UiState;
     uiState = state;
     activeSessionId = state.activeSessionId;
+    prevStatusState = state.status.state;
     applyPiTheme(state.theme);
     renderAll();
+    syncPermissionPrompt(state.permissionRequests);
     // Rehydrate the transcript of the active session if needed.
     const active = state.sessions.find((s) => s.sessionId === activeSessionId);
     if (active && !active.loaded) {

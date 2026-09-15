@@ -84,7 +84,13 @@ function pushPermissionRequest(request: RequestPermissionRequest): void {
 /** Resolve a pending permission prompt (from the space/pane or a timeout). */
 function resolvePermission(permId: string, optionId: string | "cancelled"): void {
   const pending = pendingPermissions.get(permId);
-  if (!pending) return;
+  if (!pending) {
+    // The event page reloaded (map wiped) or the prompt already resolved:
+    // the click is lost. Log it — a silent no-op here hides the
+    // "I clicked Allow and nothing happened" class of stall.
+    console.warn(`[pi-thunderbird] resolvePermission: no pending prompt for ${permId}, option=${optionId}`);
+    return;
+  }
   clearTimeout(pending.timer);
   pendingPermissions.delete(permId);
   pending.resolve(optionId);

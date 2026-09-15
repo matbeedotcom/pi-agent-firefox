@@ -20,8 +20,10 @@
  * stdout invariant: only the host/relay transport writes to stdout;
  * everything else logs to stderr.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { PI_BROWSER_META } from "@pi-browser/protocol";
 import { createLogger } from "../logger.js";
 import { createStdioTransport, type Dispatcher } from "./transport.js";
@@ -40,6 +42,42 @@ import { runRelay } from "./relay.js";
 
 const require = createRequire(import.meta.url);
 
+/**
+ * Persistent host log (PRODUCT.md §43): defaults to
+ * ~/.pi/browser/logs/host-<pid>.log. Native-host stderr only survives in the
+ * about:debugging runtime log, so a file is what makes mid-session drops
+ * (e.g. a tool call stuck at in_progress) diagnosable after the fact.
+ * PI_BROWSER_LOG_FILE overrides the path; "off" (or empty) disables logging
+ * to file (stderr stays on).
+ */
+function resolveLogPath(): string | undefined {
+  const env = process.env.PI_BROWSER_LOG_FILE;
+  if (env === "off" || env === "none") return undefined;
+  if (env === undefined || env === "") {
+    return join(homedir(), ".pi", "browser", "logs", `host-${process.pid}.log`);
+  }
+  return env;
+}
+
+/** Best-effort cleanup of old per-pid host logs (broker startup only). */
+function pruneOldLogs(dir: string): void {
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return; // dir may not exist yet — createLogger mkdirs it on first write
+  }
+  for (const name of names) {
+    if (!name.startsWith("host-") || !name.endsWith(".log")) continue;
+    try {
+      if (statSync(join(dir, name)).mtimeMs < cutoff) unlinkSync(join(dir, name));
+    } catch {
+      // concurrent removal — ignore
+    }
+  }
+}
+
 function piVersion(): string {
   try {
     const pkgPath = require.resolve("@earendil-works/pi-coding-agent/package.json");
@@ -51,10 +89,11 @@ function piVersion(): string {
 }
 
 async function main(): Promise<void> {
-  const log = createLogger({
-    ...(process.env.PI_BROWSER_LOG_FILE ? { filePath: process.env.PI_BROWSER_LOG_FILE } : {}),
-  });
-  log.info(`host starting pid=${process.pid} node=${process.version}`);
+  const logPath = resolveLogPath();
+  const log = createLogger(logPath ? { filePath: logPath } : {});
+  log.info(
+    `host starting pid=${process.pid} node=${process.version}${logPath ? ` log=${logPath}` : " log=off"}`,
+  );
 
   // --- Relay mode: a broker is already running (plan §26) ----------------
   if (isBrokerIpcSupported()) {
@@ -77,6 +116,8 @@ async function main(): Promise<void> {
       ...(process.env.PI_BROWSER_AGENT_DIR ? { agentDir: process.env.PI_BROWSER_AGENT_DIR } : {}),
     });
   log.info(`backend: ${backendKind}`);
+  // Only the broker prunes: relays exit within milliseconds of startup.
+  if (logPath) pruneOldLogs(dirname(logPath));
 
   const registry = new CapabilityRegistry(log);
   const provider = new CapabilityToolProvider(undefined, log, registry);

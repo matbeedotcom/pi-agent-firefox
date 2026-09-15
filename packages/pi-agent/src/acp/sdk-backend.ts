@@ -83,6 +83,8 @@ export class PiSdkBackend implements PiBackend {
   private runtimePromise: Promise<void>;
   /** One coherent services bundle per effective session cwd (cached). */
   private servicesByCwd = new Map<string, AgentSessionServices>();
+  /** Serializes resource reloads per services bundle (concurrent spawns, same cwd). */
+  private reloadChains = new Map<AgentSessionServices, Promise<void>>();
   private builtinFactories: BuiltinExtensionFactory[] | undefined;
   private builtinFactoriesPromise: Promise<BuiltinExtensionFactory[]> | undefined;
   private sessions = new Set<BackendSession>();
@@ -162,6 +164,10 @@ export class PiSdkBackend implements PiBackend {
       customTools: opts.customTools,
       modelValueId: opts.modelValueId,
       thinkingLevel: opts.thinkingLevel,
+      // Fresh session: a full resource re-scan is safe (nothing to inherit),
+      // so a SKILL.md added since this cwd's services bundle was cached is
+      // picked up without a host restart.
+      refresh: true,
     });
     this.opts.log.info(`created session ${session.sessionId} cwd=${opts.cwd}`);
     return session;
@@ -193,9 +199,12 @@ export class PiSdkBackend implements PiBackend {
     customTools?: ToolSpec[];
     modelValueId?: string;
     thinkingLevel?: string;
+    /** Re-scan resources before spawning (create only; see refreshResources). */
+    refresh?: boolean;
   }): Promise<BackendSession> {
-    const { cwd, sessionManager, customTools, modelValueId, thinkingLevel } = args;
+    const { cwd, sessionManager, customTools, modelValueId, thinkingLevel, refresh } = args;
     const services = await this.servicesFor(cwd);
+    if (refresh) await this.refreshResources(services);
     const options: Record<string, unknown> = { services, sessionManager };
     if (modelValueId) {
       const model = this.resolveModel(modelValueId);
@@ -225,6 +234,37 @@ export class PiSdkBackend implements PiBackend {
     }
     this.opts.log.info(`session ${agentSession.sessionId}: model=${m?.provider}/${m?.id}`);
     return this.wrapSession(agentSession, cwd);
+  }
+
+  /**
+   * Re-scan resources (skills, prompt templates, themes, project files) before
+   * a NEW session is spawned, so a SKILL.md the user added (or edited) since
+   * this cwd's services bundle was cached is visible in the session's system
+   * prompt — without restarting the host process. The system prompt reads
+   * resourceLoader.getSkills() at session construction, so the reload must
+   * happen here, not at servicesFor() time. Only createSession() does this:
+   * resumed/loaded sessions keep the resource set they started with, so past
+   * turns replay deterministically and resume stays cheap. Best-effort: on
+   * failure the loader keeps its previous resource set and the session starts.
+   * Reloads are chained per services bundle so concurrent spawns for the same
+   * cwd never interleave a reload with another's.
+   */
+  private refreshResources(services: AgentSessionServices): Promise<void> {
+    const prev = this.reloadChains.get(services) ?? Promise.resolve();
+    const next = prev.then(async () => {
+      try {
+        const before = services.resourceLoader.getSkills().skills.length;
+        await services.resourceLoader.reload();
+        const after = services.resourceLoader.getSkills().skills.length;
+        if (after !== before) {
+          this.opts.log.info(`resources refreshed for cwd=${services.cwd}: skills ${before} -> ${after}`);
+        }
+      } catch (err) {
+        this.opts.log.warn(`resource reload failed for cwd=${services.cwd} (keeping previous resource set)`, err);
+      }
+    });
+    this.reloadChains.set(services, next);
+    return next;
   }
 
   private resolveModel(valueId: string): PiModel | undefined {

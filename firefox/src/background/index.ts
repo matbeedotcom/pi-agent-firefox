@@ -118,6 +118,13 @@ let theme: PiTheme | undefined;
 interface PendingPermission {
   resolve: (optionId: string | "cancelled") => void;
   timer: ReturnType<typeof setTimeout>;
+  /**
+   * The original request, kept so the prompt can be re-derived from state:
+   * the sidebar may have been CLOSED (or the event page reloaded) when the
+   * prompt first arrived, so every pi/state carries the still-pending list
+   * and the sidebar re-shows the modal on the next push / on open.
+   */
+  request: RequestPermissionRequest;
 }
 const pendingPermissions = new Map<string, PendingPermission>();
 
@@ -135,10 +142,20 @@ function pushPermissionRequest(request: RequestPermissionRequest): void {
 /** Resolve a pending permission prompt (from the sidebar or a timeout). */
 function resolvePermission(permId: string, optionId: string | "cancelled"): void {
   const pending = pendingPermissions.get(permId);
-  if (!pending) return;
+  if (!pending) {
+    // The event page reloaded (map wiped) or the prompt already resolved:
+    // the click is lost. Log it — a silent no-op here hides the
+    // "I clicked Allow and nothing happened" class of stall.
+    console.warn(`[pi-browser] resolvePermission: no pending prompt for ${permId}, option=${optionId}`);
+    return;
+  }
   clearTimeout(pending.timer);
   pendingPermissions.delete(permId);
   pending.resolve(optionId);
+  // Re-sync the sidebar: its modal is stale now (a click hides it locally,
+  // but a timeout/cancel/late reply must close it too, and a NEW pending
+  // prompt, if any, should be shown next).
+  pushState();
 }
 
 /**
@@ -155,7 +172,7 @@ function requestPermissionFromUser(
     resolvePermission(permId, "cancelled");
   }, PERMISSION_PROMPT_TIMEOUT_MS);
   const answer = new Promise<string | "cancelled">((resolve) => {
-    pendingPermissions.set(permId, { resolve, timer });
+    pendingPermissions.set(permId, { resolve, timer, request });
   });
   pushPermissionRequest(request);
   return answer.then((optionId) => {
@@ -178,6 +195,12 @@ interface UiState {
   sessions: ReturnType<SessionStore["snapshot"]>["sessions"];
   lastSessionId?: string;
   theme?: PiTheme;
+  /** Still-pending permission prompts (sidebar re-shows the modal from this). */
+  permissionRequests: RequestPermissionRequest[];
+}
+
+function pendingPermissionRequests(): RequestPermissionRequest[] {
+  return [...pendingPermissions.values()].map((p) => p.request);
 }
 
 function pushState(): void {
@@ -187,6 +210,7 @@ function pushState(): void {
     sessions: store.snapshot().sessions,
     ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
     ...(theme ? { theme } : {}),
+    permissionRequests: pendingPermissionRequests(),
   };
   browser.runtime
     .sendMessage({ type: "pi/state", state })
@@ -451,6 +475,7 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
         sessions: store.snapshot().sessions,
         ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
         ...(theme ? { theme } : {}),
+        permissionRequests: pendingPermissionRequests(),
       };
     }
     case "new_session": {

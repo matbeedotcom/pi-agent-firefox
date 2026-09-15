@@ -328,6 +328,10 @@ button:disabled {
   color: var(--err);
 }
 
+.msg.tool .tool-status.interrupted {
+  color: var(--warn);
+}
+
 .msg .code {
   font-family: ui-monospace, monospace;
   background: var(--bg);
