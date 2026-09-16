@@ -317,6 +317,27 @@ const CONTROL_SCHEMAS: Record<string, TSchema> = {
     { additionalProperties: false, required: ["sessionId"] },
   ),
 
+  pi_bind_tab: Type.Object(
+    {
+      sessionId,
+      tabId: Type.Number({ description: "Firefox tab id (from pi_list_tabs)." }),
+    },
+    { additionalProperties: false, required: ["sessionId", "tabId"] },
+  ),
+
+  pi_open_tab: Type.Object(
+    {
+      sessionId,
+      url: Type.String({ description: 'URL for the new tab, e.g. "https://example.com".' }),
+    },
+    { additionalProperties: false, required: ["sessionId", "url"] },
+  ),
+
+  pi_list_tabs: Type.Object(
+    { sessionId },
+    { additionalProperties: false, required: ["sessionId"] },
+  ),
+
   pi_unbind_tab: Type.Object(
     { sessionId },
     { additionalProperties: false, required: ["sessionId"] },

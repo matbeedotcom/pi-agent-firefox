@@ -437,7 +437,9 @@ export const REPL_TOOLS: readonly BrowserToolDef[] = [
     name: "javascript",
     description:
       "Drive the real Firefox tab bound to this session with JavaScript — use this tool (not shell commands) for " +
-      "multi-step browser work. Work in a loop: OBSERVE (snapshot/screenshot/evaluate) -> ACT (goto/click/type, one " +
+      "multi-step browser work. If the session has no bound tab yet, every primitive fails with BROWSER_NOT_BOUND — " +
+      "call the pi_open_tab control tool (create + bind a new tab) or pi_bind_tab first. " +
+      "Work in a loop: OBSERVE (snapshot/screenshot/evaluate) -> ACT (goto/click/type, one " +
       "transaction per cell) -> VERIFY (re-snapshot; element refs go stale after navigation) -> PERSIST (checkpoint " +
       "between steps of longer tasks). " +
       "State (variables, helpers) persists across calls; top-level await is supported; the last expression is printed. " +

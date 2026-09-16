@@ -60,11 +60,14 @@ export class ToolDispatcher {
     private readonly onActivity?: (sessionId: string, activity: BrowserActivity) => void,
   ) {}
 
-  private async openTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
-    const url = args?.url;
-    if (typeof url !== "string" || !url.trim()) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_open_tab requires a url string");
-    }
+  /**
+   * Core open+bind (shared by browser_open_tab and the pi_open_tab control
+   * tool): create the tab, register it as REPL-owned (closed on unbind),
+   * rebind the session to it. Works without a prior binding — that is the
+   * point of pi_open_tab. Returns {tabId, url} so the control path can
+   * report the new id.
+   */
+  async openAgentTab(sessionId: string, url: string): Promise<{ tabId: number; url: string }> {
     const current = this.store.getBinding(sessionId);
     // The user's tab is the restore point; re-binding to a REPL tab (or
     // back to the user's tab) keeps the FIRST user binding as home.
@@ -81,7 +84,15 @@ export class ToolDispatcher {
       tabId,
       tabTitle: url,
     });
-    return textResult({ tabId, url });
+    return { tabId, url };
+  }
+
+  private async openTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
+    const url = args?.url;
+    if (typeof url !== "string" || !url.trim()) {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_open_tab requires a url string");
+    }
+    return textResult(await this.openAgentTab(sessionId, url.trim()));
   }
 
   private async closeTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {

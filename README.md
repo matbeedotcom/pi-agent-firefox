@@ -70,8 +70,11 @@ add-on side — `add-on: detected (heartbeat Ns ago)` / `last heartbeat … (sta
 
 With an MCP-capable client, the add-on also serves `pi_new_session`, `pi_select_session`,
 `pi_prompt`, `pi_cancel`, `pi_close_session`, `pi_get_state`, `pi_bind_current_tab`,
-`pi_unbind_tab`, `pi_open_bound_tab`, `pi_set_config_option` over MCP-over-ACP — the same
-handlers the sidebar uses.
+`pi_bind_tab`, `pi_open_tab`, `pi_list_tabs`, `pi_unbind_tab`, `pi_open_bound_tab`,
+`pi_set_config_option` over MCP-over-ACP — the same handlers the sidebar uses.
+`pi_open_tab` creates a tab and binds it in one step (works even when the session has no
+bound tab yet), `pi_bind_tab` binds an existing tab by id, and `pi_unbind_tab` releases it —
+the agent manages its own tab lifecycle.
 
 ### Browser scripting: the `javascript` REPL
 

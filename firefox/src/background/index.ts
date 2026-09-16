@@ -93,6 +93,15 @@ const controlHandler: ControlHandler = (tool, args) => {
       });
     case "pi_bind_current_tab":
       return handleAction("bind_current_tab", { sessionId: String(args.sessionId ?? "") });
+    case "pi_bind_tab":
+      return handleAction("bind_tab", {
+        sessionId: String(args.sessionId ?? ""),
+        tabId: typeof args.tabId === "number" ? args.tabId : undefined,
+      });
+    case "pi_open_tab":
+      return handleAction("open_tab", { sessionId: String(args.sessionId ?? ""), url: String(args.url ?? "") });
+    case "pi_list_tabs":
+      return handleAction("list_tabs", { sessionId: String(args.sessionId ?? "") });
     case "pi_unbind_tab":
       return handleAction("unbind", { sessionId: String(args.sessionId ?? "") });
     case "pi_open_bound_tab":
@@ -598,6 +607,70 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
       pushState();
       return {};
     }
+    case "open_tab": {
+      const sessionId = String(payload.sessionId);
+      if (!store.get(sessionId)) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      const url = String(payload.url ?? "").trim();
+      if (!url) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "pi_open_tab requires a url");
+      // Agent-owned tab: created + bound in one step (works unbound — the
+      // REPL's home-restore/ownership lifecycle applies, same as
+      // browser_open_tab). The dispatcher owns the tab + binding state.
+      const { tabId } = await dispatcher.openAgentTab(sessionId, url);
+      pushState();
+      return { tabId, url };
+    }
+    case "bind_tab": {
+      const sessionId = String(payload.sessionId);
+      if (!store.get(sessionId)) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      const tabId = payload.tabId;
+      if (typeof tabId !== "number" || !Number.isInteger(tabId) || tabId <= 0) {
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "pi_bind_tab requires a tabId number");
+      }
+      let tab: browser.tabs.Tab;
+      try {
+        tab = await browser.tabs.get(tabId);
+      } catch {
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
+      }
+      // A tab serves one session: release it from any other binding first.
+      const previous = store.sessionForRef(tabId);
+      if (previous && previous !== sessionId) {
+        store.unbind(previous);
+        console.info(`[pi-browser] pi_bind_tab: tab ${tabId} released from session ${previous}`);
+      }
+      store.bind(sessionId, {
+        ref: tabId,
+        refId: tabId,
+        label: tab.title,
+        windowId: tab.windowId ?? 0,
+        owner: "bound",
+        // legacy fields kept so persisted state + the sidebar's inline type stay valid
+        tabId,
+        tabTitle: tab.title,
+      });
+      // An explicit bind becomes the restore point for REPL tabs.
+      replTabs.rememberHome(sessionId, store.getBinding(sessionId)!);
+      pushState();
+      return { tabId, url: tab.url, title: tab.title };
+    }
+    case "list_tabs": {
+      const sessionId = String(payload.sessionId);
+      if (!store.get(sessionId)) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      const binding = store.getBinding(sessionId);
+      const boundId = binding ? bindingRefId(binding) : undefined;
+      const tabs = await browser.tabs.query({});
+      return {
+        tabs: tabs
+          .filter((t) => typeof t.id === "number")
+          .map((t) => ({
+            id: t.id as number,
+            url: t.url ?? "",
+            title: t.title ?? "",
+            bound: t.id === boundId,
+            ...(t.windowId !== undefined ? { windowId: t.windowId } : {}),
+          })),
+      };
+    }
     case "unbind": {
       const sessionId = String(payload.sessionId);
       store.unbind(sessionId);
@@ -655,6 +728,8 @@ interface ActionPayload {
   value?: unknown;
   tool?: string;
   state?: string;
+  url?: string;
+  tabId?: number;
 }
 
 function processCwdLikeFallback(): string {

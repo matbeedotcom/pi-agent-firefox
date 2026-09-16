@@ -91,6 +91,15 @@ class FakeTabs {
     if (tab) tab.closed = true;
   }
 
+  /** Mirrors the add-on's open+bind: new REPL-owned, active tab. */
+  openTab(sessionId, url) {
+    const tabId = this.addTab(url, "New Tab");
+    this.focusTab(tabId); // browser.tabs.create({ active: true })
+    this.replOwned.add(tabId);
+    this.bind(sessionId, tabId);
+    return { tabId, url };
+  }
+
   bind(sessionId, tabId) {
     this.bindings.set(sessionId, tabId);
   }
@@ -251,8 +260,10 @@ class FakeTabs {
  * session — a test-double convenience for the scripted agent.
  */
 function makeFakeControl(tabs, hostRef) {
-  const state = { lastNew: undefined, log: [] };
-  const ref = (id) => (id === "$new" ? state.lastNew : String(id ?? ""));
+  const state = { lastNew: undefined, lastOpen: undefined, log: [] };
+  // "$new" = most recently created session, "$tab" = most recently opened
+  // tab — test-double sentinels (the mock script cannot know host ids).
+  const ref = (id) => (id === "$new" ? state.lastNew : id === "$tab" ? state.lastOpen : String(id ?? ""));
   const handler = async (tool, args) => {
     state.log.push({ tool, args });
     switch (tool) {
@@ -308,6 +319,38 @@ function makeFakeControl(tabs, hostRef) {
         }
         tabs.bind(ref(args.sessionId), tabs.activeTabId);
         return { tabId: tabs.activeTabId };
+      }
+      case "pi_open_tab": {
+        const url = String(args.url ?? "").trim();
+        if (!url) throw toErrorObject(PI_BROWSER_ERROR.INTERNAL, "pi_open_tab requires a url");
+        const { tabId } = tabs.openTab(ref(args.sessionId), url);
+        state.lastOpen = tabId;
+        return { tabId, url };
+      }
+      case "pi_bind_tab": {
+        const raw = ref(args.tabId); // "tab" sentinel resolves here too
+        const tabId = typeof raw === "number" ? raw : Number(raw);
+        if (!Number.isInteger(tabId) || tabId <= 0) {
+          throw toErrorObject(PI_BROWSER_ERROR.INTERNAL, "pi_bind_tab requires a tabId number");
+        }
+        const tab = tabs.tabs.get(tabId);
+        if (!tab || tab.closed) {
+          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
+        }
+        for (const [sid, bid] of tabs.bindings) {
+          if (bid === tabId && sid !== ref(args.sessionId)) tabs.unbind(sid);
+        }
+        tabs.bind(ref(args.sessionId), tabId);
+        return { tabId, url: tab.url, title: tab.title };
+      }
+      case "pi_list_tabs": {
+        const sessionId = ref(args.sessionId);
+        const boundId = tabs.bindings.get(sessionId);
+        return {
+          tabs: [...tabs.tabs.values()]
+            .filter((t) => !t.closed)
+            .map((t) => ({ id: t.id, url: t.url, title: t.title, bound: t.id === boundId })),
+        };
       }
       case "pi_unbind_tab": {
         tabs.unbind(ref(args.sessionId)); // idempotent, like the real store
@@ -1084,6 +1127,97 @@ test("control tools (MCP-over-ACP): agent-driven session orchestration end to en
     // State after the turn: the new session is listed (via the host's ACP).
     const list = await host.request(AGENT_METHODS.session_list, { cwd: null });
     assert.ok(list.sessions.some((s) => s.sessionId === newSessionId), "new session listed by the host");
+  } finally {
+    await shutdown(host);
+  }
+});
+
+test("control tools: agent creates + binds + unbinds tabs without a prior binding", async () => {
+  const tabs = new FakeTabs();
+  const hostRef = { current: null };
+  const control = makeFakeControl(tabs, hostRef);
+  const fakeFirefox = makeFakeFirefox(tabs, control.handler);
+
+  // Session A is created with NO bound tab. The driver opens a fresh tab
+  // for it (pi_open_tab — the new first-class create+bind path), hands the
+  // tab to session B via pi_bind_tab (steal: A's binding is released), B
+  // verifies it, and the driver lists + unbinds (control tools exist only
+  // on the driver's MCP-over-ACP session; legacy sessions cannot call pi_*).
+  const script = writeScript([
+    {
+      match: "manage tabs",
+      toolCalls: [
+        { toolName: "pi_new_session", args: { cwd: "/work/a" } },
+        { toolName: "pi_open_tab", args: { sessionId: "$new", url: "http://fresh.test/" } },
+        { toolName: "pi_new_session", args: { cwd: "/work/b" } },
+        { toolName: "pi_bind_tab", args: { sessionId: "$new", tabId: "$tab" } },
+        { toolName: "pi_prompt", args: { sessionId: "$new", text: "work b" } },
+        { toolName: "pi_list_tabs", args: { sessionId: "$new" } },
+        { toolName: "pi_unbind_tab", args: { sessionId: "$new" } },
+        { toolName: "pi_get_state", args: {} },
+      ],
+    },
+    {
+      match: "work b",
+      toolCalls: [{ toolName: "browser_get_page", args: {} }],
+    },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
+  hostRef.current = host;
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+    const decl = fakeFirefox.mcpServer.declarePending();
+    const driverRes = await host.request(AGENT_METHODS.session_new, {
+      cwd: "/work/driver",
+      mcpServers: [{ name: "firefox-browser", type: "acp", serverId: decl.serverId }],
+    });
+    const driverId = driverRes.sessionId;
+    decl.resolve(driverId);
+
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: driverId, prompt: [{ type: "text", text: "manage tabs" }] },
+      120_000,
+    );
+
+    // Every control call went through the MCP-over-ACP path, in order.
+    assert.deepEqual(
+      control.state.log.map((c) => c.tool),
+      [
+        "pi_new_session",
+        "pi_open_tab",
+        "pi_new_session",
+        "pi_bind_tab",
+        "pi_prompt",
+        "pi_list_tabs",
+        "pi_unbind_tab",
+        "pi_get_state",
+      ],
+    );
+
+    // pi_open_tab worked from an UNBOUND session and reported the tab id.
+    const driverEnds = host
+      .sessionUpdates(driverId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update))
+      .join("\n");
+    // Result text is JSON-escaped inside the update, so match loosely.
+    assert.ok(driverEnds.includes(String(control.state.lastOpen)), "pi_open_tab result carried the new tab id");
+    assert.ok(driverEnds.includes("http://fresh.test/"), "pi_open_tab result carried the url");
+    assert.ok(driverEnds.includes("bound"), "pi_list_tabs reported the bound marker");
+
+    // Session B's turn: its browser tool hit the stolen tab.
+    const bUpdates = host.sessionUpdates(control.state.lastNew);
+    const bEnds = bUpdates
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update))
+      .join("\n");
+    assert.ok(bEnds.includes("http://fresh.test/"), "session B's browser tool saw the bound tab");
+
+    // Final state: A lost the tab to B's bind (steal), B unbound at the end.
+    assert.equal(tabs.bindings.has(control.state.lastNew), false, "session B unbound");
+    assert.equal(tabs.bindings.size, 0, "no bindings remain (A's was released by the steal)");
   } finally {
     await shutdown(host);
   }

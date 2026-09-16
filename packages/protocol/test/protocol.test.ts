@@ -174,7 +174,7 @@ test("control tool input schemas are JSON Schema objects", () => {
     for (const r of required) assert.ok(props[r], `${tool.name}: required ${r} missing from properties`);
   }
   // Every mutating session tool takes an explicit sessionId (no implicit targets).
-  for (const name of ["pi_prompt", "pi_cancel", "pi_close_session", "pi_select_session", "pi_bind_current_tab", "pi_unbind_tab", "pi_open_bound_tab"]) {
+  for (const name of ["pi_prompt", "pi_cancel", "pi_close_session", "pi_select_session", "pi_bind_current_tab", "pi_bind_tab", "pi_open_tab", "pi_list_tabs", "pi_unbind_tab", "pi_open_bound_tab"]) {
     const def = getControlTool(name);
     assert.ok(def, name);
     assert.ok((def!.inputSchema.required as string[]).includes("sessionId"), `${name} requires an explicit sessionId`);

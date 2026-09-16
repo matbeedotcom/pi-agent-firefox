@@ -140,6 +140,52 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
     readOnly: false,
   },
   {
+    name: "pi_bind_tab",
+    description:
+      "Bind an existing Firefox tab to a Pi session: the session's browser tools (browser_get_page, " +
+      "browser_click, ...) operate on that tab. The tab id comes from pi_list_tabs. Replaces the " +
+      "session's current binding and releases the tab from any other session bound to it.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        sessionId: SESSION_ID,
+        tabId: { type: "number", description: "Firefox tab id (from pi_list_tabs)." },
+      },
+      required: ["sessionId", "tabId"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "pi_open_tab",
+    description:
+      "Open a new browser tab at the given URL and bind the session to it — works even when the " +
+      "session has no bound tab. The new tab is owned by the session and closed automatically when " +
+      "the session unbinds; the previously bound tab (if any) stays open and is restored when the " +
+      "new tab is closed. Returns {tabId, url}.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        sessionId: SESSION_ID,
+        url: { type: "string", description: 'URL for the new tab, e.g. "https://example.com".' },
+      },
+      required: ["sessionId", "url"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "pi_list_tabs",
+    description:
+      "List all open Firefox tabs: {tabs: [{id, url, title, bound}]} — bound marks the session's " +
+      "current tab. Use with pi_bind_tab to bind a specific tab. Works without a bound tab " +
+      "(unlike browser_list_tabs).",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: { sessionId: SESSION_ID },
+      required: ["sessionId"],
+    },
+    readOnly: true,
+  },
+  {
     name: "pi_unbind_tab",
     description: "Remove the tab binding of a Pi session; its browser tools fail until re-bound.",
     inputSchema: {
