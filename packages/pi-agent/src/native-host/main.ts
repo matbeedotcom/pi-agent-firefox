@@ -59,7 +59,8 @@ const require = createRequire(import.meta.url);
  *
  * PI_BROWSER_SKILLS_CONFIG is a JSON file path (or inline JSON):
  * {
- *   "grants":   [{ "skillKey": "pkg/skill", "revision": "*", "capabilities": ["context.read"] }],
+ *   "grants":   [{ "skillKey": "pkg/skill", "revision": "*", "capabilities": ["context.read"],
+ *                  "mode": "review-before-submit" }],  // optional; defaults to advisory
  *   "adapters": [{ "id": "a", "version": "1.0.0", "hosts": ["127.0.0.1"],
  *                  "events": ["comment.before-submit"], "gates": ["comment.before-submit"] }],
  *   "job":      { "report": { "decision": "suggest", "explanation": "...", "replacementText": "..." } }
@@ -70,7 +71,7 @@ const require = createRequire(import.meta.url);
  */
 function loadMockSkillsConfig(
   log: Logger,
-): { grants: { skillKey: string; revision: string; capabilities: SkillGrant["capabilities"] }[]; adapters: SkillAdapterCoverage[]; job: ScriptedJob } | undefined {
+): { grants: { skillKey: string; revision: string; capabilities: SkillGrant["capabilities"]; mode?: "advisory" | "review-before-submit" }[]; adapters: SkillAdapterCoverage[]; job: ScriptedJob } | undefined {
   const raw = process.env.PI_BROWSER_SKILLS_CONFIG?.trim();
   if (!raw) return undefined;
   let parsed: unknown;
@@ -301,6 +302,7 @@ async function main(): Promise<void> {
           enabled: true,
           revision: g.revision === "*" ? revision(g.skillKey) : g.revision,
           capabilities: g.capabilities,
+          ...(g.mode ? { mode: g.mode } : {}),
         },
       ]),
     );
