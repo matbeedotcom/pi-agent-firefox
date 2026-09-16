@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "packageId": "fixture-contenteditable",
+  "skills": [
+    {
+      "id": "reply",
+      "type": "triggered",
+      "instructions": "reply/SKILL.md",
+      "scope": {
+        "applications": ["firefox"],
+        "hosts": ["127.0.0.1"]
+      },
+      "subscriptions": [
+        { "event": "comment.before-submit" }
+      ],
+      "context": {
+        "required": ["draft"],
+        "optional": ["replyTarget"]
+      },
+      "review": {
+        "defaultMode": "review-before-submit"
+      },
+      "capabilities": ["context.read", "suggestion.present", "draft.replace-on-accept"],
+      "execution": {
+        "handler": "agent",
+        "timeoutMs": 10000
+      }
+    }
+  ]
+}
