@@ -1,16 +1,19 @@
 /**
- * Permission-request helpers (PRODUCT.md §43: sensitive tools require
+ * Permission-request helpers (PRODUCT.md §55: sensitive tools require
  * explicit user approval).
  *
- * The host asks the ACP client for permission before running a tool the
- * policy marks as requiring approval:
+ * EVERY tool the add-ons provide is approval-gated: the host asks the ACP
+ * client for permission before running any browser, REPL (`javascript`),
+ * control (`pi_*`), mail, compose, contacts, or mail-mutation tool — in
+ * both Firefox and Thunderbird. "Always allow" is remembered persistently
+ * (host-side store, shared across apps) so the UI friction stays down after
+ * the first approval of a tool; the add-on's Configuration page lists every
+ * tool and lets the user toggle or clear that state.
  *
- *   - Firefox: browser_screenshot (pixel capture needs a live user gesture
- *     to grant `activeTab` host access).
- *   - Thunderbird: every mail/compose/mutation/contacts tool — they read or
- *     write the user's real mailbox and address book, so each tool's first
- *     call asks for approval. "Always allow" (per host lifetime) keeps the
- *     UI friction down after the first approval of a tool.
+ * The one special case is browser_evaluate: Firefox owns the revocable
+ * `userScripts` grant, so it is NEVER cached host-side — every call asks
+ * (with its own option set), and the Configuration page shows the row as
+ * "managed by Firefox".
  *
  * The request is the canonical ACP `session/request_permission` method.
  */
@@ -20,11 +23,13 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
 } from "./acp.js";
-import { isComposeTool } from "./compose-tools.js";
-import { isContactsTool } from "./contacts-tools.js";
-import { isMailTool } from "./mail-tools.js";
-import { isMailMutationTool } from "./mail-mutation-tools.js";
-import type { AgentApplication } from "./integration.js";
+import { BROWSER_TOOLS, REPL_TOOLS } from "./browser-tools.js";
+import { CONTROL_TOOLS } from "./control-tools.js";
+import { COMPOSE_TOOLS } from "./compose-tools.js";
+import { CONTACTS_TOOLS } from "./contacts-tools.js";
+import { MAIL_TOOLS } from "./mail-tools.js";
+import { MAIL_MUTATION_TOOLS } from "./mail-mutation-tools.js";
+import type { AgentApplication, PermissionToolGroup } from "./integration.js";
 
 /** Wire method name the host uses to request permission from the client. */
 export const REQUEST_PERMISSION_METHOD = CLIENT_METHODS.session_request_permission;
@@ -98,25 +103,99 @@ export function permissionAllowed(response: RequestPermissionResponse | undefine
 }
 
 /**
- * Whether a tool call must be approved by the user before it runs, keyed on
- * the application of the client that EXECUTES the tool (not the session
- * owner — in broker mode a call is routed to the peer that serves it).
- *
- *   - firefox: browser_screenshot and browser_evaluate (Firefox checks its user-scripts grant).
- *   - thunderbird: every tool on the mail surface (read-only mail, compose,
- *     mail mutations, contacts) — the LLM's access to the user's mailbox and
- *     address book is approval-gated per tool.
+ * Whether a tool call must be approved by the user before it runs.
+ * Every add-on-provided tool is gated in every application (2026-09-15):
+ * the `application` parameter is kept for API stability (the policy is
+ * application-agnostic now — the LLM's access to the user's browser and
+ * mailbox alike is approval-gated per tool).
  */
 export function toolRequiresApproval(application: AgentApplication, toolName: string): boolean {
-  if (application === "thunderbird") {
-    return (
-      isMailTool(toolName) ||
-      isComposeTool(toolName) ||
-      isMailMutationTool(toolName) ||
-      isContactsTool(toolName)
-    );
+  void application;
+  void toolName;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Gated-tool inventory (Configuration page, PRODUCT.md §55)
+// ---------------------------------------------------------------------------
+
+/** Canonical group order for the Configuration page. */
+export const PERMISSION_TOOL_GROUPS: readonly PermissionToolGroup[] = [
+  "browser",
+  "repl",
+  "control",
+  "mail",
+  "compose",
+  "mail-mutations",
+  "contacts",
+];
+
+/** Human-facing group labels (Configuration page headings). */
+export const PERMISSION_TOOL_GROUP_LABELS: Record<PermissionToolGroup, string> = {
+  browser: "Browser",
+  repl: "JavaScript REPL",
+  control: "Pi controls",
+  mail: "Mail (read-only)",
+  compose: "Compose (drafts)",
+  "mail-mutations": "Mail mutations",
+  contacts: "Contacts",
+};
+
+/** One approval-gated tool in the canonical inventory. */
+export interface GatedToolEntry {
+  name: string;
+  description: string;
+  group: PermissionToolGroup;
+  /** Set when the application owns the grant (browser_evaluate → Firefox). */
+  managedBy?: AgentApplication;
+  /** Extra one-line note for the Configuration page (row has no toggle). */
+  note?: string;
+}
+
+/**
+ * The complete, canonical list of approval-gated tools (browser, REPL,
+ * control, mail, compose, mail mutations, contacts) in stable group order.
+ * Both the host (x-pi-browser/permissions) and the add-on UIs derive their
+ * tool list from here, so the page can never drift from the real surface.
+ */
+export function listGatedTools(): GatedToolEntry[] {
+  const out: GatedToolEntry[] = [];
+  for (const t of BROWSER_TOOLS) {
+    out.push({
+      name: t.name,
+      description: t.description,
+      group: "browser",
+      // Firefox owns the revocable userScripts grant — never host-cached.
+      ...(t.name === "browser_evaluate" ? { managedBy: "firefox" as const } : {}),
+    });
   }
-  return toolName === "browser_screenshot" || toolName === "browser_evaluate";
+  for (const t of REPL_TOOLS) {
+    out.push({
+      name: t.name,
+      description: t.description,
+      group: "repl",
+      // The cell itself is not gated — every page.* / tabs.* primitive inside
+      // it goes through the normal per-tool gate, so toggling the cell would
+      // be a no-op; the row is informational.
+      note: "Cells are gated per primitive — approve the page.*/tabs.* tools they call.",
+    });
+  }
+  for (const t of CONTROL_TOOLS) out.push({ name: t.name, description: t.description, group: "control" });
+  for (const t of MAIL_TOOLS) out.push({ name: t.name, description: t.description, group: "mail" });
+  for (const t of COMPOSE_TOOLS) out.push({ name: t.name, description: t.description, group: "compose" });
+  for (const t of MAIL_MUTATION_TOOLS) out.push({ name: t.name, description: t.description, group: "mail-mutations" });
+  for (const t of CONTACTS_TOOLS) out.push({ name: t.name, description: t.description, group: "contacts" });
+  return out;
+}
+
+/** True when `name` is in the canonical gated-tool inventory. */
+export function isGatedTool(name: string): boolean {
+  return listGatedTools().some((t) => t.name === name);
+}
+
+/** The gated-tool entry for `name` (undefined for unknown tools). */
+export function getGatedTool(name: string): GatedToolEntry | undefined {
+  return listGatedTools().find((t) => t.name === name);
 }
 
 /** Short human-facing labels for the permission prompt's description line. */

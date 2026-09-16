@@ -1,10 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { createLogger } from "../src/logger.js";
 import { createMemoryTransportPair, type Dispatcher } from "../src/native-host/transport.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
 import { CapabilityToolProvider } from "../src/browser/provider.js";
+import { PermissionStore } from "../src/permission-store.js";
 import {
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
@@ -40,6 +44,34 @@ test("registry: register/list/remove", () => {
   assert.ok(removed);
   assert.equal(reg.size, 1);
   assert.equal(reg.remove("nope"), undefined);
+});
+
+test("registry: onChange fires with the new union on register/remove, not on no-ops", () => {
+  const reg = new CapabilityRegistry(quiet);
+  const ff = new (class { request() { throw new Error("n/a"); } notify() {} })();
+  const tb = new (class { request() { throw new Error("n/a"); } notify() {} })();
+  const changes: AgentCapability[][] = [];
+  reg.onChange = (caps) => changes.push(caps);
+  reg.register(client("a", "thunderbird", ["mail", "compose"], tb as never));
+  reg.register(client("b", "firefox", ["browser"], ff as never));
+  reg.remove("b");
+  reg.remove("ghost"); // unknown id: the client set is unchanged → no event
+  assert.deepEqual(changes, [
+    ["mail", "compose"],
+    ["browser", "mail", "compose"],
+    ["mail", "compose"],
+  ]);
+});
+
+test("registry: a throwing onChange never breaks register/remove", () => {
+  const reg = new CapabilityRegistry(quiet);
+  const ff = new (class { request() { throw new Error("n/a"); } notify() {} })();
+  reg.onChange = () => {
+    throw new Error("boom");
+  };
+  reg.register(client("a", "firefox", ["browser"], ff as never));
+  assert.doesNotThrow(() => reg.remove("a"));
+  assert.equal(reg.size, 0);
 });
 
 test("registry: allCapabilities is the union in canonical order", () => {
@@ -137,7 +169,10 @@ function setupTwoClients(): TwoClients {
   };
   reg.register(client("ff", "firefox", ["browser"], ffPair.b.transport));
   reg.register(client("tb", "thunderbird", ["mail", "compose", "contacts", "mailModify"], tbPair.b.transport));
-  const provider = new CapabilityToolProvider(undefined, quiet, reg);
+  // Isolated temp store: the fake users answer "allow_always", which is now
+  // persistent — sharing the real file would leak grants between tests.
+  const store = new PermissionStore({ filePath: join(mkdtempSync(join(tmpdir(), "pi-permreg-")), "permissions.json") });
+  const provider = new CapabilityToolProvider(undefined, quiet, reg, { permissionStore: store });
   return {
     reg,
     provider,
@@ -164,7 +199,7 @@ test("provider (broker mode): tool surface is the union of connected clients", (
 });
 
 test("provider (broker mode): owner tools route to owner, cross-app tools route to peer", async () => {
-  const { provider, ffToolCalls, tbToolCalls, tbPermissionRequests } = setupTwoClients();
+  const { provider, ffToolCalls, tbToolCalls, tbPermissionRequests, ffPermissionRequests } = setupTwoClients();
   // Session owned by Firefox.
   const tools = provider.createTools({ id: "s1" }, "legacy", undefined, ["browser"], "ff");
   const byName = new Map(tools.map((t) => [t.name, t]));
@@ -182,9 +217,10 @@ test("provider (broker mode): owner tools route to owner, cross-app tools route 
   assert.match((mailResult.content[0] as { text: string }).text, /from-thunderbird/);
   assert.match((composeResult.content[0] as { text: string }).text, /from-thunderbird/);
   // Approval prompts for the cross-app mail tools went to the EXECUTING
-  // client (Thunderbird), not the Firefox session owner — and the Firefox
-  // read-only tool never prompted at all.
+  // client (Thunderbird), not the Firefox session owner. (The owner's own
+  // browser_get_page prompted on Firefox too — every tool is gated.)
   assert.equal(tbPermissionRequests.n, 2, "mail + compose prompts sent to Thunderbird");
+  assert.equal(ffPermissionRequests.n, 1, "owner's browser tool prompted on Firefox");
 });
 
 test("provider (broker mode): Thunderbird-owned session routes browser tools to Firefox", async () => {

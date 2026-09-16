@@ -1,6 +1,7 @@
 export * from "./acp-client.js";
 export * from "./session-store.js";
 export * from "./theme.js";
+export * from "./permissions.js";
 export * from "./markdown.js";
 export * from "./activity/tool-activity.js";
 export * from "./activity/activity-result.js";

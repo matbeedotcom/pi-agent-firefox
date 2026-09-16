@@ -212,6 +212,23 @@ export class AcpAgent {
         case AGENT_METHODS.session_set_config_option:
           this.transport().respond(id, await this.sessionSetConfigOption(params as SetSessionConfigOptionRequest));
           return;
+        case X_PI_BROWSER.permissions:
+          this.transport().respond(id, this.opts.provider.permissionConfig());
+          return;
+        case X_PI_BROWSER.permission_set: {
+          const p = params as { tool?: unknown; state?: unknown };
+          const tool = typeof p.tool === "string" ? p.tool : "";
+          const state =
+            p.state === "allow" || p.state === "deny" || p.state === "ask" ? p.state : "ask";
+          this.transport().respond(id, this.opts.provider.setToolPermission(tool, state));
+          return;
+        }
+        case X_PI_BROWSER.permission_clear: {
+          const p = params as { tool?: unknown } | undefined;
+          const tool = p && typeof p.tool === "string" ? p.tool : undefined;
+          this.transport().respond(id, this.opts.provider.clearToolPermissions(tool));
+          return;
+        }
         case X_PI_BROWSER.ping: {
           const backendReady = await this.opts.backend.ready.then(() => true, () => false);
           // Refresh the add-on heartbeat (no-op for non-add-on clients), so
@@ -262,6 +279,15 @@ export class AcpAgent {
   // ACP methods
   // ------------------------------------------------------------------
 
+  /**
+   * Push x-pi-browser/capabilities_changed (the current union) to this
+   * client. The broker calls this for every connected client when the
+   * provider set changes, so UIs update their "capabilities:" line.
+   */
+  notifyCapabilitiesChanged(capabilities: AgentCapability[]): void {
+    this.opts.transport.notify(X_PI_BROWSER.capabilities_changed, { capabilities });
+  }
+
   private initialize(req: InitializeRequest) {
     if (req.protocolVersion !== PROTOCOL_VERSION) {
       throw new PiBrowserProtocolError(
@@ -294,6 +320,13 @@ export class AcpAgent {
       ...PI_AGENT_META,
       application: this.clientApplication,
       capabilities: this.clientCapabilities,
+      // Session tool surface (plan §29): the union of every connected
+      // client, so the add-on UI can show peer-app capabilities (e.g.
+      // browsing from the mail client). Without a registry (standalone
+      // single-app mode) the union is just this client's own caps.
+      connectedCapabilities: this.opts.registry
+        ? this.opts.registry.allCapabilities()
+        : this.clientCapabilities,
     };
     return {
       protocolVersion: PROTOCOL_VERSION,

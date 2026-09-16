@@ -2338,3 +2338,68 @@ the already-installed extension tree; explicit stdout isolation in the
 host/SDK subprocess path is deferred (not fixed by restarting the broker).
 
 Evidence (live runs, real model): see `docs/VERIFICATION.md`.
+
+# 55. Tool Permissions (approval gate + Configuration page)
+
+Every tool the add-ons provide — browser, `javascript` REPL, `pi_*`
+controls, mail, compose, mail mutations, contacts — is **approval-gated in
+both Firefox and Thunderbird** (2026-09-15): before the host routes a tool
+call to a client it asks the ACP client via the canonical
+`session/request_permission` method (`packages/protocol/src/permission.ts`).
+The policy is application-agnostic (`toolRequiresApproval` returns true for
+every tool); the prompt is routed to the client that **executes** the tool
+(cross-app: a Firefox-owned session calling a mail tool prompts in
+Thunderbird, and the session owner gets a display-only heads-up banner via
+`x-pi-browser/permission_prompted`).
+
+```
+tool call → state? →
+  "allow" → run without asking (persistent, Configuration page)
+  "deny"  → BROWSER_PERMISSION_DENIED (structured, no prompt, cell-safe)
+  "ask"   → session/request_permission → user answers
+              allow_once     → run once, remember nothing
+              allow_session  → remembered for this ACP session (cleared on disposal)
+              allow_always   → remembered persistently (PermissionStore)
+              reject_once    → BROWSER_PERMISSION_DENIED (structured, cell-safe)
+```
+
+Each tool's persistent state is one of **ask** (default — prompt on every
+call), **deny** (refuse without asking) or **allow** (always approved), held
+in a host-side `PermissionStore`
+(`packages/pi-agent/src/permission-store.ts`), a small JSON file at
+`~/.pi/browser/permissions.json` (override: `PI_BROWSER_PERMISSIONS_FILE`,
+v2 format `{ "version": 2, "tools": { name: "allow"|"deny" } }`; v1 allow
+files migrate on load). One broker = one store, shared by every connected
+application; the file is the single source of truth the Configuration page
+edits. `browser_evaluate` is the one special case: Firefox owns its
+revocable `userScripts` grant, so it is never cached host-side — every call
+asks, with its own option set ("Enable page evaluation" / "Not now").
+
+The **Configuration page** (add-on UI, shared view in
+`packages/webext/src/permissions.ts` → `mountPermissionSettings`) lets the
+user see every gated tool, grouped (Browser / JavaScript REPL / Pi controls /
+Mail / Compose / Mail mutations / Contacts), and set each tool to one of
+**Ask / Deny / Always approve** (segmented control per row; the active state
+colors the row — gray / red / green). It is opened from the gear (⚙)
+button in the Firefox sidebar and the Thunderbird pane + Space. The page
+reads and writes through three background actions that proxy to the host:
+
+```
+x-pi-browser/permissions       → PermissionConfigResult
+                                 { tools: [{ name, description, group,
+                                             state, managedBy?, note? }] }
+x-pi-browser/permission_set     { tool, state }  → { tool, state }
+x-pi-browser/permission_clear   { tool? }        → { cleared: [...] }  ("reset all to Ask")
+```
+
+The tool inventory (`listGatedTools`) is derived from the same canonical
+schema lists the host registers tools from, so the page can never drift
+from the real tool surface. App-managed rows (`browser_evaluate`,
+"managed by Firefox") and informational rows (the `javascript` cell — its
+`page.*`/`tabs.*` primitives are gated individually) have no state control.
+
+Tests: unit coverage for the store and provider gate in
+`packages/pi-agent/test/permission-store.test.ts` and
+`packages/pi-agent/test/provider.test.ts`; the e2e and broker tests isolate
+the store via `PI_BROWSER_PERMISSIONS_FILE` so the developer's real states
+never leak into a test run (and vice versa).

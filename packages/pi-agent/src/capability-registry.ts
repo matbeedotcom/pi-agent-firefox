@@ -28,8 +28,24 @@ export interface CapabilityClient {
 
 export class CapabilityRegistry {
   private readonly clients = new Map<string, CapabilityClient>();
+  /**
+   * Broker hook: fired with the new union after any register/remove that
+   * changes the client set, so the host can push
+   * x-pi-browser/capabilities_changed to every connected client (their UIs
+   * update the "capabilities:" line in near-real-time).
+   */
+  onChange?: (capabilities: AgentCapability[]) => void;
 
   constructor(private readonly log: Logger) {}
+
+  private emitChange(): void {
+    if (!this.onChange) return;
+    try {
+      this.onChange(this.allCapabilities());
+    } catch {
+      // Notification plumbing must never break registration/disconnection.
+    }
+  }
 
   /** Register (or re-register) a client. Returns the previous entry, if any. */
   register(client: CapabilityClient): CapabilityClient | undefined {
@@ -40,6 +56,7 @@ export class CapabilityRegistry {
         (previous ? " (re-registered)" : "") +
         ` — connected: ${this.clients.size}`,
     );
+    this.emitChange();
     return previous;
   }
 
@@ -49,6 +66,7 @@ export class CapabilityRegistry {
     if (!client) return undefined;
     this.clients.delete(clientId);
     this.log.info(`registry: ${clientId} removed — connected: ${this.clients.size}`);
+    this.emitChange();
     return client;
   }
 

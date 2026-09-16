@@ -372,6 +372,12 @@ function spawnHost(extraEnv = {}) {
         tmpRoot,
         `broker-${Math.random().toString(36).slice(2)}`,
       ),
+      // Isolated persistent grants: the developer's real ~/.pi/browser/
+      // permissions.json must not leak "Always allow" state into tests.
+      PI_BROWSER_PERMISSIONS_FILE: path.join(
+        tmpRoot,
+        `permissions-${Math.random().toString(36).slice(2)}.json`,
+      ),
       ...extraEnv,
     },
   });

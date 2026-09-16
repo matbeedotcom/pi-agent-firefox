@@ -122,6 +122,11 @@ async function main(): Promise<void> {
   const registry = new CapabilityRegistry(log);
   const provider = new CapabilityToolProvider(undefined, log, registry);
   const agents = new Map<string, AcpAgent>();
+  // A peer app connected/disconnected: tell every client so its UI can
+  // update the "capabilities:" line (display-only, plan §29).
+  registry.onChange = (caps) => {
+    for (const agent of agents.values()) agent.notifyCapabilitiesChanged(caps);
+  };
   const clients = new Set<string>();
   let relaySeq = 0;
   let shuttingDown = false;

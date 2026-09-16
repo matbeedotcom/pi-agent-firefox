@@ -6,6 +6,7 @@
     <title>Pi</title>
     <link rel="stylesheet" href="pane.css" />
     <link rel="stylesheet" href="activity.css" />
+    <link rel="stylesheet" href="permissions.css" />
 </head>
   <body>
     <div id="app">
@@ -14,6 +15,7 @@
         <div class="rail-actions">
           <button id="new-session" title="New session">+ New</button>
           <button id="refresh" title="Refresh session list" class="secondary">⟳</button>
+          <button id="settings" title="Tool permissions" class="secondary">⚙</button>
         </div>
       </header>
 
@@ -53,6 +55,20 @@
         <div class="row">
           <button id="send">Send</button>
           <button id="stop" class="secondary hidden">Stop</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Permission Configuration (PRODUCT.md §55): every tool is
+         approval-gated; the user can toggle/clear the per-tool "always
+         allow" grants here. Mounted by the shared webext view. -->
+    <div id="settings-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div id="settings-card">
+        <div id="settings-badge">settings</div>
+        <h3 id="settings-title">Tool permissions</h3>
+        <div id="settings-body"></div>
+        <div id="settings-actions" class="row">
+          <button id="settings-done">Done</button>
         </div>
       </div>
     </div>

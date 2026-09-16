@@ -5,10 +5,24 @@
  * for connection state, sessions, and bindings; the sidebar keeps the
  * in-memory transcript and renders ACP session/update streams.
  */
-import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
+import {
+  applicationDisplayName,
+  permissionPromptDescription,
+  type PermissionClearResult,
+  type PermissionConfigResult,
+  type PermissionSetResult,
+} from "@pi-browser/protocol";
 import { grantEvaluationPermission } from "../page-evaluation-permission.js";
-import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme } from "@pi-browser/webext";
+import {
+  applyPiTheme,
+  MarkdownView,
+  mountPermissionSettings,
+  renderMarkdownInto,
+  type PiTheme,
+  type PermissionSettingsApi,
+} from "@pi-browser/webext";
 import type {
+  AgentCapability,
   SessionConfigOption,
   SessionConfigSelect,
   SessionNotification,
@@ -24,6 +38,8 @@ interface StatusInfo {
   detail?: string;
   agentInfo?: { name?: string; version?: string };
   piBrowserMeta?: { version: string; protocolVersion: number; browserToolVersion: number };
+  /** Union of capabilities across ALL connected apps (live, plan §29). */
+  capabilities?: AgentCapability[];
 }
 
 interface SessionUi {
@@ -273,6 +289,7 @@ let activeSessionId: string | undefined;
 
 function renderAll(): void {
   renderStatus();
+  renderCaps();
   renderSessions();
   renderActive();
   renderConversation();
@@ -329,6 +346,23 @@ function renderStatus(): void {
       el.textContent = "disconnected — reconnecting…";
       el.title = s.detail ?? "";
   }
+}
+
+function renderCaps(): void {
+  const el = $<HTMLDivElement>("caps");
+  const s = uiState.status;
+  if (s.state !== "connected") {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  // The browser is always available here (this IS the browser); mail shows
+  // up once Thunderbird is connected (plan §29 union of connected apps).
+  const parts = ["browsing"];
+  if (s.capabilities?.includes("mail")) parts.push("mail");
+  el.textContent = `capabilities: ${parts.join(" · ")}`;
+  el.title = "Tools Pi can use: your browser, plus mail when Thunderbird is connected.";
+  el.classList.remove("hidden");
 }
 
 function renderSessions(): void {
@@ -658,7 +692,7 @@ function applyBrowserActivity(sessionId: string, activity: BrowserActivity): voi
 }
 
 // ---------------------------------------------------------------------------
-// Permission prompt (sensitive tools, §43)
+// Permission prompt (sensitive tools, §55)
 // ---------------------------------------------------------------------------
 
 interface PermissionOptionUi {
@@ -783,6 +817,45 @@ $<HTMLInputElement>("cwd-input").addEventListener("keydown", (e) => {
 $<HTMLButtonElement>("refresh").addEventListener("click", () => {
   void action("refresh_sessions").catch(() => {});
 });
+
+// ---------------------------------------------------------------------------
+// Permission Configuration (PRODUCT.md §55): the host is the source of
+// truth for the per-tool "always allow" state; the view here is pure DOM.
+// ---------------------------------------------------------------------------
+
+let settingsUnmount: (() => void) | undefined;
+
+function openSettings(): void {
+  const overlay = $<HTMLDivElement>("settings-overlay");
+  overlay.classList.remove("hidden");
+  if (!settingsUnmount) {
+    const api: PermissionSettingsApi = {
+      getConfig: () => action<PermissionConfigResult>("permission_config"),
+      setTool: (tool, state) =>
+        action<PermissionSetResult>("permission_set", { tool, state }).then(() => undefined),
+      clear: (tool) =>
+        action<PermissionClearResult>("permission_clear", tool ? { tool } : {}).then(() => undefined),
+    };
+    settingsUnmount = mountPermissionSettings($<HTMLDivElement>("settings-body"), api);
+  }
+}
+
+function closeSettings(): void {
+  $<HTMLDivElement>("settings-overlay").classList.add("hidden");
+}
+
+$<HTMLButtonElement>("settings").addEventListener("click", openSettings);
+$<HTMLButtonElement>("settings-done").addEventListener("click", closeSettings);
+$<HTMLDivElement>("settings-overlay").addEventListener("click", (e) => {
+  // Backdrop click closes (the card stops propagation).
+  if (e.target === e.currentTarget) closeSettings();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$<HTMLDivElement>("settings-overlay").classList.contains("hidden")) {
+    closeSettings();
+  }
+});
+$<HTMLDivElement>("settings-card").addEventListener("click", (e) => e.stopPropagation());
 
 // Onboarding: "Check again now" asks the background for an immediate
 // (idempotent) connect attempt; a status push then hides the screen if the

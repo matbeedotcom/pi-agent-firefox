@@ -13,14 +13,22 @@
  * The background is the single source of truth; this page keeps the in-memory
  * transcript and renders ACP session/update streams pushed over the Port.
  */
-import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
-import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData } from "@pi-browser/webext";
-import type { SessionUpdate, ToolCallUpdate } from "@pi-browser/protocol";
+import {
+  applicationDisplayName,
+  permissionPromptDescription,
+  type PermissionClearResult,
+  type PermissionConfigResult,
+  type PermissionSetResult,
+} from "@pi-browser/protocol";
+import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData, mountPermissionSettings, type PermissionSettingsApi } from "@pi-browser/webext";
+import type { AgentCapability, SessionUpdate, ToolCallUpdate } from "@pi-browser/protocol";
 
 interface StatusInfo {
   state: string;
   detail?: string;
   agentInfo?: { name?: string; version?: string };
+  /** Union of capabilities across ALL connected apps (live, plan §29). */
+  capabilities?: AgentCapability[];
 }
 
 interface SessionUi {
@@ -491,10 +499,17 @@ function renderSessions(): void {
 
 function renderCaps(): void {
   const el = $<HTMLDivElement>("caps");
-  el.textContent = "capabilities: chat · read-only mail";
+  const s = uiState.status;
+  const browsing = s.state === "connected" && (s.capabilities?.includes("browser") ?? false);
+  el.textContent = browsing
+    ? "capabilities: chat · read-only mail · browsing"
+    : "capabilities: chat · read-only mail";
   el.title =
     "Pi can read the mail you select or view (context, messages, bodies, search, attachments, accounts, folders). " +
-    "It cannot send, move, or delete. Compose (drafts) arrives in a later phase.";
+    "It cannot send, move, or delete. Compose (drafts) arrives in a later phase. " +
+    (browsing
+      ? "The browser add-on is connected, so Pi can also use your browser."
+      : "Connect the browser add-on to also give Pi your browser.");
 }
 
 function renderActive(): void {
@@ -692,6 +707,43 @@ $<HTMLInputElement>("cwd-input").addEventListener("keydown", (e) => {
 $<HTMLButtonElement>("refresh").addEventListener("click", () => {
   void action("refresh_sessions").catch(() => {});
 });
+
+// ---------------------------------------------------------------------------
+// Permission Configuration (PRODUCT.md §55): the host is the source of
+// truth for the per-tool "always allow" state; the view here is pure DOM.
+// ---------------------------------------------------------------------------
+
+function openSettings(): void {
+  const overlay = $<HTMLDivElement>("settings-overlay");
+  overlay.classList.remove("hidden");
+  const body = $<HTMLDivElement>("settings-body");
+  if (!body.childElementCount) {
+    const api: PermissionSettingsApi = {
+      getConfig: () => action<PermissionConfigResult>("permission_config"),
+      setTool: (tool, state) =>
+        action<PermissionSetResult>("permission_set", { tool, state }, 10_000).then(() => undefined),
+      clear: (tool) =>
+        action<PermissionClearResult>("permission_clear", tool ? { tool } : {}, 10_000).then(() => undefined),
+    };
+    mountPermissionSettings(body, api);
+  }
+}
+
+function closeSettings(): void {
+  $<HTMLDivElement>("settings-overlay").classList.add("hidden");
+}
+
+$<HTMLButtonElement>("settings").addEventListener("click", openSettings);
+$<HTMLButtonElement>("settings-done").addEventListener("click", closeSettings);
+$<HTMLDivElement>("settings-overlay").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) closeSettings();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$<HTMLDivElement>("settings-overlay").classList.contains("hidden")) {
+    closeSettings();
+  }
+});
+$<HTMLDivElement>("settings-card").addEventListener("click", (e) => e.stopPropagation());
 
 $<HTMLSelectElement>("sessions").addEventListener("change", () => {
   const id = $<HTMLSelectElement>("sessions").value;

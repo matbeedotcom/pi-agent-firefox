@@ -1,10 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { createLogger } from "../src/logger.js";
 import { createMemoryTransportPair, type Dispatcher } from "../src/native-host/transport.js";
 import { CapabilityToolProvider, LegacyBrowserCallbackTransport, NativeMcpOverAcpTransport } from "../src/browser/provider.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
+import { PermissionStore } from "../src/permission-store.js";
 import {
   BROWSER_TOOLS,
   REPL_TOOLS,
@@ -27,16 +31,23 @@ import {
 
 const quiet = createLogger({ level: "error", stderr: { write: () => true } });
 
+/** Fresh temp-file permission store (keeps tests away from ~/.pi/browser). */
+function tempPermissionStore(): PermissionStore {
+  return new PermissionStore({ filePath: join(mkdtempSync(join(tmpdir(), "pi-perm-")), "permissions.json") });
+}
+
 interface FakeFirefox {
   a: Dispatcher; // acts as Firefox
   provider: CapabilityToolProvider;
+  store: PermissionStore;
   toolCalls: Array<{ sessionId: string; tool: string; args: unknown }>;
   respondTool: (id: number, result?: unknown, error?: JsonRpcErrorObject) => void;
 }
 
 function setupFakeFirefox(): FakeFirefox {
   const { a, b } = createMemoryTransportPair(quiet, quiet);
-  const provider = new CapabilityToolProvider(b.transport, quiet);
+  const store = tempPermissionStore();
+  const provider = new CapabilityToolProvider(b.transport, quiet, undefined, { permissionStore: store });
   const toolCalls: FakeFirefox["toolCalls"] = [];
   a.transport.onRequest = (method, params, id) => {
     if (method === X_PI_BROWSER.tool) {
@@ -48,11 +59,18 @@ function setupFakeFirefox(): FakeFirefox {
       });
       return;
     }
+    if (method === CLIENT_METHODS.session_request_permission) {
+      // The fake "user" auto-approves once (like the e2e harness default);
+      // every tool is gated, so this must answer.
+      a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
+      return;
+    }
     a.transport.respondError(id, { code: -32601, message: `fake firefox: unknown ${method}` });
   };
   return {
     a,
     provider,
+    store,
     toolCalls,
     respondTool: (id, result, error) => (error ? a.transport.respondError(id, error) : a.transport.respond(id, result)),
   };
@@ -141,7 +159,8 @@ test("legacy transport: mail tool call round-trip over x-pi-browser/tool", async
  */
 function setupFakeThunderbird(answerOptionId: string = PERMISSION_REJECT) {
   const { a, b } = createMemoryTransportPair(quiet, quiet);
-  const provider = new CapabilityToolProvider(b.transport, quiet);
+  const store = tempPermissionStore();
+  const provider = new CapabilityToolProvider(b.transport, quiet, undefined, { permissionStore: store });
   const permRequests: Array<{ sessionId: string; tool: string; title: string }> = [];
   const toolCalls: Array<{ tool: string }> = [];
   a.transport.onRequest = (method, params, id) => {
@@ -168,7 +187,7 @@ function setupFakeThunderbird(answerOptionId: string = PERMISSION_REJECT) {
     }
     a.transport.respondError(id, { code: -32601, message: `fake thunderbird: unknown ${method}` });
   };
-  return { a, provider, permRequests, toolCalls };
+  return { a, provider, store, permRequests, toolCalls };
 }
 
 test("approval gate: thunderbird mail tool is denied until the user approves", async () => {
@@ -311,33 +330,196 @@ test("approval gate: all thunderbird capability tools are gated on first call", 
   assert.equal(tb.toolCalls.length, expected.length);
 });
 
-test("approval gate: firefox client keeps screenshot-only gating (mail tools not gated)", async () => {
-  // Default application is firefox: mail tools pass through with no prompt.
+test("approval gate: firefox client gates EVERY tool (2026-09-15: all tools gated)", async () => {
+  // Mail tools served by a firefox client are now gated too — the policy is
+  // application-agnostic.
   const tb = setupFakeThunderbird(PERMISSION_REJECT);
   const mailTools = tb.provider.createTools({ id: "s-ff" }, "legacy", undefined, ["mail"]);
   const get = mailTools.find((t) => t.name === "mail_get_message");
   assert.ok(get);
-  await get.execute("tc-ff", {}, undefined);
-  assert.equal(tb.permRequests.length, 0);
-  assert.equal(tb.toolCalls.length, 1);
+  await assert.rejects(
+    get.execute("tc-ff", {}, undefined),
+    (err: unknown) =>
+      err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+  );
+  assert.equal(tb.permRequests.length, 1);
+  assert.equal(tb.permRequests[0].tool, "mail_get_message");
+  assert.equal(tb.toolCalls.length, 0);
 
-  // And a browser tool on firefox is NOT gated except the screenshot.
+  // And a previously-ungated browser tool on firefox is gated as well.
   const ff = setupFakeThunderbird(PERMISSION_REJECT);
   const browserTools = ff.provider.createTools({ id: "s-ff2" }, "legacy", undefined, ["browser"]);
   const getPage = browserTools.find((t) => t.name === "browser_get_page");
   assert.ok(getPage);
-  await getPage.execute("tc-ff2", {}, undefined);
-  assert.equal(ff.permRequests.length, 0);
-
-  const shot = browserTools.find((t) => t.name === "browser_screenshot");
-  assert.ok(shot);
   await assert.rejects(
-    shot.execute("tc-shot", {}, undefined),
+    getPage.execute("tc-ff2", {}, undefined),
     (err: unknown) =>
       err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
   );
   assert.equal(ff.permRequests.length, 1);
-  assert.equal(ff.permRequests[0].tool, "browser_screenshot");
+  assert.equal(ff.permRequests[0].tool, "browser_get_page");
+});
+
+test("approval gate: allow_always persists to the permission store (survives restart)", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_ALLOW_ALWAYS);
+  const tools = tb.provider.createTools({ id: "s-tb" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const get = tools.find((t) => t.name === "mail_get_message");
+  assert.ok(get);
+  await get.execute("tc-1", {}, undefined); // prompts
+  await get.execute("tc-2", {}, undefined); // remembered in-process
+  assert.equal(tb.permRequests.length, 1);
+  assert.equal(tb.store.isAllowed("mail_get_message"), true, "grant written to the persistent store");
+
+  // A brand-new provider over the SAME store (host restart) skips the prompt.
+  const { a, b } = createMemoryTransportPair(quiet, quiet);
+  const restarted = new CapabilityToolProvider(b.transport, quiet, undefined, { permissionStore: tb.store });
+  let promptsAfterRestart = 0;
+  let toolCallsAfterRestart = 0;
+  a.transport.onRequest = (method, params, id) => {
+    if (method === CLIENT_METHODS.session_request_permission) {
+      promptsAfterRestart += 1;
+      a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
+      return;
+    }
+    if (method === X_PI_BROWSER.tool) {
+      toolCallsAfterRestart += 1;
+      a.transport.respond(id, { content: [{ type: "text", text: "ok" }] });
+      return;
+    }
+    a.transport.respondError(id, { code: -32601, message: `unknown ${method}` });
+  };
+  const tools2 = restarted.createTools({ id: "s-tb2" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  await tools2.find((t) => t.name === "mail_get_message")!.execute("tc-3", {}, undefined);
+  // The persisted store alone satisfies the gate: no prompt after "restart".
+  assert.equal(promptsAfterRestart, 0, "no prompt for a persistently-allowed tool");
+  assert.equal(toolCallsAfterRestart, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Permission Configuration page (x-pi-browser/permissions|set|clear)
+// ---------------------------------------------------------------------------
+
+test("permissionConfig: lists the full gated inventory with live states", () => {
+  const tb = setupFakeThunderbird(PERMISSION_REJECT);
+  tb.store.setAllowed("mail_search", true);
+  const config = tb.provider.permissionConfig();
+  const names = config.tools.map((t) => t.name);
+  // Every registry tool is represented (Configuration page completeness).
+  assert.ok(names.includes("browser_get_page"));
+  assert.ok(names.includes("javascript"));
+  assert.ok(names.includes("pi_prompt"));
+  assert.ok(names.includes("mail_search"));
+  assert.ok(names.includes("compose_prepare_new"));
+  assert.ok(names.includes("mail_move"));
+  assert.ok(names.includes("contacts_search"));
+  assert.equal(config.tools.length, new Set(names).size, "no duplicate rows");
+  const search = config.tools.find((t) => t.name === "mail_search");
+  assert.equal(search?.state, "allow");
+  assert.equal(search?.group, "mail");
+  const get = config.tools.find((t) => t.name === "mail_get_message");
+  assert.equal(get?.state, "ask");
+  // Non-toggleable rows are flagged.
+  const evalTool = config.tools.find((t) => t.name === "browser_evaluate");
+  assert.equal(evalTool?.managedBy, "firefox");
+  const js = config.tools.find((t) => t.name === "javascript");
+  assert.match(js?.note ?? "", /per primitive/);
+});
+
+test("permission_set: toggling a tool on stops prompts; off re-enables them", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_REJECT);
+  const tools = tb.provider.createTools({ id: "s-cfg" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const search = tools.find((t) => t.name === "mail_search");
+  assert.ok(search);
+
+  // First call: prompted (and denied by the fake user).
+  await assert.rejects(
+    search.execute("tc-1", {}, undefined),
+    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+  );
+  assert.equal(tb.permRequests.length, 1);
+
+  // Configuration page: set to Always approve.
+  assert.deepEqual(tb.provider.setToolPermission("mail_search", "allow"), { tool: "mail_search", state: "allow" });
+  await search.execute("tc-2", {}, undefined); // no prompt
+  assert.equal(tb.permRequests.length, 1, "always approve suppresses the prompt");
+  assert.equal(tb.toolCalls.length, 1);
+
+  // Configuration page: set back to Ask → asks again.
+  assert.deepEqual(tb.provider.setToolPermission("mail_search", "ask"), { tool: "mail_search", state: "ask" });
+  await assert.rejects(
+    search.execute("tc-3", {}, undefined),
+    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+  );
+  assert.equal(tb.permRequests.length, 2, "toggle off re-enables the prompt");
+});
+
+test("permission_set: rejects unknown tools and non-toggleable rows", () => {
+  const tb = setupFakeThunderbird(PERMISSION_REJECT);
+  assert.throws(
+    () => tb.provider.setToolPermission("totally_unknown_tool", "allow"),
+    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+  );
+  // Firefox owns the userScripts grant — the page cannot set it.
+  assert.throws(
+    () => tb.provider.setToolPermission("browser_evaluate", "allow"),
+    /managed by firefox/,
+  );
+  // The REPL cell is gated per primitive — no state.
+  assert.throws(
+    () => tb.provider.setToolPermission("javascript", "allow"),
+    /no toggleable state/,
+  );
+});
+
+test("permission_set: Deny refuses the tool WITHOUT prompting", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_ALLOW_ONCE);
+  const tools = tb.provider.createTools({ id: "s-deny" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const search = tools.find((t) => t.name === "mail_search");
+  assert.ok(search);
+
+  // Configuration page: set to Deny.
+  assert.deepEqual(tb.provider.setToolPermission("mail_search", "deny"), { tool: "mail_search", state: "deny" });
+
+  // The tool is refused with a structured denial and NO permission prompt.
+  await assert.rejects(
+    search.execute("tc-deny", {}, undefined),
+    (err: unknown) =>
+      err instanceof PiBrowserProtocolError &&
+      err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED &&
+      /denied by the user/.test(err.message),
+  );
+  assert.equal(tb.permRequests.length, 0, "deny short-circuits before the prompt");
+  assert.equal(tb.toolCalls.length, 0, "denied tool never reached the client");
+
+  // Back to Ask → prompts again (and the fake user allows once → runs).
+  tb.provider.setToolPermission("mail_search", "ask");
+  await search.execute("tc-ask", {}, undefined);
+  assert.equal(tb.permRequests.length, 1, "ask prompts again");
+  assert.equal(tb.toolCalls.length, 1);
+});
+
+test("permission_clear: clears one tool, or every tool when omitted", async () => {
+  const tb = setupFakeThunderbird(PERMISSION_ALLOW_ONCE);
+  const tools = tb.provider.createTools({ id: "s-clr" }, "legacy", undefined, ["mail"], undefined, "thunderbird");
+  const get = tools.find((t) => t.name === "mail_get_message")!;
+  const search = tools.find((t) => t.name === "mail_search")!;
+
+  // Persist both, then clear just one.
+  tb.store.setAllowed("mail_get_message", true);
+  tb.store.setAllowed("mail_search", true);
+  assert.deepEqual(tb.provider.clearToolPermissions("mail_get_message"), { cleared: ["mail_get_message"] });
+  assert.equal(tb.store.isAllowed("mail_get_message"), false);
+  assert.equal(tb.store.isAllowed("mail_search"), true);
+
+  // "Clear all" returns the names it cleared.
+  assert.deepEqual(tb.provider.clearToolPermissions(), { cleared: ["mail_search"] });
+  assert.equal(tb.store.allowedTools().length, 0);
+
+  // Both prompt again.
+  await get.execute("tc-1", {}, undefined);
+  await search.execute("tc-2", {}, undefined);
+  assert.equal(tb.permRequests.length, 2);
+  assert.equal(tb.toolCalls.length, 2);
 });
 
 test("legacy transport: tool call round-trip over x-pi-browser/tool", async () => {
@@ -359,6 +541,10 @@ test("legacy transport: structured errors from Firefox map to PiBrowser error co
   const ff = setupFakeFirefox();
   // Override the default responder to return BROWSER_TAB_CLOSED.
   ff.a.transport.onRequest = (method, params, id) => {
+    if (method === CLIENT_METHODS.session_request_permission) {
+      ff.a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
+      return;
+    }
     if (method === X_PI_BROWSER.tool) {
       ff.a.transport.respondError(id, toErrorObject(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, "bound tab is gone", { tabId: 9 }));
       return;
@@ -412,7 +598,7 @@ test("legacy transport: real timeout over a non-responding peer", async () => {
 
 test("tool_update: batches forwarded in order; malformed/mismatched updates dropped", async () => {
   const { a, b } = createMemoryTransportPair(quiet, quiet);
-  const provider = new CapabilityToolProvider(b.transport, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet, undefined, { permissionStore: tempPermissionStore() });
   // The ACP agent wires host-transport notifications to the provider in
   // production; replicate that seam here.
   b.transport.onNotification = (method, params) => {
@@ -425,6 +611,10 @@ test("tool_update: batches forwarded in order; malformed/mismatched updates drop
     seen.push({ toolCallId, kind: update.kind, ...(update.kind === "progress" ? { scanned: update.scanned } : {}) });
 
   a.transport.onRequest = (method, params, id) => {
+    if (method === CLIENT_METHODS.session_request_permission) {
+      a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
+      return;
+    }
     if (method === X_PI_BROWSER.tool) {
       const p = params as { sessionId: string; tool: string; toolCallId: string };
       assert.equal(p.tool, "mail_search");
@@ -473,7 +663,7 @@ test("tool_update: broker mode drops updates from a client that is not executing
   const registry = new CapabilityRegistry(quiet);
   registry.register({ clientId: "tb-1", application: "thunderbird", capabilities: ["mail"], transport: b.transport });
   registry.register({ clientId: "ff-1", application: "firefox", capabilities: ["browser"], transport: ffA.transport });
-  const provider = new CapabilityToolProvider(b.transport, quiet, registry);
+  const provider = new CapabilityToolProvider(b.transport, quiet, registry, { permissionStore: tempPermissionStore() });
   const seen: string[] = [];
   provider.onToolUpdate = (_s, _id, update) => seen.push(update.kind);
   a.transport.onRequest = (method, params, id) => {
@@ -500,11 +690,18 @@ test("tool_update: broker mode drops updates from a client that is not executing
 test("legacy transport: timed-out mail_search returns a resumable partial", async () => {
   const { a, b } = createMemoryTransportPair(quiet, quiet);
   // Short deadline so the test doesn't wait the 120s mail timeout.
-  const provider = new CapabilityToolProvider(b.transport, quiet, undefined, { timeoutMsFor: () => 40 });
+  const provider = new CapabilityToolProvider(b.transport, quiet, undefined, {
+    timeoutMsFor: () => 40,
+    permissionStore: tempPermissionStore(),
+  });
   b.transport.onNotification = (method, params) => {
     if (method === X_PI_BROWSER.tool_update) provider.handleToolUpdate(params as never, undefined);
   };
-  a.transport.onRequest = (method, params) => {
+  a.transport.onRequest = (method, params, id) => {
+    if (method === CLIENT_METHODS.session_request_permission) {
+      a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
+      return;
+    }
     if (method === X_PI_BROWSER.tool) {
       const p = params as { sessionId: string; tool: string; toolCallId: string };
       // Stream one batch, then go silent: the request never answers.
@@ -530,12 +727,16 @@ test("legacy transport: timed-out mail_search returns a resumable partial", asyn
 
 function setupMcpFirefox() {
   const { a, b } = createMemoryTransportPair(quiet, quiet);
-  const provider = new CapabilityToolProvider(b.transport, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet, undefined, { permissionStore: tempPermissionStore() });
   const mcpSeen: Array<{ method: string; params?: unknown }> = [];
   let connectionCounter = 0;
   const connections = new Map<string, { initialized: boolean }>();
 
   a.transport.onRequest = (method, params, id) => {
+    if (method === CLIENT_METHODS.session_request_permission) {
+      a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
+      return;
+    }
     if (method === CLIENT_METHODS.mcp_connect) {
       const p = params as { serverId: string };
       if (p.serverId !== "browser-provider-123") {
@@ -695,7 +896,6 @@ test("provider: x-pi-browser/notify is accepted without error", async () => {
 // ---------------------------------------------------------------------------
 
 import { mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 interface ReplFake {
@@ -710,7 +910,7 @@ interface ReplFake {
 /** Fake add-on with per-tool controllable responses. */
 function setupReplFake(): ReplFake {
   const { a, b } = createMemoryTransportPair(quiet, quiet);
-  const provider = new CapabilityToolProvider(b.transport, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet, undefined, { permissionStore: tempPermissionStore() });
   const behavior: ReplFake["behavior"] = {
     byTool: {},
   };

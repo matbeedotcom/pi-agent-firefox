@@ -62,6 +62,13 @@ function writeScript(entries) {
 
 /** Spawn a real host process (mock backend) with the given broker dir. */
 function spawnHost(brokerDirPath, extraEnv = {}) {
+  // Isolated persistent grants per host process: the developer's real
+  // ~/.pi/browser/permissions.json must not leak "Always allow" state into
+  // tests (and vice versa). Each host owns its own store file.
+  const permFile = path.join(
+    brokerDirPath,
+    `permissions-${Math.random().toString(36).slice(2)}.json`,
+  );
   const child = spawn(process.execPath, [HOST_ENTRY], {
     stdio: ["pipe", "pipe", "pipe"],
     env: {
@@ -71,6 +78,7 @@ function spawnHost(brokerDirPath, extraEnv = {}) {
       PI_BROWSER_BROKER_DIR: brokerDirPath,
       PI_BROWSER_HEARTBEAT_FILE: path.join(brokerDirPath, "heartbeat"),
       PI_BROWSER_LOG_FILE: "off",
+      PI_BROWSER_PERMISSIONS_FILE: permFile,
       ...extraEnv,
     },
   });

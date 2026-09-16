@@ -24,6 +24,7 @@ import {
   type BrowserNotifyParams,
   type BrowserToolCallParams,
   type BrowserToolUpdateParams,
+  type CapabilitiesChangedParams,
   type ConnectMcpRequest,
   type ConnectMcpResponse,
   type DisconnectMcpRequest,
@@ -32,6 +33,7 @@ import {
   type JsonRpcErrorObject,
   type MessageMcpRequest,
   type MessageMcpResponse,
+  type PiAgentMeta,
   type PiBrowserMeta,
   type PermissionPromptedParams,
   type RequestPermissionRequest,
@@ -42,7 +44,13 @@ import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
 
 export type HostStatus =
   | { state: "connecting" }
-  | { state: "connected"; agentInfo?: Implementation; piBrowserMeta?: PiBrowserMeta }
+  | {
+      state: "connected";
+      agentInfo?: Implementation;
+      piBrowserMeta?: PiBrowserMeta;
+      /** Union of capabilities across ALL connected apps (live). */
+      capabilities?: AgentCapability[];
+    }
   | { state: "not_installed"; detail: string }
   | { state: "disconnected"; detail: string };
 
@@ -62,6 +70,12 @@ export interface AcpClientHandlers {
   onStatus(status: HostStatus): void;
   /** Ask the user to approve/deny a sensitive tool call. Returns their choice. */
   onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse>;
+  /**
+   * Optional: a peer app connected/disconnected — the union of connected
+   * capabilities changed. Display-only; the client's own capabilities never
+   * change. Legacy hosts never send this.
+   */
+  onCapabilitiesChanged?(params: CapabilitiesChangedParams): void;
   /**
    * Optional: a tool's approval prompt is being shown in ANOTHER app (the
    * session-owner UI should draw the user's attention there). Display-only —
@@ -237,6 +251,14 @@ export class AcpClient {
       }
       return;
     }
+    if (method === X_PI_BROWSER.capabilities_changed) {
+      try {
+        this.handlers.onCapabilitiesChanged?.(params as CapabilitiesChangedParams);
+      } catch (err) {
+        console.error(`[pi-agent] capabilities_changed handler failed`, err);
+      }
+      return;
+    }
     // Other ACP notifications are not used by the add-on.
   }
 
@@ -386,14 +408,22 @@ export class AcpClient {
         `agent speaks ACP ${res.protocolVersion}, add-on supports ${PROTOCOL_VERSION}`,
       );
     }
-    const meta = (res._meta as { piBrowser?: PiBrowserMeta } | undefined)?.piBrowser;
+    const piMeta = res._meta as { piBrowser?: PiBrowserMeta; piAgent?: PiAgentMeta } | undefined;
+    const meta = piMeta?.piBrowser;
     if (meta && meta.protocolVersion !== PI_BROWSER.protocolVersion) {
       throw new PiBrowserProtocolError(
         PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH,
         `piBrowser protocol ${meta.protocolVersion} != supported ${PI_BROWSER.protocolVersion}`,
       );
     }
-    this.setStatus({ state: "connected", agentInfo: res.agentInfo ?? undefined, piBrowserMeta: meta });
+    this.setStatus({
+      state: "connected",
+      agentInfo: res.agentInfo ?? undefined,
+      piBrowserMeta: meta,
+      // Session tool surface (plan §29); live updates arrive via
+      // x-pi-browser/capabilities_changed. Legacy hosts omit it.
+      ...(piMeta?.piAgent?.connectedCapabilities ? { capabilities: piMeta.piAgent.connectedCapabilities } : {}),
+    });
     return res;
   }
 }

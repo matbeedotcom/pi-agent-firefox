@@ -31,6 +31,8 @@ import {
   PiBrowserProtocolError,
   X_PI_BROWSER,
   buildPermissionRequest,
+  getGatedTool,
+  listGatedTools,
   permissionAllowed,
   toolRequiresApproval,
   REQUEST_PERMISSION_METHOD,
@@ -38,9 +40,14 @@ import {
   type AgentApplication,
   type BrowserNotifyParams,
   type BrowserToolUpdateParams,
+  type PermissionClearResult,
+  type PermissionConfigResult,
   type PermissionPromptedParams,
+  type PermissionSetResult,
+  type PermissionToolState,
   type RequestPermissionResponse,
 } from "@pi-browser/protocol";
+import { PermissionStore } from "../permission-store.js";
 import type { MailSearchResult } from "@pi-browser/protocol";
 import { BROWSER_TOOL_SCHEMAS, CONTROL_TOOL_SCHEMAS, type BrowserToolSchema } from "./schemas.js";
 import { MAIL_TOOL_SCHEMAS, type MailToolSchema } from "../mail/schemas.js";
@@ -318,10 +325,24 @@ const PERMISSION_TIMEOUT_MS = 120_000;
  * routed to the connected client that provides it — the session owner when
  * it does, otherwise a peer application (cross-app routing).
  */
+export interface CapabilityToolProviderOptions {
+  /** Test seam: override per-tool deadlines (default: protocol constants). */
+  timeoutMsFor?: (tool: string) => number;
+  /**
+   * Test seam: inject the persistent permission store (default: the
+   * ~/.pi/browser/permissions.json file store).
+   */
+  permissionStore?: PermissionStore;
+}
+
 export class CapabilityToolProvider {
   private readonly sessions = new Map<string, SessionBrowserState>();
-  /** Tools the user has approved with "Always allow" (per host lifetime). */
-  private readonly alwaysAllowed = new Set<string>();
+  /**
+   * Persistent per-tool states (ask | deny | allow, PRODUCT.md §55). Shared
+   * by every connected application (one broker process); survives host
+   * restarts and is editable from the add-on's Configuration page.
+   */
+  private readonly permissions: PermissionStore;
   /**
    * Tools the user has approved with "Allow for this session", keyed by ACP
    * session id. Cleared when the session is disposed.
@@ -356,10 +377,10 @@ export class CapabilityToolProvider {
     private readonly transport: AcpTransportLike | undefined,
     private readonly log: Logger,
     private readonly registry: CapabilityRegistry | undefined = undefined,
-    /** Test seam: override per-tool deadlines (default: protocol constants). */
-    options: { timeoutMsFor?: (tool: string) => number } = {},
+    options: CapabilityToolProviderOptions = {},
   ) {
     this.timeoutForTool = options.timeoutMsFor ?? timeoutFor;
+    this.permissions = options.permissionStore ?? new PermissionStore();
   }
   private readonly timeoutForTool: (tool: string) => number;
 
@@ -513,6 +534,16 @@ export class CapabilityToolProvider {
     // mode, the owner otherwise.
     const executingApp = target ? target.application : ownerApplication;
     if (toolRequiresApproval(executingApp, toolName) && !this.autoApproves(toolName)) {
+      // Persistent "Deny" (PRODUCT.md §55): the user configured this tool to
+      // be refused WITHOUT asking — no prompt, structured denial.
+      if (this.permissions.isDenied(toolName)) {
+        this.log.info(`${toolName}: persistently denied by the user — refusing without a prompt`);
+        throw new PiBrowserProtocolError(
+          PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+          `${toolName} is denied by the user in the Permission Configuration. Ask them to set it to Ask or Always approve.`,
+          { tool: toolName },
+        );
+      }
       // Cross-app: the prompt shows in ANOTHER app than the one the user is
       // watching. Tell the session owner so its UI can point the user at the
       // mail/browser client (display-only; the executing client owns the
@@ -587,6 +618,72 @@ export class CapabilityToolProvider {
     if (!raw) return false;
     const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
     return list.includes("*") || list.includes(toolName);
+  }
+
+  // ------------------------------------------------------------------
+  // Permission configuration (x-pi-browser/permissions|set|clear, §55)
+  // ------------------------------------------------------------------
+
+  /**
+   * The full gated-tool inventory with each tool's persistent state
+   * (ask | deny | allow) — the data the add-on's Configuration page
+   * renders.
+   */
+  permissionConfig(): PermissionConfigResult {
+    return {
+      tools: listGatedTools().map((t) => ({
+        name: t.name,
+        description: t.description,
+        group: t.group,
+        state: this.permissions.getState(t.name),
+        ...(t.managedBy ? { managedBy: t.managedBy } : {}),
+        ...(t.note ? { note: t.note } : {}),
+      })),
+    };
+  }
+
+  /**
+   * Set one tool's persistent state (ask | deny | allow) from the
+   * Configuration page. Unknown tools and app-managed grants
+   * (browser_evaluate — Firefox owns its userScripts permission) are
+   * rejected.
+   */
+  setToolPermission(tool: string, state: PermissionToolState): PermissionSetResult {
+    const entry = getGatedTool(tool);
+    if (!entry) {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool: ${tool}`);
+    }
+    if (entry.managedBy) {
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.INTERNAL,
+        `${tool} is managed by ${entry.managedBy} — its grant cannot be changed here`,
+      );
+    }
+    if (entry.note) {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${tool} has no toggleable state: ${entry.note}`);
+    }
+    this.permissions.setState(tool, state);
+    this.log.info(`${tool}: persistent state set to "${state}" from Configuration page`);
+    return { tool, state };
+  }
+
+  /**
+   * Clear one tool's persistent grant, or every grant when `tool` is
+   * omitted. Returns the names that were cleared ("clear all" feedback).
+   */
+  clearToolPermissions(tool?: string): PermissionClearResult {
+    if (tool !== undefined) {
+      const entry = getGatedTool(tool);
+      if (!entry) {
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool: ${tool}`);
+      }
+      this.permissions.clear(tool);
+      this.log.info(`${tool}: persistent allow cleared from Configuration page`);
+      return { cleared: [tool] };
+    }
+    const cleared = this.permissions.clearAll();
+    this.log.info(`permissions: cleared ALL persistent allows (${cleared.length} tool(s))`);
+    return { cleared };
   }
 
   /** The last streamed progress for an in-flight call (timeout recovery). */
@@ -692,7 +789,11 @@ export class CapabilityToolProvider {
   /** True when a permission prompt WILL be sent for this tool call. */
   private willPrompt(sessionId: string, toolName: string): boolean {
     if (toolName === "browser_evaluate") return true; // Firefox checks the current browser grant.
-    return !this.alwaysAllowed.has(toolName) && !this.sessionAllowed.get(sessionId)?.has(toolName);
+    return (
+      !this.autoApproves(toolName) &&
+      !this.permissions.isAllowed(toolName) &&
+      !this.sessionAllowed.get(sessionId)?.has(toolName)
+    );
   }
 
   /**
@@ -817,8 +918,10 @@ export class CapabilityToolProvider {
       for (const toolName of new Set(members.map((m) => m.toolName))) {
         if (toolName === "browser_evaluate") continue; // Never cache Firefox's revocable userScripts grant.
         if (optionId === "allow_always") {
-          this.alwaysAllowed.add(toolName);
-          this.log.info(`${toolName}: user chose Always allow`);
+          // Persistent: remembered across host restarts and toggleable from
+          // the add-on's Configuration page.
+          this.permissions.setAllowed(toolName, true);
+          this.log.info(`${toolName}: user chose Always allow (persisted)`);
         } else if (optionId === "allow_session") {
           let set = this.sessionAllowed.get(sessionId);
           if (!set) {

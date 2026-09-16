@@ -1,13 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { createLogger } from "../src/logger.js";
 import { createMemoryTransportPair, type Dispatcher } from "../src/native-host/transport.js";
 import { AcpAgent } from "../src/acp/agent.js";
+import { CapabilityRegistry } from "../src/capability-registry.js";
 import { CapabilityToolProvider } from "../src/browser/provider.js";
+import { PermissionStore } from "../src/permission-store.js";
 import { MockBackend, MockSession } from "./mock-backend.js";
 import {
   AGENT_METHODS,
@@ -42,7 +45,11 @@ interface Harness {
 function setup(workspaceRoot?: string): Harness {
   const backend = new MockBackend();
   const { a, b } = createMemoryTransportPair(quiet, quiet);
-  const provider = new CapabilityToolProvider(b.transport, quiet);
+  const provider = new CapabilityToolProvider(b.transport, quiet, undefined, {
+    permissionStore: new PermissionStore({
+      filePath: path.join(mkdtempSync(path.join(tmpdir(), "pi-acp-agent-")), "permissions.json"),
+    }),
+  });
   const agent = new AcpAgent({
     backend,
     provider,
@@ -135,6 +142,89 @@ test("initialize: pi.agent.hello (thunderbird, mail + compose) -> no browser too
   assert.ok(h.lastCreateTools.every((t) => !(t as { name: string }).name.startsWith("browser_")), "mail client gets no browser tools");
   assert.ok(h.lastCreateTools.every((t) => (t as { name: string }).name !== "compose_send"), "no send tool is exposed");
   await h.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });
+});
+
+test("initialize: connectedCapabilities is the union of ALL connected clients (broker mode) + live capabilities_changed", async () => {
+  const backend = new MockBackend();
+  const ffPair = createMemoryTransportPair(quiet, quiet);
+  const tbPair = createMemoryTransportPair(quiet, quiet);
+  const registry = new CapabilityRegistry(quiet);
+  const provider = new CapabilityToolProvider(undefined, quiet, registry, {
+    permissionStore: new PermissionStore({
+      filePath: path.join(mkdtempSync(path.join(tmpdir(), "pi-acp-agent2-")), "permissions.json"),
+    }),
+  });
+  const ffAgent = new AcpAgent({
+    backend,
+    provider,
+    transport: ffPair.b.transport,
+    log: quiet,
+    agentInfo: { name: "test-agent", version: "0.0.0" },
+    clientId: "stdio",
+    registry,
+  });
+  const tbAgent = new AcpAgent({
+    backend,
+    provider,
+    transport: tbPair.b.transport,
+    log: quiet,
+    agentInfo: { name: "test-agent", version: "0.0.0" },
+    clientId: "relay-1",
+    registry,
+  });
+  // Same wiring as the broker (native-host/main.ts): a provider-set change
+  // notifies every connected agent.
+  registry.onChange = (caps) => {
+    ffAgent.notifyCapabilitiesChanged(caps);
+    tbAgent.notifyCapabilitiesChanged(caps);
+  };
+  const capNotif = (pair: { a: Dispatcher }) => {
+    const seen: unknown[] = [];
+    pair.a.transport.onNotification = (m, p) => {
+      if (m === X_PI_BROWSER.capabilities_changed) seen.push(p);
+    };
+    return seen;
+  };
+  const ffSeen = capNotif(ffPair);
+  const tbSeen = capNotif(tbPair);
+
+  // Firefox connects first: the union is just its own capabilities.
+  const ffRes = (await ffPair.a.transport.request(AGENT_METHODS.initialize, {
+    protocolVersion: PROTOCOL_VERSION,
+    clientInfo: { name: "pi-browser-firefox", version: "0.1.1" },
+    _meta: buildAgentHelloMeta({
+      client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.1" },
+      capabilities: ["browser"],
+    }),
+  })) as { _meta: { piAgent: { capabilities: string[]; connectedCapabilities: string[] } } };
+  assert.deepEqual(ffRes._meta.piAgent.capabilities, ["browser"]);
+  assert.deepEqual(ffRes._meta.piAgent.connectedCapabilities, ["browser"]);
+
+  // Thunderbird connects: its response already reflects the full union...
+  const tbRes = (await tbPair.a.transport.request(AGENT_METHODS.initialize, {
+    protocolVersion: PROTOCOL_VERSION,
+    clientInfo: { name: "pi-thunderbird", version: "0.1.1" },
+    _meta: buildAgentHelloMeta({
+      client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
+      capabilities: ["mail", "compose", "attachments"],
+    }),
+  })) as { _meta: { piAgent: { connectedCapabilities: string[] } } };
+  assert.deepEqual(tbRes._meta.piAgent.connectedCapabilities, ["browser", "mail", "compose", "attachments"]);
+  // ...and the already-connected Firefox client is told live (it may also
+  // have seen the echo of its own registration; the LAST one must be the union).
+  assert.ok(ffSeen.length >= 1, "Firefox received capabilities_changed");
+  assert.deepEqual(
+    (ffSeen[ffSeen.length - 1] as { capabilities: string[] }).capabilities,
+    ["browser", "mail", "compose", "attachments"],
+  );
+
+  // Thunderbird disconnects: every remaining client is told the shrunken union.
+  registry.remove("relay-1");
+  assert.deepEqual((ffSeen[ffSeen.length - 1] as { capabilities: string[] }).capabilities, ["browser"]);
+  assert.deepEqual((tbSeen[tbSeen.length - 1] as { capabilities: string[] }).capabilities, ["browser"]);
+
+  ffAgent.shutdown();
+  tbAgent.shutdown();
 });
 
 test("initialize: thunderbird mailModify + contacts capabilities register mutation + contact tools", async () => {

@@ -14,6 +14,9 @@ import {
   PERMISSION_ALLOW_ONCE,
   PERMISSION_REJECT,
   X_PI_BROWSER,
+  type PermissionClearResult,
+  type PermissionConfigResult,
+  type PermissionSetResult,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionInfo,
@@ -109,7 +112,7 @@ let bootstrapInFlight = false;
 let theme: PiTheme | undefined;
 
 // ---------------------------------------------------------------------------
-// Permission prompts (PRODUCT.md §43)
+// Permission prompts (PRODUCT.md §55)
 // ---------------------------------------------------------------------------
 
 /**
@@ -350,6 +353,15 @@ const client = new AcpClient(
       .catch(() => {
         /* sidebar not open */
       });
+  },
+  // A peer app (Thunderbird) connected/disconnected: refresh the union in
+  // our status copy and re-push state so the sidebar can update its
+  // "capabilities:" line.
+  onCapabilitiesChanged: (params) => {
+    if (hostStatus.state === "connected") {
+      hostStatus = { ...hostStatus, capabilities: params.capabilities };
+    }
+    pushState();
   },
   onStatus(status: HostStatus) {
     if (hostStatus.state === "connected" && status.state !== "connected") {
@@ -608,6 +620,28 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
       await refreshSessionList();
       return {};
     }
+    // Permission Configuration page (PRODUCT.md §55): the host is the
+    // source of truth for the per-tool "always allow" state.
+    case "permission_config": {
+      return client.request<PermissionConfigResult>(X_PI_BROWSER.permissions, {}, 10_000);
+    }
+    case "permission_set": {
+      const state = payload.state === "allow" || payload.state === "deny" || payload.state === "ask" ? payload.state : "ask";
+      const res = await client.request<PermissionSetResult>(
+        X_PI_BROWSER.permission_set,
+        { tool: String(payload.tool ?? ""), state },
+        10_000,
+      );
+      return res;
+    }
+    case "permission_clear": {
+      const res = await client.request<PermissionClearResult>(
+        X_PI_BROWSER.permission_clear,
+        payload.tool ? { tool: String(payload.tool) } : {},
+        10_000,
+      );
+      return res;
+    }
     default:
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `unknown action: ${action}`);
   }
@@ -619,6 +653,8 @@ interface ActionPayload {
   text?: string;
   configId?: string;
   value?: unknown;
+  tool?: string;
+  state?: string;
 }
 
 function processCwdLikeFallback(): string {

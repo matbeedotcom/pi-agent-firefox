@@ -55,6 +55,10 @@ import {
   PERMISSION_ALLOW_ONCE,
   PERMISSION_ALLOW_SESSION,
   PERMISSION_REJECT,
+  PERMISSION_TOOL_GROUPS,
+  getGatedTool,
+  isGatedTool,
+  listGatedTools,
   permissionAllowed,
   permissionPromptDescription,
   REQUEST_PERMISSION_METHOD,
@@ -304,26 +308,66 @@ test("permission helpers: request shape + outcome classification", () => {
   assert.equal(permissionAllowed(undefined), false);
 });
 
-test("toolRequiresApproval: per-application approval policy", () => {
+test("toolRequiresApproval: every add-on tool is gated in every application", () => {
+  // 2026-09-15: the approval policy is application-agnostic — every tool the
+  // add-ons provide (browser, REPL, control, mail, compose, contacts,
+  // mutations) requires explicit approval, in Firefox AND Thunderbird.
   assert.equal(toolRequiresApproval("firefox", "browser_evaluate"), true);
-  // Firefox: only the pixel-capture tool is gated (live-gesture requirement).
   assert.equal(toolRequiresApproval("firefox", "browser_screenshot"), true);
-  assert.equal(toolRequiresApproval("firefox", "browser_get_page"), false);
-  assert.equal(toolRequiresApproval("firefox", "browser_click"), false);
-  assert.equal(toolRequiresApproval("firefox", "mail_get_message"), false);
-
-  // Thunderbird: every mail-surface tool is gated (mailbox + address book
-  // access is approval-gated per tool).
+  assert.equal(toolRequiresApproval("firefox", "browser_get_page"), true);
+  assert.equal(toolRequiresApproval("firefox", "browser_click"), true);
+  assert.equal(toolRequiresApproval("firefox", "mail_get_message"), true);
+  assert.equal(toolRequiresApproval("firefox", "javascript"), true);
+  assert.equal(toolRequiresApproval("firefox", "pi_prompt"), true);
   for (const t of MAIL_TOOLS) assert.equal(toolRequiresApproval("thunderbird", t.name), true, t.name);
   for (const t of COMPOSE_TOOLS) assert.equal(toolRequiresApproval("thunderbird", t.name), true, t.name);
   for (const t of MAIL_MUTATION_TOOLS) assert.equal(toolRequiresApproval("thunderbird", t.name), true, t.name);
   for (const t of CONTACTS_TOOLS) assert.equal(toolRequiresApproval("thunderbird", t.name), true, t.name);
+  for (const t of BROWSER_TOOLS) assert.equal(toolRequiresApproval("thunderbird", t.name), true, t.name);
+});
 
-  // A mail tool served by a firefox client is not gated (the policy keys on
-  // the EXECUTING application, not the tool name).
-  assert.equal(toolRequiresApproval("firefox", "mail_search"), false);
-  assert.equal(toolRequiresApproval("thunderbird", "browser_screenshot"), false);
-  assert.equal(toolRequiresApproval("thunderbird", "pi_unknown_tool"), false);
+test("listGatedTools: canonical inventory covers every tool registry", () => {
+  const tools = listGatedTools();
+  const names = tools.map((t) => t.name);
+  // Unique, well-formed names.
+  assert.equal(new Set(names).size, names.length);
+  // Every registry tool is present exactly once.
+  const expected = [
+    ...BROWSER_TOOLS.map((t) => t.name),
+    ...REPL_TOOLS.map((t) => t.name),
+    ...CONTROL_TOOLS.map((t) => t.name),
+    ...MAIL_TOOLS.map((t) => t.name),
+    ...COMPOSE_TOOLS.map((t) => t.name),
+    ...MAIL_MUTATION_TOOLS.map((t) => t.name),
+    ...CONTACTS_TOOLS.map((t) => t.name),
+  ];
+  assert.deepEqual([...names].sort(), [...expected].sort());
+  // Groups are valid and in the canonical order.
+  for (const t of tools) {
+    assert.ok(PERMISSION_TOOL_GROUPS.includes(t.group), t.name);
+    assert.ok(t.description.length > 0, `${t.name} needs a description for the page`);
+  }
+  const groupOrder = PERMISSION_TOOL_GROUPS;
+  const firstIndexOf = (g: (typeof groupOrder)[number]) => tools.findIndex((t) => t.group === g);
+  for (let i = 1; i < groupOrder.length; i++) {
+    assert.ok(firstIndexOf(groupOrder[i]) > firstIndexOf(groupOrder[i - 1]), `group order ${groupOrder[i]}`);
+  }
+  // browser_evaluate is the only app-managed grant.
+  const managed = tools.filter((t) => t.managedBy);
+  assert.deepEqual(managed.map((t) => t.name), ["browser_evaluate"]);
+  assert.equal(managed[0].managedBy, "firefox");
+  // Lookup helpers.
+  assert.ok(isGatedTool("mail_search"));
+  assert.ok(!isGatedTool("totally_unknown_tool"));
+  assert.equal(getGatedTool("browser_click")?.group, "browser");
+  assert.equal(getGatedTool("javascript")?.group, "repl");
+  assert.equal(getGatedTool("pi_prompt")?.group, "control");
+});
+
+test("permission config wire methods: x-pi-browser/permissions|permission_set|permission_clear", () => {
+  assert.equal(X_PI_BROWSER.permissions, "x-pi-browser/permissions");
+  assert.equal(X_PI_BROWSER.permission_set, "x-pi-browser/permission_set");
+  assert.equal(X_PI_BROWSER.permission_clear, "x-pi-browser/permission_clear");
 });
 
 test("cross-app remote-prompt notification: method + app display names", () => {

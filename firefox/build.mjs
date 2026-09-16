@@ -77,3 +77,4 @@ await cp(path.join(root, "src", "sidebar", "style.css"), path.join(dist, "sideba
 console.log("firefox add-on built to", dist);
 
 await cp(path.join(root, "..", "packages", "webext", "src", "activity", "activity.css"), path.join(dist, "sidebar", "activity.css"));
+await cp(path.join(root, "..", "packages", "webext", "src", "permissions.css"), path.join(dist, "sidebar", "permissions.css"));

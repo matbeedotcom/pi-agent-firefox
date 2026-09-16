@@ -6,9 +6,16 @@
  * renders ACP session/update streams. Same model as the Firefox sidebar, laid
  * out as a full Space tab (session rail + conversation pane).
  */
-import { applicationDisplayName, permissionPromptDescription } from "@pi-browser/protocol";
-import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData } from "@pi-browser/webext";
+import {
+  applicationDisplayName,
+  permissionPromptDescription,
+  type PermissionClearResult,
+  type PermissionConfigResult,
+  type PermissionSetResult,
+} from "@pi-browser/protocol";
+import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData, mountPermissionSettings, type PermissionSettingsApi } from "@pi-browser/webext";
 import type {
+  AgentCapability,
   SessionConfigOption,
   SessionConfigSelect,
   SessionUpdate,
@@ -20,6 +27,8 @@ interface StatusInfo {
   detail?: string;
   agentInfo?: { name?: string; version?: string };
   piBrowserMeta?: { version: string; protocolVersion: number; browserToolVersion: number };
+  /** Union of capabilities across ALL connected apps (live, plan §29). */
+  capabilities?: AgentCapability[];
 }
 
 interface SessionUi {
@@ -302,11 +311,19 @@ function renderCaps(): void {
   const el = $<HTMLDivElement>("caps");
   // T2: chat + read-only mail. Compose (draft-first, no send) arrives in T3.
   // Select an email and ask "Summarize this email." — the agent uses the
-  // read-only mail tools against what you have selected/displayed.
-  el.textContent = "capabilities: chat · read-only mail";
+  // read-only mail tools against what you have selected/displayed. When the
+  // browser add-on is also connected, the union gains "browser" (plan §29).
+  const s = uiState.status;
+  const browsing = s.state === "connected" && (s.capabilities?.includes("browser") ?? false);
+  el.textContent = browsing
+    ? "capabilities: chat · read-only mail · browsing"
+    : "capabilities: chat · read-only mail";
   el.title =
     "Pi can read the mail you select or view (context, messages, bodies, search, attachments, accounts, folders). " +
-    "It cannot send, move, or delete. Compose (drafts) arrives in a later phase.";
+    "It cannot send, move, or delete. Compose (drafts) arrives in a later phase. " +
+    (browsing
+      ? "The browser add-on is connected, so Pi can also use your browser."
+      : "Connect the browser add-on to also give Pi your browser.");
 }
 
 function renderActive(): void {
@@ -661,6 +678,44 @@ $<HTMLInputElement>("cwd-input").addEventListener("keydown", (e) => {
 $<HTMLButtonElement>("refresh").addEventListener("click", () => {
   void action("refresh_sessions").catch(() => {});
 });
+
+// ---------------------------------------------------------------------------
+// Permission Configuration (PRODUCT.md §55): the host is the source of
+// truth for the per-tool "always allow" state; the view here is pure DOM.
+// ---------------------------------------------------------------------------
+
+let settingsUnmount: (() => void) | undefined;
+
+function openSettings(): void {
+  const overlay = $<HTMLDivElement>("settings-overlay");
+  overlay.classList.remove("hidden");
+  if (!settingsUnmount) {
+    const api: PermissionSettingsApi = {
+      getConfig: () => action<PermissionConfigResult>("permission_config"),
+      setTool: (tool, state) =>
+        action<PermissionSetResult>("permission_set", { tool, state }).then(() => undefined),
+      clear: (tool) =>
+        action<PermissionClearResult>("permission_clear", tool ? { tool } : {}).then(() => undefined),
+    };
+    settingsUnmount = mountPermissionSettings($<HTMLDivElement>("settings-body"), api);
+  }
+}
+
+function closeSettings(): void {
+  $<HTMLDivElement>("settings-overlay").classList.add("hidden");
+}
+
+$<HTMLButtonElement>("settings").addEventListener("click", openSettings);
+$<HTMLButtonElement>("settings-done").addEventListener("click", closeSettings);
+$<HTMLDivElement>("settings-overlay").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) closeSettings();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$<HTMLDivElement>("settings-overlay").classList.contains("hidden")) {
+    closeSettings();
+  }
+});
+$<HTMLDivElement>("settings-card").addEventListener("click", (e) => e.stopPropagation());
 
 $<HTMLButtonElement>("onboard-check").addEventListener("click", () => {
   browser.runtime

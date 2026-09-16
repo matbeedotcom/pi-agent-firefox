@@ -27,6 +27,9 @@ import {
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
   X_PI_BROWSER,
+  type PermissionClearResult,
+  type PermissionConfigResult,
+  type PermissionSetResult,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionInfo,
@@ -243,6 +246,15 @@ const client = new AcpClient(
     // (e.g. the browser). Point the user there; we do not answer it.
     onPermissionPrompted: (params) => {
       broadcastUi({ type: "pi/permission_prompted", params });
+    },
+    // A peer app (browser) connected/disconnected: refresh the union in our
+    // status copy and re-push state so the Space and panes can update their
+    // "capabilities:" line.
+    onCapabilitiesChanged: (params) => {
+      if (hostStatus.state === "connected") {
+        hostStatus = { ...hostStatus, capabilities: params.capabilities };
+      }
+      pushState();
     },
     onStatus(status: HostStatus) {
       hostStatus = status;
@@ -472,6 +484,8 @@ interface ActionPayload {
   text?: string;
   configId?: string;
   value?: unknown;
+  tool?: string;
+  state?: string;
 }
 
 async function handleAction(action: string, payload: ActionPayload): Promise<unknown> {
@@ -550,6 +564,26 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
     case "refresh_sessions": {
       await refreshSessionList();
       return {};
+    }
+    // Permission Configuration page (PRODUCT.md §55): the host is the
+    // source of truth for the per-tool "always allow" state.
+    case "permission_config": {
+      return client.request<PermissionConfigResult>(X_PI_BROWSER.permissions, {}, 10_000);
+    }
+    case "permission_set": {
+      const state = payload.state === "allow" || payload.state === "deny" || payload.state === "ask" ? payload.state : "ask";
+      return client.request<PermissionSetResult>(
+        X_PI_BROWSER.permission_set,
+        { tool: String(payload.tool ?? ""), state },
+        10_000,
+      );
+    }
+    case "permission_clear": {
+      return client.request<PermissionClearResult>(
+        X_PI_BROWSER.permission_clear,
+        payload.tool ? { tool: String(payload.tool) } : {},
+        10_000,
+      );
     }
     default:
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `unknown action: ${action}`);

@@ -125,6 +125,14 @@ export interface PiAgentMeta {
   application?: AgentApplication;
   /** Capabilities the host accepts from this client. */
   capabilities: AgentCapability[];
+  /**
+   * Union of capabilities across ALL connected clients (broker mode) as of
+   * initialize — the session tool surface (plan §29). Lets the add-on UI
+   * show peer-app capabilities (e.g. browsing from the mail client). Absent
+   * on legacy hosts and in standalone single-app mode (use `capabilities`).
+   * Live changes arrive via x-pi-browser/capabilities_changed.
+   */
+  connectedCapabilities?: AgentCapability[];
 }
 
 export const PI_AGENT_META: PiAgentMeta = {
@@ -243,6 +251,29 @@ export const X_PI_BROWSER = {
    * already-approved call.
    */
   tool_update: "x-pi-browser/tool_update",
+  /**
+   * Host → all clients: the set of connected capability providers changed
+   * (a peer app connected or disconnected). Carries the current union so
+   * each UI can update its "capabilities:" line. Display-only; additive —
+   * legacy hosts never send it and clients ignore it when absent.
+   */
+  capabilities_changed: "x-pi-browser/capabilities_changed",
+  /**
+   * Client → host: fetch the permission configuration — every approval-
+   * gated tool with its persistent "always allow" state. The add-on
+   * Configuration page renders from this (PRODUCT.md §55).
+   */
+  permissions: "x-pi-browser/permissions",
+  /**
+   * Client → host: set one tool's persistent state (ask | deny | allow)
+   * from the Configuration page.
+   */
+  permission_set: "x-pi-browser/permission_set",
+  /**
+   * Client → host: clear the persistent "always allow" state of one tool
+   * (or of every tool when `tool` is omitted).
+   */
+  permission_clear: "x-pi-browser/permission_clear",
 } as const;
 
 /** Params for x-pi-browser/ping (Firefox → host). */
@@ -312,6 +343,12 @@ export interface BrowserNotifyParams {
   data?: Record<string, unknown>;
 }
 
+/** Params for x-pi-browser/capabilities_changed (host → client). */
+export interface CapabilitiesChangedParams {
+  /** Union of all connected clients' capabilities (canonical order). */
+  capabilities: AgentCapability[];
+}
+
 /** Params for x-pi-browser/permission_prompted (host → session-owner client). */
 export interface PermissionPromptedParams {
   sessionId: string;
@@ -337,3 +374,73 @@ export const BROWSER_TOOL_TIMEOUT_MS = 30_000;
 export const BROWSER_SCREENSHOT_TIMEOUT_MS = 60_000;
 /** Long deadline for file downloads (images/videos can be several MB). */
 export const BROWSER_DOWNLOAD_TIMEOUT_MS = 120_000;
+
+// ---------------------------------------------------------------------------
+// Permission configuration (PRODUCT.md §55) — client ↔ host
+// ---------------------------------------------------------------------------
+
+/** Tool group the Configuration page renders (labels live in permission.ts). */
+export type PermissionToolGroup =
+  | "browser"
+  | "repl"
+  | "control"
+  | "mail"
+  | "compose"
+  | "mail-mutations"
+  | "contacts";
+
+/**
+ * One approval-gated tool as reported by x-pi-browser/permissions.
+ * `state` is the tool's persistent decision: "ask" (prompt every time),
+ * "deny" (refuse without asking) or "allow" (always approved). `managedBy`
+ * marks tools whose grant is owned by the application (not the host store)
+ * — e.g. browser_evaluate, where Firefox's revocable `userScripts`
+ * permission is authoritative; such rows have no toggle. `note` carries an
+ * extra explanation for rows without a toggle.
+ */
+export interface PermissionConfigTool {
+  name: string;
+  description: string;
+  group: PermissionToolGroup;
+  /** Persistent decision (host store); "ask" = no entry. */
+  state: PermissionToolState;
+  /** Set when the application owns the grant (row is informational only). */
+  managedBy?: AgentApplication;
+  /** Extra one-line note for the Configuration page (e.g. per-primitive gating). */
+  note?: string;
+}
+
+/** Result for x-pi-browser/permissions. */
+export interface PermissionConfigResult {
+  tools: PermissionConfigTool[];
+}
+
+/**
+ * A tool's persistent permission state (Configuration page, PRODUCT.md
+ * §55). "ask" is the default: the user is prompted on every call. "deny"
+ * refuses the tool without asking (structured BROWSER_PERMISSION_DENIED).
+ * "allow" approves every call without asking.
+ */
+export type PermissionToolState = "ask" | "deny" | "allow";
+
+/** Params for x-pi-browser/permission_set. */
+export interface PermissionSetParams {
+  tool: string;
+  state: PermissionToolState;
+}
+
+/** Result for x-pi-browser/permission_set. */
+export interface PermissionSetResult {
+  tool: string;
+  state: PermissionToolState;
+}
+
+/** Params for x-pi-browser/permission_clear (omit `tool` to clear all). */
+export interface PermissionClearParams {
+  tool?: string;
+}
+
+/** Result for x-pi-browser/permission_clear. */
+export interface PermissionClearResult {
+  cleared: string[];
+}
