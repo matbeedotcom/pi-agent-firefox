@@ -214,16 +214,20 @@ export class MockBackend implements PiBackend {
   readonly sessions = new Map<string, MockSession>();
   /** Sessions that exist (or existed) — the mock's stand-in for persisted sessions. */
   private readonly known = new Map<string, { cwd: string; tools: ToolSpec[] }>();
-  /** Optional external script (PI_BROWSER_MOCK_SCRIPT). */
+  /** Optional external script (PI_BROWSER_MOCK_SCRIPT) or inline entries. */
   readonly script: MockScriptEntry[];
 
-  constructor(scriptPath?: string) {
-    if (scriptPath) {
+  constructor(script?: string | MockScriptEntry[]) {
+    if (Array.isArray(script)) {
+      this.script = script;
+      return;
+    }
+    if (script) {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(readFileSync(scriptPath, "utf8"));
+        parsed = JSON.parse(readFileSync(script, "utf8"));
       } catch (err) {
-        throw new Error(`mock script unreadable (${scriptPath}): ${err instanceof Error ? err.message : String(err)}`);
+        throw new Error(`mock script unreadable (${script}): ${err instanceof Error ? err.message : String(err)}`);
       }
       if (!Array.isArray(parsed)) throw new Error("mock script must be a JSON array of entries");
       this.script = parsed as MockScriptEntry[];

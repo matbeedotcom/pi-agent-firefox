@@ -13,7 +13,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
+    "test": "tsc -p tsconfig.tests.json && node --test \"dist-tests/test/**/*.test.js\""
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",

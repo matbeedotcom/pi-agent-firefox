@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "packageId": "fixture-skill",
+  "skills": [
+    {
+      "id": "fixture-reply",
+      "type": "triggered",
+      "instructions": "skill/SKILL.md",
+      "scope": {
+        "applications": ["firefox"]
+      },
+      "subscriptions": [
+        { "event": "comment.draft.paused" },
+        { "event": "comment.before-submit" }
+      ],
+      "context": {
+        "required": ["draft"],
+        "optional": ["replyTarget"]
+      },
+      "capabilities": ["context.read", "suggestion.present"],
+      "review": { "defaultMode": "review-before-submit" },
+      "execution": { "handler": "agent", "timeoutMs": 5000 }
+    }
+  ]
+}

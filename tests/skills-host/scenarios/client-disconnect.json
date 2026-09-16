@@ -1,0 +1,61 @@
+{
+  "name": "client-disconnect",
+  "fixture": null,
+  "pageUrl": "http://127.0.0.1:9/fixture-basic.html",
+  "skillsConfig": {
+    "grants": [
+      { "skillKey": "fixture-skill/fixture-reply", "revision": "*", "capabilities": ["context.read", "suggestion.present"] }
+    ],
+    "adapters": [
+      {
+        "id": "fixture-adapter",
+        "version": "1.0.0",
+        "hosts": ["127.0.0.1"],
+        "events": ["comment.draft.paused", "comment.before-submit"],
+        "gates": ["comment.before-submit"]
+      }
+    ]
+  },
+  "job": {
+    "delayMs": 400,
+    "report": { "decision": "clear", "explanation": "never delivered" }
+  },
+  "steps": [
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_plan",
+      "params": {
+        "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+        "url": "{{page_url}}"
+      },
+      "expect": { "status": "ok" }
+    },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_event",
+      "params": {
+        "event": {
+          "version": 1,
+          "eventId": "evt-disc-1",
+          "event": "comment.before-submit",
+          "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+          "interactionId": "int-disc-1",
+          "draftRevision": 1,
+          "contextRevision": 1,
+          "planVersion": "{{prev.plan.planVersion}}",
+          "origin": "user",
+          "contextRef": "ctx-disc-1"
+        }
+      },
+      "expect": { "status": "accepted" }
+    },
+    { "side": "client", "type": "close" }
+  ],
+  "expect": {
+    "results": 0,
+    "abortedOutcomes": 1,
+    "note": "client drops while a job is in flight: dispose() cancels the client's jobs (service.cancel -> aborted, NOT unavailable — unavailable is reserved for jobs that never ran), and nothing is delivered to a client that is gone"
+  }
+}

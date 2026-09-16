@@ -1,0 +1,89 @@
+{
+  "name": "duplicate-request",
+  "fixture": null,
+  "pageUrl": "http://127.0.0.1:9/fixture-basic.html",
+  "skillsConfig": {
+    "grants": [
+      { "skillKey": "fixture-skill/fixture-reply", "revision": "*", "capabilities": ["context.read", "suggestion.present"] }
+    ],
+    "adapters": [
+      {
+        "id": "fixture-adapter",
+        "version": "1.0.0",
+        "hosts": ["127.0.0.1"],
+        "events": ["comment.draft.paused", "comment.before-submit"],
+        "gates": ["comment.before-submit"]
+      }
+    ]
+  },
+  "job": {
+    "delayMs": 200,
+    "report": { "decision": "clear", "explanation": "Duplicate coalesced." }
+  },
+  "steps": [
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_plan",
+      "params": {
+        "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+        "url": "{{page_url}}"
+      },
+      "expect": { "status": "ok" }
+    },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_event",
+      "params": {
+        "event": {
+          "version": 1,
+          "eventId": "evt-dup-1",
+          "event": "comment.before-submit",
+          "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+          "interactionId": "int-dup-1",
+          "draftRevision": 1,
+          "contextRevision": 1,
+          "planVersion": 1,
+          "origin": "user",
+          "contextRef": "ctx-dup-1"
+        }
+      },
+      "expect": { "status": "accepted" }
+    },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_event",
+      "params": {
+        "event": {
+          "version": 1,
+          "eventId": "evt-dup-2",
+          "event": "comment.before-submit",
+          "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+          "interactionId": "int-dup-1",
+          "draftRevision": 1,
+          "contextRevision": 1,
+          "planVersion": 1,
+          "origin": "user",
+          "contextRef": "ctx-dup-2"
+        }
+      },
+      "expect": { "status": "accepted" },
+      "expectResult": { "status": "done", "decision": "clear" }
+    },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_status",
+      "params": {},
+      "expect": { "available": true }
+    }
+  ],
+  "expect": {
+    "results": 2,
+    "doneOutcomes": 1,
+    "supersededOutcomes": 1,
+    "note": "two events with the SAME interactionId+draftRevision share a scheduler key: the second supersedes the first. The service emits an outcome for BOTH (superseded + done) and the host delivers both skills_results — the client's review session ignores the superseded one (the interaction's draft revision moved on). stats.replacements is a gauge of PENDING replacement jobs, not a coalesce counter."
+  }
+}

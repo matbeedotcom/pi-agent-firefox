@@ -1,0 +1,97 @@
+{
+  "name": "stale-draft",
+  "fixture": null,
+  "pageUrl": "http://127.0.0.1:9/fixture-basic.html",
+  "skillsConfig": {
+    "grants": [
+      { "skillKey": "fixture-skill/fixture-reply", "revision": "*", "capabilities": ["context.read", "suggestion.present"] }
+    ],
+    "adapters": [
+      {
+        "id": "fixture-adapter",
+        "version": "1.0.0",
+        "hosts": ["127.0.0.1"],
+        "events": ["comment.draft.paused", "comment.before-submit"],
+        "gates": ["comment.before-submit"]
+      }
+    ]
+  },
+  "job": {
+    "delayMs": 10,
+    "report": { "decision": "clear", "explanation": "Draft is fine." }
+  },
+  "steps": [
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_plan",
+      "params": {
+        "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+        "url": "{{page_url}}"
+      },
+      "expect": { "status": "ok" }
+    },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_event",
+      "params": {
+        "event": {
+          "version": 1,
+          "eventId": "evt-stale-1",
+          "event": "comment.before-submit",
+          "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+          "interactionId": "int-stale-1",
+          "draftRevision": 1,
+          "contextRevision": 1,
+          "planVersion": 1,
+          "origin": "user",
+          "contextRef": "ctx-stale-1"
+        }
+      },
+      "expect": { "status": "accepted" },
+      "expectResult": { "status": "done", "decision": "clear" }
+    },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_plan",
+      "params": {
+        "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+        "url": "{{page_url}}"
+      },
+      "expect": { "status": "ok" }
+    },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_event",
+      "params": {
+        "event": {
+          "version": 1,
+          "eventId": "evt-stale-2",
+          "event": "comment.before-submit",
+          "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+          "interactionId": "int-stale-2",
+          "draftRevision": 2,
+          "contextRevision": 2,
+          "planVersion": 1,
+          "origin": "user",
+          "contextRef": "ctx-stale-2"
+        }
+      },
+      "expectStalePlan": true
+    },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_status",
+      "params": {},
+      "expect": { "available": true, "plans": 1 }
+    }
+  ],
+  "expect": {
+    "results": 1,
+    "note": "re-plan bumps planVersion; an event still carrying the OLD planVersion is rejected stale-plan and nothing is submitted for the new interaction (exactly one result delivered in total)"
+  }
+}

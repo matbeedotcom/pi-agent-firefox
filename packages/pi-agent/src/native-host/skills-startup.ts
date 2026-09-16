@@ -16,6 +16,7 @@ import type { Logger } from "../logger.js";
 import { toErrorObject } from "@pi-browser/protocol";
 import { createSkillsProtocol } from "../skills/skills-protocol.js";
 import type { SkillAdapterCoverage, SkillGrant } from "../skills/planner.js";
+import type { IsolatedSessionFactory } from "../skills/isolated-runner.js";
 import type { AcpTransport } from "./transport.js";
 
 export interface SkillsRuntime {
@@ -31,6 +32,8 @@ export async function startSkillsRuntime(deps: {
   log: Logger;
   backend: PiBackend;
   toolBridge: BrowserToolBridge;
+  /** Test seam: scripted isolated-session factory (mock backend only). */
+  sessionFactory?: IsolatedSessionFactory;
 }): Promise<SkillsRuntime | undefined> {
   const registry = new SkillsRegistry();
   try {
@@ -55,6 +58,7 @@ export async function startSkillsRuntime(deps: {
       // identically for job sessions and chat sessions.
       ...(deps.backend instanceof PiSdkBackend ? { modelRuntime: await deps.backend.sharedModelRuntime() } : {}),
       ...(process.env.PI_BROWSER_AGENT_DIR ? { agentDir: process.env.PI_BROWSER_AGENT_DIR } : {}),
+      ...(deps.sessionFactory ? { sessionFactory: deps.sessionFactory } : {}),
     });
     deps.log.info(
       `skills host ready (package roots=${packageRoots.length}, packages=${packages.length}, skills=${registry.snapshot().length})`,

@@ -1,0 +1,24 @@
+{
+  "name": "bridge-delay",
+  "fixture": null,
+  "pageUrl": "http://127.0.0.1:9/fixture-basic.html",
+  "bridge": {
+    "browser_navigate": { "delayMs": 150, "result": { "content": [{ "type": "text", "text": "navigated" }] } }
+  },
+  "steps": [
+    { "side": "agent", "type": "prompt", "text": "OPEN-FIXTURE" },
+    { "side": "agent", "type": "tool", "tool": "browser_navigate", "args": { "url": "{{page_url}}" } },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_status",
+      "params": {},
+      "expect": { "available": true }
+    }
+  ],
+  "expect": {
+    "toolCalls": { "browser_navigate": 1 },
+    "promptAborted": false,
+    "note": "a slow bridge (150ms) must not cause a duplicate dispatch: exactly one browser_navigate call, prompt completes normally"
+  }
+}

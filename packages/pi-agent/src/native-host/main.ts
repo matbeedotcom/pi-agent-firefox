@@ -34,6 +34,9 @@ import {
 import { createStdioTransport, type Dispatcher } from "./transport.js";
 import { createClientSkillsProtocol, startSkillsRuntime } from "./skills-startup.js";
 import type { SkillsHost } from "../skills/pi-integration.js";
+import type { IsolatedSessionFactory } from "../skills/isolated-runner.js";
+import type { SkillAdapterCoverage, SkillGrant } from "../skills/planner.js";
+import { createScriptedSessionFactory, type ScriptedJob } from "../skills/mock-session-factory.js";
 import { AcpAgent } from "../acp/agent.js";
 import { MockBackend } from "../acp/mock-backend.js";
 import { PiSdkBackend } from "../acp/sdk-backend.js";
@@ -50,6 +53,44 @@ import { runRelay } from "./relay.js";
 import type { Logger } from "../logger.js";
 
 const require = createRequire(import.meta.url);
+
+/**
+ * Mock-mode skills config (test seam; PI_BROWSER_BACKEND=mock only).
+ *
+ * PI_BROWSER_SKILLS_CONFIG is a JSON file path (or inline JSON):
+ * {
+ *   "grants":   [{ "skillKey": "pkg/skill", "revision": "*", "capabilities": ["context.read"] }],
+ *   "adapters": [{ "id": "a", "version": "1.0.0", "hosts": ["127.0.0.1"],
+ *                  "events": ["comment.before-submit"], "gates": ["comment.before-submit"] }],
+ *   "job":      { "report": { "decision": "suggest", "explanation": "...", "replacementText": "..." } }
+ * }
+ * Grants + adapters arm the plan compiler; the scripted job factory makes
+ * isolated job runs deterministic. The production (Pi SDK) host never reads
+ * this variable.
+ */
+function loadMockSkillsConfig(
+  log: Logger,
+): { grants: { skillKey: string; revision: string; capabilities: SkillGrant["capabilities"] }[]; adapters: SkillAdapterCoverage[]; job: ScriptedJob } | undefined {
+  const raw = process.env.PI_BROWSER_SKILLS_CONFIG?.trim();
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.startsWith("{") ? raw : readFileSync(raw, "utf8"));
+  } catch (err) {
+    log.warn(`PI_BROWSER_SKILLS_CONFIG unreadable; continuing without mock skills config: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    log.warn("PI_BROWSER_SKILLS_CONFIG must be a JSON object; ignoring");
+    return undefined;
+  }
+  const entry = parsed as Record<string, unknown>;
+  if (!Array.isArray(entry.grants) || !Array.isArray(entry.adapters) || (entry.job !== undefined && (typeof entry.job !== "object" || entry.job === null))) {
+    log.warn("PI_BROWSER_SKILLS_CONFIG shape invalid (needs grants[], adapters[], optional job{}); ignoring");
+    return undefined;
+  }
+  return { grants: entry.grants, adapters: entry.adapters, job: (entry.job as ScriptedJob | undefined) ?? {} };
+}
 
 /**
  * Persistent host log (PRODUCT.md §43): defaults to
@@ -241,7 +282,30 @@ async function main(): Promise<void> {
   // Skills runtime (skills-runtime-design.md §10, §13): the broker owns the
   // registry, the bounded SkillsService, and the isolated job runner.
   // Best-effort: degrades to "no skills" without blocking startup.
-  const skillsRuntime = await startSkillsRuntime({ log, backend, toolBridge });
+  const mockSkills = backend instanceof MockBackend ? loadMockSkillsConfig(log) : undefined;
+  const skillsRuntime = await startSkillsRuntime({
+    log, backend, toolBridge,
+    ...(mockSkills ? { sessionFactory: createScriptedSessionFactory(mockSkills.job) } : {}),
+  });
+  // Grants/adapters are read at plan time; "*" revisions resolve against the
+  // registry snapshot (content-hashed, stable within one run).
+  let mockGrants: (() => ReadonlyMap<string, SkillGrant>) | undefined;
+  let mockAdapters: (() => readonly SkillAdapterCoverage[]) | undefined;
+  if (mockSkills && skillsRuntime) {
+    const snapshot = skillsRuntime.registry.snapshot();
+    const revision = (key: string) => snapshot.find((s) => s.key === key)?.revision ?? "";
+    mockGrants = () => new Map(
+      mockSkills.grants.map((g) => [
+        g.skillKey,
+        {
+          enabled: true,
+          revision: g.revision === "*" ? revision(g.skillKey) : g.revision,
+          capabilities: g.capabilities,
+        },
+      ]),
+    );
+    mockAdapters = () => mockSkills.adapters;
+  }
 
   // Browser-tools MCP server: lets pi-subagent children (separate node
   // processes with no ACP channel) reach the browser tools over MCP on a
@@ -286,7 +350,10 @@ async function main(): Promise<void> {
     // verified source identity is per-connection, results route back on
     // the same transport.
     const clientSkills = skillsRuntime
-      ? createClientSkillsProtocol({ log, runtime: skillsRuntime, transport: dispatcher.transport })
+      ? createClientSkillsProtocol({
+          log, runtime: skillsRuntime, transport: dispatcher.transport,
+          ...(mockGrants ? { grants: mockGrants, adapters: mockAdapters } : {}),
+        })
       : undefined;
     const agent = new AcpAgent({
       backend,

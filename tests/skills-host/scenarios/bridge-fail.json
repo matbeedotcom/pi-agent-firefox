@@ -1,0 +1,25 @@
+{
+  "name": "bridge-fail",
+  "fixture": null,
+  "pageUrl": "http://127.0.0.1:9/fixture-basic.html",
+  "bridge": {
+    "browser_click": { "fail": { "code": "BROWSER_TAB_CLOSED", "message": "tab closed while clicking" } }
+  },
+  "steps": [
+    { "side": "agent", "type": "prompt", "text": "CLICK-SUBMIT" },
+    { "side": "agent", "type": "tool", "tool": "browser_click", "args": { "selector": "button[data-skill-fixture='submit']" } },
+    { "side": "agent", "type": "say", "text": "the click failed; the page is unavailable" },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_status",
+      "params": {},
+      "expect": { "available": true }
+    }
+  ],
+  "expect": {
+    "toolErrors": { "browser_click": "BROWSER_TAB_CLOSED" },
+    "promptAborted": false,
+    "note": "a failing bridge propagates a stable structured code (BROWSER_TAB_CLOSED) into the tool failure, and the skills runtime stays fully available (no partial application, no wedge)"
+  }
+}
