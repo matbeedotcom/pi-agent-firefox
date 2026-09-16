@@ -46,6 +46,12 @@ function imageResult(dataUrl: string, mimeType: string, via?: string) {
 const DEFAULT_TIMEOUT_MS = 20_000;
 /** Hard cap for content-script round-trips (browser_download is excluded: it runs in the background). */
 const CONTENT_TIMEOUT_CAP_MS = 60_000;
+/** Default time to wait for a tab to finish loading after navigate/open_tab. */
+const TAB_READY_TIMEOUT_MS = 30_000;
+/** Cap for a caller-supplied ready timeout (slow sites get more, never unbounded). */
+const TAB_READY_TIMEOUT_CAP_MS = 120_000;
+/** Poll interval while waiting for a tab's load to settle. */
+const TAB_READY_POLL_MS = 100;
 /** browser_download size limits (bytes). */
 const DOWNLOAD_MAX_BYTES_DEFAULT = 10 * 1024 * 1024;
 const DOWNLOAD_MAX_BYTES_CAP = 50 * 1024 * 1024;
@@ -67,7 +73,7 @@ export class ToolDispatcher {
    * point of pi_open_tab. Returns {tabId, url} so the control path can
    * report the new id.
    */
-  async openAgentTab(sessionId: string, url: string): Promise<{ tabId: number; url: string }> {
+  async openAgentTab(sessionId: string, url: string, timeoutMs?: number): Promise<{ tabId: number; url: string }> {
     const current = this.store.getBinding(sessionId);
     // The user's tab is the restore point; re-binding to a REPL tab (or
     // back to the user's tab) keeps the FIRST user binding as home.
@@ -84,6 +90,9 @@ export class ToolDispatcher {
       tabId,
       tabTitle: url,
     });
+    // Settle before returning so the caller's next tool (evaluate/DOM) finds a
+    // loaded document with the content script injected, not a mid-load frame.
+    await this.waitForTabReady(tabId, url, timeoutMs ?? TAB_READY_TIMEOUT_MS);
     return { tabId, url };
   }
 
@@ -140,7 +149,48 @@ export class ToolDispatcher {
     if (typeof url !== "string" || !url.trim()) {
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_open_tab requires a url string");
     }
-    return textResult(await this.openAgentTab(sessionId, url.trim()));
+    return textResult(await this.openAgentTab(sessionId, url.trim(), this.readyTimeoutMs(args?.timeoutMs)));
+  }
+
+  /** Clamp a caller-supplied ready timeout to (0, TAB_READY_TIMEOUT_CAP_MS]. */
+  private readyTimeoutMs(value: unknown): number {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return TAB_READY_TIMEOUT_MS;
+    return Math.min(value, TAB_READY_TIMEOUT_CAP_MS);
+  }
+
+  /**
+   * Wait until the tab finishes loading the target document: poll the tab's
+   * load `status` until it reports "complete" — a fresh load having started
+   * (an observed "loading" state) or the tab already showing the target URL.
+   * This settles navigation/open before returning so the NEXT tool call
+   * (browser_evaluate, DOM ops) finds a stable document with the content
+   * script injected: evaluating mid-navigation fails ("target frame
+   * disappeared" / "receiving end does not exist"). Tab closed while loading
+   * => BROWSER_TAB_CLOSED; the deadline lapses => BROWSER_TOOL_TIMEOUT.
+   */
+  private async waitForTabReady(tabId: number, expectedUrl: string, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let sawLoading = false;
+    for (;;) {
+      let tab: browser.tabs.Tab;
+      try {
+        tab = await browser.tabs.get(tabId);
+      } catch {
+        throw new PiBrowserProtocolError(
+          PI_BROWSER_ERROR.BROWSER_TAB_CLOSED,
+          `tab ${tabId} was closed before it finished loading`,
+        );
+      }
+      if (tab.status === "loading") sawLoading = true;
+      if (tab.status === "complete" && (sawLoading || tab.url === expectedUrl)) return;
+      if (Date.now() >= deadline) {
+        throw new PiBrowserProtocolError(
+          PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT,
+          `tab did not finish loading within ${timeoutMs} ms (status: ${tab.status ?? "unknown"}, url: ${tab.url ?? "unknown"})`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, TAB_READY_POLL_MS));
+    }
   }
 
   private async bindTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
@@ -525,7 +575,9 @@ export class ToolDispatcher {
       );
     }
     await browser.tabs.update(tab.id as number, { url });
-    return textResult({ navigatingTo: url });
+    // Settle the navigation before returning (see waitForTabReady).
+    await this.waitForTabReady(tab.id as number, url, this.readyTimeoutMs(args?.timeoutMs));
+    return textResult({ navigatingTo: url, ready: true });
   }
 
   private async getPage(tab: browser.tabs.Tab): Promise<unknown> {

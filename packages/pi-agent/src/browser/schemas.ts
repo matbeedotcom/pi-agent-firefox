@@ -154,6 +154,9 @@ const SCHEMAS: Record<string, TSchema> = {
   browser_navigate: Type.Object(
     {
       url: Type.String({ description: 'Absolute URL to navigate to, e.g. "http://localhost:5173/login".' }),
+      timeoutMs: Type.Optional(Type.Number({
+        description: "Max milliseconds to wait for the load to settle (default 30000, cap 120000).",
+      })),
     },
     { additionalProperties: false, required: ["url"] },
   ),
@@ -207,6 +210,9 @@ const SCHEMAS: Record<string, TSchema> = {
   browser_open_tab: Type.Object(
     {
       url: Type.String({ description: 'URL for the new tab (default about:blank), e.g. "https://example.com".' }),
+      timeoutMs: Type.Optional(Type.Number({
+        description: "Max milliseconds to wait for the load to settle (default 30000, cap 120000).",
+      })),
     },
     { additionalProperties: false, required: ["url"] },
   ),

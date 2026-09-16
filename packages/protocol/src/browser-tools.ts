@@ -276,12 +276,17 @@ export const BROWSER_TOOLS: readonly BrowserToolDef[] = [
   {
     name: "browser_navigate",
     description:
-      "Navigate the bound tab to an absolute http(s) or file URL. Element refs become stale after navigation; " +
-      "call browser_get_dom again afterwards.",
+      "Navigate the bound tab to an absolute http(s) or file URL and await the tab to be ready: it resolves only " +
+      "after the document finishes loading (status 'complete'), so the next tool (evaluate/DOM) sees a settled page. " +
+      "Element refs become stale after navigation; call browser_get_dom again afterwards.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
         url: { type: "string", description: 'Absolute URL to navigate to, e.g. "http://localhost:5173/login".' },
+        timeoutMs: {
+          type: "number",
+          description: "Max milliseconds to wait for the load to settle (default 30000, cap 120000).",
+        },
       },
       required: ["url"],
     },
@@ -371,12 +376,18 @@ export const BROWSER_TOOLS: readonly BrowserToolDef[] = [
     name: "browser_open_tab",
     description:
       "Open a new tab (REPL-owned) and bind the session to it — works even when the session has no bound tab yet " +
-      "(create + bind in one step; this is how an agent acquires its first tab). The previously bound tab stays open " +
-      "and is restored when the REPL tab is closed or the session unbinds. REPL-owned tabs are closed automatically at session unbind.",
+      "(create + bind in one step; this is how an agent acquires its first tab). Awaits the tab to be ready: it " +
+      "resolves only after the document finishes loading, so the next tool sees a settled page. The previously bound " +
+      "tab stays open and is restored when the REPL tab is closed or the session unbinds. REPL-owned tabs are closed " +
+      "automatically at session unbind.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
         url: { type: "string", description: 'URL for the new tab (default about:blank), e.g. "https://example.com".' },
+        timeoutMs: {
+          type: "number",
+          description: "Max milliseconds to wait for the load to settle (default 30000, cap 120000).",
+        },
       },
       required: ["url"],
     },

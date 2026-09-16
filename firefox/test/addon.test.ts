@@ -40,6 +40,19 @@ function listenerHub(): ListenerHub {
   return { listeners, addListener: (fn) => listeners.push(fn) };
 }
 
+/**
+ * tabs.get backed by the shared __tabRegistry, so tabs.update/tabs.create
+ * mutate the very object a later tabs.get returns (mirrors Firefox). Tests
+ * that exercise the live-tab path re-assign this, because earlier tests
+ * override stub.tabs.get with a static function and never restore it.
+ */
+async function registryTabGet(tabId: number) {
+  const reg = (globalThis as { __tabRegistry?: Map<number, any> }).__tabRegistry;
+  const t = reg?.get(tabId);
+  if (!t) throw new Error(`no tab ${tabId}`);
+  return t;
+}
+
 // Shared capture stub. Both capture APIs share the fail counter so tests can
 // model: 0 -> captureTab succeeds (direct); 1 -> captureTab fails, fallback
 // succeeds; N>1 -> enough failures to exhaust captureTab + the focus-settle
@@ -74,9 +87,7 @@ const stub: {
     },
   },
   tabs: {
-    async get(tabId: number) {
-      throw new Error(`no tab ${tabId}`);
-    },
+    get: registryTabGet,
     async captureTab(_tabId: number, _opts?: unknown) {
       return captureStub();
     },
@@ -89,12 +100,23 @@ const stub: {
         ...((globalThis as { __tabUpdates?: unknown[] }).__tabUpdates ?? []),
         { tabId, props },
       ];
+      // Mirror Firefox: the update mutates the live tab (new url + a settled
+      // load) so a subsequent tabs.get reflects the navigation.
+      const reg = (globalThis as { __tabRegistry?: Map<number, any> }).__tabRegistry;
+      const t = reg?.get(tabId);
+      if (t && props.url !== undefined) {
+        t.url = props.url;
+        t.status = "complete";
+      }
       return { id: tabId, ...props };
     },
     async create(props: { url?: string; active?: boolean }) {
       const id = ((globalThis as { __nextTabId?: number }).__nextTabId ??= 1000) + 1;
       (globalThis as { __nextTabId?: number }).__nextTabId = id;
-      const created = { id, url: props.url, title: props.url, windowId: 1 };
+      const created = { id, url: props.url, title: props.url, windowId: 1, status: "complete" };
+      const reg = (globalThis as { __tabRegistry?: Map<number, any> }).__tabRegistry ?? new Map();
+      (globalThis as { __tabRegistry?: Map<number, any> }).__tabRegistry = reg;
+      reg.set(id, created);
       (globalThis as { __createdTabs?: unknown[] }).__createdTabs = [
         ...((globalThis as { __createdTabs?: unknown[] }).__createdTabs ?? []),
         created,
@@ -178,7 +200,7 @@ after(() => {
 });
 
 function tab(id: number, url = "http://localhost:5173/", title = "Test Page"): any {
-  return { id, url, title, windowId: 1 };
+  return { id, url, title, windowId: 1, status: "complete" };
 }
 
 // ---------------------------------------------------------------------------
@@ -578,7 +600,8 @@ test("ToolDispatcher: browser_navigate updates the bound tab with the URL", asyn
   const store = new SessionStore();
   await store.hydrate();
   store.bind("s1", { tabId: 9, windowId: 1 });
-  stub.tabs.get = async () => tab(9);
+  (globalThis as { __tabRegistry?: Map<number, any> }).__tabRegistry = new Map([[9, tab(9)]]);
+  stub.tabs.get = registryTabGet;
   (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates = [];
   const d = new ToolDispatcher(store);
   const result = (await d.handleToolCall({
@@ -586,13 +609,15 @@ test("ToolDispatcher: browser_navigate updates the bound tab with the URL", asyn
     tool: "browser_navigate",
     arguments: { url: "http://x.test/next" },
   })) as { content: Array<{ text: string }> };
-  const parsed = JSON.parse(result.content[0].text) as { navigatingTo: string };
+  const parsed = JSON.parse(result.content[0].text) as { navigatingTo: string; ready: boolean };
   assert.equal(parsed.navigatingTo, "http://x.test/next");
+  assert.equal(parsed.ready, true);
   const updates = (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates as Array<{ tabId: number; props: { url?: string } }>;
   assert.equal(updates.length, 1);
   assert.equal(updates[0].tabId, 9);
   assert.equal(updates[0].props.url, "http://x.test/next");
   delete (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates;
+  delete (globalThis as { __tabRegistry?: Map<number, any> }).__tabRegistry;
 });
 
 test("ToolDispatcher: browser_navigate rejects non-http(s)/file URLs", async () => {
@@ -611,6 +636,84 @@ test("ToolDispatcher: browser_navigate rejects non-http(s)/file URLs", async () 
   }
   assert.equal((globalThis as { __tabUpdates?: unknown[] }).__tabUpdates?.length, 0, "no tab update on rejected URLs");
   delete (globalThis as { __tabUpdates?: unknown[] }).__tabUpdates;
+});
+
+test("ToolDispatcher: browser_navigate awaits the tab to be ready (loading -> complete)", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  const live = { id: 9, url: "http://x.test/", title: "T", windowId: 1, status: "loading" as string };
+  stub.tabs.get = async () => live;
+  const d = new ToolDispatcher(store);
+  const started = Date.now();
+  const pending = d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_navigate",
+    arguments: { url: "http://x.test/next" },
+  });
+  // The load settles ~150ms after the navigation starts.
+  setTimeout(() => {
+    live.status = "complete";
+    live.url = "http://x.test/next";
+  }, 150);
+  const result = (await pending) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { navigatingTo: string; ready: boolean };
+  assert.equal(parsed.navigatingTo, "http://x.test/next");
+  assert.equal(parsed.ready, true);
+  assert.ok(Date.now() - started >= 100, "navigate held until the load settled");
+});
+
+test("ToolDispatcher: browser_navigate times out when the tab never settles", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async () => ({ id: 9, url: "http://x.test/", title: "T", windowId: 1, status: "loading" });
+  const d = new ToolDispatcher(store);
+  await assert.rejects(
+    d.handleToolCall({
+      sessionId: "s1",
+      tool: "browser_navigate",
+      arguments: { url: "http://x.test/next", timeoutMs: 200 },
+    }),
+    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT,
+  );
+});
+
+test("ToolDispatcher: browser_navigate reports a tab closed while loading", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 9, windowId: 1 });
+  stub.tabs.get = async (id: number) => {
+    throw new Error(`no tab ${id}`);
+  };
+  const d = new ToolDispatcher(store);
+  await assert.rejects(
+    d.handleToolCall({ sessionId: "s1", tool: "browser_navigate", arguments: { url: "http://x.test/next" } }),
+    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_TAB_CLOSED,
+  );
+});
+
+test("ToolDispatcher: browser_open_tab awaits the new tab to be ready", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("s1", { tabId: 11, windowId: 1, tabTitle: "User Tab" });
+  (globalThis as { __createdTabs?: unknown[] }).__createdTabs = [];
+  (globalThis as { __nextTabId?: number }).__nextTabId = 2000;
+  const live = { id: 2001, url: "https://aux.test/page", title: "T", windowId: 1, status: "loading" as string };
+  stub.tabs.get = async () => live;
+  const d = new ToolDispatcher(store);
+  const pending = d.handleToolCall({
+    sessionId: "s1",
+    tool: "browser_open_tab",
+    arguments: { url: "https://aux.test/page" },
+  });
+  setTimeout(() => {
+    live.status = "complete";
+  }, 150);
+  const result = (await pending) as { content: Array<{ text: string }> };
+  const parsed = JSON.parse(result.content[0].text) as { tabId: number; url: string };
+  assert.equal(parsed.tabId, 2001);
+  assert.equal(parsed.url, "https://aux.test/page");
 });
 
 test("ToolDispatcher: browser_download fetches with the browser's state (cookies + referrer) and returns base64", async () => {
@@ -813,8 +916,9 @@ test("ToolDispatcher: browser_open_tab creates a REPL-owned tab and rebinds", as
   const store = new SessionStore();
   await store.hydrate();
   store.bind("s1", { tabId: 11, windowId: 1, tabTitle: "User Tab" });
-  stub.tabs.get = async () => tab(11);
+  (globalThis as { __createdTabs?: unknown[] }).__createdTabs = [];
   (globalThis as { __nextTabId?: number }).__nextTabId = 2000;
+  stub.tabs.get = registryTabGet;
   const d = new ToolDispatcher(store);
   const result = (await d.handleToolCall({
     sessionId: "s1",
@@ -835,9 +939,10 @@ test("ToolDispatcher: browser_close_tab closes a REPL tab and restores the home 
   const store = new SessionStore();
   await store.hydrate();
   store.bind("s1", { tabId: 11, windowId: 1, tabTitle: "User Tab" });
-  stub.tabs.get = async () => tab(11);
+  (globalThis as { __createdTabs?: unknown[] }).__createdTabs = [];
   (globalThis as { __nextTabId?: number }).__nextTabId = 2000;
   (globalThis as { __removedTabs?: number[] }).__removedTabs = [];
+  stub.tabs.get = registryTabGet;
   const d = new ToolDispatcher(store);
   await d.handleToolCall({ sessionId: "s1", tool: "browser_open_tab", arguments: { url: "https://aux.test" } });
   await d.handleToolCall({ sessionId: "s1", tool: "browser_close_tab", arguments: { tabId: 2001 } });
