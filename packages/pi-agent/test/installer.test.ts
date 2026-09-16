@@ -368,3 +368,86 @@ test("install fails clearly when the host build is missing", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// ── /pi-browser mcp (global ~/.pi/agent/mcp.json) ─────────────────────────
+
+test("mcp: install → status → idempotent reinstall → uninstall lifecycle", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-agent-mcp-"));
+  const home = path.join(root, "home");
+  const file = path.join(home, ".pi", "agent", "mcp.json");
+  try {
+    const ctx = { pkgRoot: root, platform: "linux" as const, homeDir: home };
+
+    // Not configured yet.
+    let result = await runCommand("mcp", ctx, "status");
+    assert.equal(result.ok, false);
+    assert.ok(result.lines.some((l) => l.includes("not configured")), JSON.stringify(result.lines));
+
+    // Install creates the config with the pi-browser entry.
+    result = await runCommand("mcp", ctx); // default sub: install
+    assert.equal(result.ok, true);
+    let config = JSON.parse(await readFile(file, "utf8")) as {
+      mcpServers: Record<string, { socket: string; directTools: boolean }>;
+    };
+    const expectedSocket = path.join(home, ".pi", "run", "agent-broker-mcp.sock");
+    assert.deepEqual(config.mcpServers["pi-browser"], { socket: expectedSocket, directTools: true });
+
+    // Status reports OK.
+    result = await runCommand("mcp", ctx, "status");
+    assert.equal(result.ok, true);
+    assert.ok(result.lines.some((l) => l.startsWith("mcp: OK")), JSON.stringify(result.lines));
+
+    // Reinstall is idempotent (no other content mutated).
+    await writeFile(file, `${JSON.stringify({ ...config, settings: { directTools: false } })}\n`);
+    result = await runCommand("mcp", ctx);
+    assert.equal(result.ok, true);
+    assert.ok(result.lines.some((l) => l.includes("already configured")), JSON.stringify(result.lines));
+    config = JSON.parse(await readFile(file, "utf8")) as typeof config & { settings?: unknown };
+    assert.deepEqual(config.settings, { directTools: false }, "unrelated keys preserved");
+
+    // A stale socket path is detected.
+    await writeFile(file, `${JSON.stringify({ mcpServers: { "pi-browser": { socket: "/old/path.sock", directTools: true } } })}\n`);
+    result = await runCommand("mcp", ctx, "status");
+    assert.equal(result.ok, false);
+    assert.ok(result.lines.some((l) => l.includes("STALE")), JSON.stringify(result.lines));
+
+    // Uninstall removes the entry and the now-empty file.
+    result = await runCommand("mcp", ctx); // re-configure first
+    assert.equal(result.ok, true);
+    result = await runCommand("mcp", ctx, "uninstall");
+    assert.equal(result.ok, true);
+    assert.ok(result.lines.some((l) => l.includes("removed")), JSON.stringify(result.lines));
+    assert.equal((await stat(file).then(() => true).catch(() => false)), false, "empty config file removed");
+
+    // Uninstall on a missing config is a no-op success.
+    result = await runCommand("mcp", ctx, "uninstall");
+    assert.equal(result.ok, true);
+    assert.ok(result.lines.some((l) => l.includes("nothing to remove")), JSON.stringify(result.lines));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("mcp: install merges with an existing multi-server config", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-agent-mcp-merge-"));
+  const home = path.join(root, "home");
+  const file = path.join(home, ".pi", "agent", "mcp.json");
+  try {
+    const ctx = { pkgRoot: root, platform: "linux" as const, homeDir: home };
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({ mcpServers: { github: { command: "npx", args: ["-y", "gh-mcp"] } } }, null, 2),
+    );
+
+    const result = await runCommand("mcp", ctx);
+    assert.equal(result.ok, true);
+    const config = JSON.parse(await readFile(file, "utf8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    assert.deepEqual(config.mcpServers.github, { command: "npx", args: ["-y", "gh-mcp"] }, "other servers preserved");
+    assert.ok(config.mcpServers["pi-browser"], "pi-browser entry added");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -10,6 +10,7 @@ import { PI_AGENT, PI_BROWSER_META, PI_AGENT_META } from "@pi-browser/protocol";
 import { ADDON_HEARTBEAT_FRESH_MS, readClientHeartbeat } from "../client-heartbeat.js";
 import { brokerPaths, isBrokerIpcSupported, isPidAlive, readBrokerState } from "../native-host/broker-ipc.js";
 import { addonLoadHint, type AgentApp, type ExecFn, type InstallerEnv, type InstallAppTarget } from "./common.js";
+import { runMcpCommand, type McpSubcommand } from "./mcp.js";
 import {
   detectTargets,
   defaultExec,
@@ -19,7 +20,10 @@ import {
   type InstallTargets,
 } from "./platforms.js";
 
-export type InstallerCommand = "install" | "status" | "doctor" | "uninstall";
+export type InstallerCommand = "install" | "status" | "doctor" | "uninstall" | "mcp";
+
+/** Second-argument sub-commands (mcp: install | status | uninstall). */
+export type InstallerSubcommand = McpSubcommand;
 
 /** Expand a CLI target (firefox | thunderbird | mozilla) to app list. */
 export function expandAppTarget(target: InstallAppTarget | undefined): AgentApp[] {
@@ -97,7 +101,7 @@ export function buildEnv(ctx: InstallerContext = {}): { env: InstallerEnv; targe
           "add-on: not detected — to finish setup:",
           `  1. build the add-on(s) (from source): ${buildSteps}`,
           loadSteps,
-          "  3. wait ~10s — the add-on auto-connects (no reload needed); run /pi-agent status again",
+          "  3. wait ~10s — the add-on auto-connects (no reload needed); run /pi-browser status again",
         ],
         detected: false,
         fresh: false,
@@ -131,7 +135,7 @@ export function buildEnv(ctx: InstallerContext = {}): { env: InstallerEnv; targe
     }
   }
 
-export async function runCommand(command: InstallerCommand, ctx: InstallerContext = {}): Promise<CommandResult> {
+export async function runCommand(command: InstallerCommand, ctx: InstallerContext = {}, sub: InstallerSubcommand = "install"): Promise<CommandResult> {
   const { env, targets, pkgRoot, mainJs } = buildEnv(ctx);
   const lines: string[] = [];
   const note = (l: string) => {
@@ -166,7 +170,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
         else note(addon.detected ? "status: HOST OK — add-on heartbeat stale (reload the add-on or check the app)" : "status: HOST OK — add-on not detected yet (see steps above)");
       } else {
         for (const issue of report.issues) note(`issue: ${issue}`);
-        note(`status: PROBLEMS FOUND (run /pi-agent install ${apps.length === 2 ? "mozilla" : apps[0]} to repair)`);
+        note(`status: PROBLEMS FOUND (run /pi-browser install ${apps.length === 2 ? "mozilla" : apps[0]} to repair)`);
       }
       return { ok: report.installed, lines };
     }
@@ -175,7 +179,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
       for (const l of status.lines) note(l);
       if (!status.installed) {
         for (const issue of status.issues) note(`issue: ${issue}`);
-        note(`doctor: NOT INSTALLED — run /pi-agent install ${apps.length === 2 ? "mozilla" : apps[0]}`);
+        note(`doctor: NOT INSTALLED — run /pi-browser install ${apps.length === 2 ? "mozilla" : apps[0]}`);
         return { ok: false, lines };
       }
       const probe = await probeHost(env, status);
@@ -196,6 +200,11 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
       for (const l of removed) note(l);
       note(`uninstalled ${PI_AGENT.nativeHost} (package files kept; pi remove to drop the package)`);
       return { ok: true, lines };
+    }
+    case "mcp": {
+      const result = runMcpCommand(sub, env.homeDir);
+      for (const l of result.lines) note(l);
+      return result;
     }
     default:
       throw new Error(`unknown command: ${command}`);
