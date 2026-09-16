@@ -1,20 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SkillsService, type SkillJobKind, type SkillJobRequest } from "../src/skills/skills-service.js";
-
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((settle) => { resolve = settle; });
-  return { promise, resolve };
-}
-
-async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) throw new Error("condition not reached in time");
-    await new Promise((settle) => setTimeout(settle, 2));
-  }
-}
+import { deferred, waitFor } from "./helpers.js";
 
 function job(key: string, kind: SkillJobKind, run: SkillJobRequest["run"], timeoutMs = 2000): SkillJobRequest {
   return { key, kind, timeoutMs, run };
