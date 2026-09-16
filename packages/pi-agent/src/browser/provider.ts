@@ -509,6 +509,32 @@ export class CapabilityToolProvider {
   }
 
   /**
+   * Execute one tool call arriving over the in-process tool bridge (a Pi
+   * extension registering the browser tools for a session that the broker
+   * did not create itself — e.g. a subagent session). Goes through the same
+   * routing + approval path as the regular tool specs; sessionId and ctx
+   * identify the owning ACP session (the bridge resolves the fallback).
+   */
+  async bridgeCall(opts: {
+    tool: string;
+    args: Record<string, unknown>;
+    sessionId: string;
+    toolCallId?: string;
+    ctx?: import("../tool-bridge.js").BridgeSessionContext;
+  }): Promise<NormalizedToolResult> {
+    return this.routeTool(
+      opts.sessionId,
+      opts.toolCallId ?? `bridge:${opts.tool}:${crypto.randomUUID()}`,
+      opts.tool,
+      opts.args,
+      opts.ctx?.mode ?? "legacy",
+      opts.ctx?.mcpServerId,
+      opts.ctx?.ownerClientId,
+      opts.ctx?.ownerApplication ?? "firefox",
+    );
+  }
+
+  /**
    * Route one tool call to the connected client that provides it (owner
    * first; cross-app peer otherwise, plan §29) and apply the approval
    * policy. Shared by the regular tool specs and the REPL's cell tool calls.

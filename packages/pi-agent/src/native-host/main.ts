@@ -24,8 +24,13 @@ import { readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { PI_BROWSER_META } from "@pi-browser/protocol";
+import { PI_BROWSER_ERROR, PI_BROWSER_META, PiBrowserProtocolError } from "@pi-browser/protocol";
 import { createLogger } from "../logger.js";
+import {
+  setBrowserToolBridge,
+  type BridgeSessionContext,
+  type BrowserToolBridge,
+} from "../tool-bridge.js";
 import { createStdioTransport, type Dispatcher } from "./transport.js";
 import { AcpAgent } from "../acp/agent.js";
 import { MockBackend } from "../acp/mock-backend.js";
@@ -121,6 +126,48 @@ async function main(): Promise<void> {
 
   const registry = new CapabilityRegistry(log);
   const provider = new CapabilityToolProvider(undefined, log, registry);
+
+  // In-process tool bridge: Pi sessions created by other code in this
+  // process (e.g. pi-subagents children of a sidebar session) can register
+  // the browser tools via a Pi extension and route calls back through the
+  // provider with the owning ACP session's routing context. Calls without
+  // an explicit session id fall back to the most recently prompted one —
+  // the session the user is driving in the add-on UI.
+  const bridgeSessions = new Map<string, BridgeSessionContext>();
+  let lastActiveBridgeSession: string | undefined;
+  const toolBridge: BrowserToolBridge = {
+    registerSession: (id, ctx) => {
+      bridgeSessions.set(id, ctx);
+    },
+    touchSession: (id) => {
+      lastActiveBridgeSession = id;
+    },
+    closeSession: (id) => {
+      bridgeSessions.delete(id);
+      if (lastActiveBridgeSession === id) {
+        lastActiveBridgeSession = [...bridgeSessions.keys()].pop();
+      }
+    },
+    call: (o) => {
+      const sid = o.sessionId ?? lastActiveBridgeSession;
+      const ctx = sid ? bridgeSessions.get(sid) : undefined;
+      if (!sid || !ctx) {
+        throw new PiBrowserProtocolError(
+          PI_BROWSER_ERROR.SESSION_NOT_FOUND,
+          "no active ACP session to route the bridge tool call to",
+        );
+      }
+      return provider.bridgeCall({
+        tool: o.tool,
+        args: o.args,
+        sessionId: sid,
+        ...(o.toolCallId ? { toolCallId: o.toolCallId } : {}),
+        ctx,
+      });
+    },
+  };
+  setBrowserToolBridge(toolBridge);
+
   const agents = new Map<string, AcpAgent>();
   // A peer app connected/disconnected: tell every client so its UI can
   // update the "capabilities:" line (display-only, plan §29).
@@ -174,6 +221,7 @@ async function main(): Promise<void> {
       agentInfo: { name: "pi-coding-agent", version: piVersion() },
       clientId,
       registry,
+      bridge: toolBridge,
     });
     agents.set(clientId, agent);
     dispatcher.transport.onEof = () => {

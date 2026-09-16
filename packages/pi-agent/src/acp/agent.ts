@@ -59,6 +59,7 @@ import type { BrowserMode, CapabilityToolProvider } from "../browser/provider.js
 import type { ImageAttachment } from "./backend.js";
 import { touchClientHeartbeat } from "../client-heartbeat.js";
 import type { CapabilityRegistry } from "../capability-registry.js";
+import type { BrowserToolBridge } from "../tool-bridge.js";
 
 export interface AcpAgentOptions {
   backend: PiBackend;
@@ -81,6 +82,13 @@ export interface AcpAgentOptions {
    * `javascript` REPL share one task-scoped scratch.
    */
   workspaceRoot?: string;
+  /**
+   * In-process tool bridge (subagent browser access). When present, this
+   * agent registers its sessions' routing contexts on the bridge so a Pi
+   * extension in a sibling (subagent) session can route browser tool calls
+   * back through the provider.
+   */
+  bridge?: BrowserToolBridge;
 }
 
 interface SessionState {
@@ -406,6 +414,9 @@ export class AcpAgent {
   private async sessionPrompt(req: PromptRequest) {
     const st = this.sessions.get(req.sessionId);
     if (!st) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${req.sessionId}`);
+    // Bridge fallback target: bridge tool calls without an explicit session
+    // id route to the session the user is actively driving.
+    this.opts.bridge?.touchSession(req.sessionId);
     if (st.session.isStreaming) {
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, `session ${req.sessionId} is busy`);
     }
@@ -431,6 +442,7 @@ export class AcpAgent {
 
   private sessionClose(req: CloseSessionRequest): void {
     this.disposeSession(req.sessionId);
+    this.opts.bridge?.closeSession(req.sessionId);
     this.opts.log.info(`session/close ${req.sessionId}`);
   }
 
@@ -532,6 +544,17 @@ export class AcpAgent {
     });
 
     this.sessions.set(session.sessionId, state);
+
+    // Advertise the session on the in-process tool bridge so subagent
+    // sessions in this process can route browser tool calls back through
+    // the provider with this session's routing context.
+    this.opts.bridge?.registerSession(session.sessionId, {
+      ...(this.opts.clientId !== undefined ? { ownerClientId: this.opts.clientId } : {}),
+      ownerApplication: this.clientApplication,
+      mode: state.browserMode,
+      ...(state.mcpServerId ? { mcpServerId: state.mcpServerId } : {}),
+    });
+    this.opts.bridge?.touchSession(session.sessionId);
     return { session, state };
   }
 
