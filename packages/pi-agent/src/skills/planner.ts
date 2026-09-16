@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import {
-  normalizeSkillHost, type RegisteredSkill, type SkillApplication,
-  type SkillCapability, type SkillEventName, type SkillScope, type SkillSubscription,
+  normalizeSkillHost, type PagePlan, type RegisteredSkill, type SkillApplication,
+  type SkillCapability, type SkillEventName, type SkillPlanRule, type SkillScope, type SkillSubscription,
 } from "@pi-browser/protocol";
 
 export interface SkillGrant {
@@ -28,23 +28,9 @@ export interface SkillAdapterCoverage {
   events: SkillEventName[];
   gates: SkillEventName[];
 }
-export interface PageRule {
-  skillKey: string;
-  skillRevision: string;
-  adapterId: string;
-  adapterVersion: string;
-  subscriptions: SkillSubscription[];
-  mode: "advisory" | "review-before-submit";
-  capabilities: SkillCapability[];
-}
-export interface PagePlan {
-  planId: string;
-  planVersion: number;
-  documentGeneration: string;
-  expiresAt: number;
-  rules: PageRule[];
-  unavailable: { skillKey: string; reason: string }[];
-}
+// The plan wire contract lives in @pi-browser/protocol (shared with the
+// coordinator); the planner produces it.
+export type { PagePlan, SkillPlanRule as PageRule } from "@pi-browser/protocol";
 
 function matchesScope(scope: SkillScope, context: PlanContext, url: URL): boolean {
   if (!scope.applications.includes(context.application)) return false;
@@ -98,7 +84,7 @@ export class SkillsPlanner {
   compile(context: PlanContext, grants: ReadonlyMap<string, SkillGrant>, adapters: readonly SkillAdapterCoverage[], version: number, now = Date.now()): PagePlan {
     const url = new URL(context.url);
     if (!["http:", "https:"].includes(url.protocol)) throw new Error("Unsupported document URL");
-    const rules: PageRule[] = [];
+    const rules: SkillPlanRule[] = [];
     const unavailable: PagePlan["unavailable"] = [];
     for (const skill of this.candidates(context, url)) {
       const grant = grants.get(skill.key);
@@ -124,7 +110,7 @@ function eligibleGrant(skill: RegisteredSkill, grant: SkillGrant, context: PlanC
   return skill.definition.type !== "passive" || grant.learningEnabled === true;
 }
 
-function compileRule(skill: RegisteredSkill, grant: SkillGrant, adapters: readonly SkillAdapterCoverage[], host: string): PageRule | string {
+function compileRule(skill: RegisteredSkill, grant: SkillGrant, adapters: readonly SkillAdapterCoverage[], host: string): SkillPlanRule | string {
   if (grant.revision !== skill.revision) return "Package changed; review permissions";
   const definition = skill.definition;
   const capabilities = definition.capabilities.filter((capability) => grant.capabilities.includes(capability));

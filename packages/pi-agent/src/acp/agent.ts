@@ -89,6 +89,13 @@ export interface AcpAgentOptions {
    * back through the provider.
    */
   bridge?: BrowserToolBridge;
+  /**
+   * Broker-level extension surface (skills protocol). Receives requests the
+   * agent itself does not handle; it must answer (respond/respondError) via
+   * the transport. Return anything other than `undefined`/`false` to claim
+   * the request; otherwise the agent answers METHOD_NOT_FOUND.
+   */
+  extendedRequest?: (method: string, params: unknown, id: number) => boolean | void | Promise<boolean | void>;
 }
 
 interface SessionState {
@@ -245,11 +252,16 @@ export class AcpAgent {
           this.transport().respond(id, { pong: true, meta: PI_BROWSER_META, backendReady });
           return;
         }
-        default:
+        default: {
+          // Broker-level extension surface (skills): the hook claims a
+          // request by resolving to true and answers it itself.
+          const handled = this.opts.extendedRequest?.(method, params, id);
+          if (handled !== undefined && (await handled) === true) return;
           this.transport().respondError(id, {
             code: JSONRPC_ERROR.METHOD_NOT_FOUND,
             message: `unknown method: ${method}`,
           });
+        }
       }
     } catch (err) {
       this.respondFailure(id, err);

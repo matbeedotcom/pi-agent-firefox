@@ -56,6 +56,12 @@ export type HostStatus =
 
 export interface AcpClientHandlers {
   onSessionUpdate(params: SessionNotification): void;
+  /**
+   * Extension hook for custom host→client requests (skills runtime, design
+   * §7). Return the JSON-RPC result to send, or `undefined` to answer
+   * METHOD_NOT_FOUND.
+   */
+  onExtensionRequest?(method: string, params: unknown): Promise<unknown> | unknown;
   onToolCall(params: BrowserToolCallParams): Promise<unknown>;
   /**
    * Optional: incremental progress for a tool call that is still in flight
@@ -286,6 +292,12 @@ export class AcpClient {
         // request settles even if no UI handler is registered.
         this.handlers.onPermissionPrompted?.(params as PermissionPromptedParams);
         result = { ok: true };
+      } else if (this.handlers.onExtensionRequest) {
+        result = await this.handlers.onExtensionRequest(method, params);
+        if (result === undefined) {
+          this.send({ jsonrpc: "2.0", id, error: { code: -32601, message: `unknown method: ${method}` } });
+          return;
+        }
       } else {
         this.send({ jsonrpc: "2.0", id, error: { code: -32601, message: `unknown method: ${method}` } });
         return;

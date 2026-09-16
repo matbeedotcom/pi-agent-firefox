@@ -281,6 +281,33 @@ export const X_PI_BROWSER = {
    * (or of every tool when `tool` is omitted).
    */
   permission_clear: "x-pi-browser/permission_clear",
+  /**
+   * Client → host: compile a page plan for a verified source identity
+   * (skills-runtime-design.md §2, §7). The source identity is supplied by
+   * the addon coordinator, never a page payload.
+   */
+  skills_plan: "x-pi-browser/skills_plan",
+  /**
+   * Client → host: submit a verified skill event. Responds with an ack:
+   * accepted (jobs launched), no-match, stale-plan (re-plan), unavailable,
+   * or duplicate (coordinator redelivery).
+   */
+  skills_event: "x-pi-browser/skills_event",
+  /** Client → host: cancel pending skill work for one interaction. */
+  skills_cancel: "x-pi-browser/skills_cancel",
+  /** Client → host: probe the skill runtime (queue, live plans, stats). */
+  skills_status: "x-pi-browser/skills_status",
+  /**
+   * Host → client: resolve a contextRef against the coordinator's bounded
+   * snapshot store (privacy by request: only the requested fields return).
+   */
+  skills_context: "x-pi-browser/skills_context",
+  /**
+   * Host → client: deliver a skill job outcome for a submitted event. The
+   * coordinator routes it to the gate/UI and acks delivery; the request ID
+   * makes delivery explicit (design §7: results require request IDs).
+   */
+  skills_result: "x-pi-browser/skills_result",
 } as const;
 
 /** Params for x-pi-browser/ping (Firefox → host). */

@@ -1,0 +1,341 @@
+/**
+ * Skills protocol surface for the native host (skills-runtime-design.md
+ * §2, §7, §13 "addon-coordinator" host half).
+ *
+ * Application messages ride the existing ACP transport under the negotiated
+ * x-pi-browser/skills_* namespace; standard prompt traffic stays separate.
+ * One SkillsProtocol instance wraps ONE client connection (one addon
+ * connection = one source of verified identity) and shares the broker's
+ * single SkillsHost across all clients.
+ *
+ * Flow (all messages carry explicit request IDs):
+ *   client → host  skills_plan   compile a page plan for a verified source
+ *   client → host  skills_event  submit a verified event (ack: accepted/…)
+ *   host   → client skills_context  resolve contextRef (bounded snapshot)
+ *   host   → client skills_result   deliver a job outcome (acked)
+ *   client → host  skills_cancel / skills_status
+ *
+ * Identity rules (design §7): the coordinator's source identity is
+ * authoritative — a page payload cannot claim another tab, frame, document
+ * generation, epoch, account, or plan. Events naming an unknown or stale
+ * plan are rejected, never guessed. Runtime failures are separate from
+ * semantic results: an unavailable outcome never clears a required review.
+ */
+import {
+  X_PI_BROWSER,
+  parseSkillsCancelParams,
+  parseSkillsContextResult,
+  parseSkillsEventParams,
+  parseSkillsPlanParams,
+  PI_BROWSER_ERROR,
+  type PiBrowserErrorCode,
+  type ReviewResult,
+  type SkillEvent,
+  type SkillPlanRule,
+  type SkillsCancelParams,
+  type SkillsContextRequestParams,
+  type SkillsContextResult,
+  type SkillsEventParams,
+  type SkillsEventResult,
+  type SkillContextField,
+  type SkillsPlanParams,
+  type SkillsPlanResult,
+  type SkillsResultParams,
+  type SkillsStatusResult,
+} from "@pi-browser/protocol";
+import type { SkillsHost } from "./pi-integration.js";
+import type { SkillsRegistry } from "./registry.js";
+import type { SkillAdapterCoverage, SkillGrant, SkillsPlanner } from "./planner.js";
+import type { SkillJobOutcome } from "./skills-service.js";
+import type { Logger } from "../logger.js";
+
+/** The host→client request channel (one client's ACP transport). */
+export interface SkillsProtocolEndpoint {
+  request<T = unknown>(method: string, params?: unknown, timeoutMs?: number): Promise<T>;
+}
+
+export interface SkillsProtocolDeps {
+  log: Logger;
+  /** Broker-owned job service shared by every client. */
+  host: SkillsHost;
+  registry: SkillsRegistry;
+  planner: SkillsPlanner;
+  /** User grants (settings). No grants → nothing arms; plans stay empty. */
+  grants: () => ReadonlyMap<string, SkillGrant>;
+  adapters: () => readonly SkillAdapterCoverage[];
+  endpoint: SkillsProtocolEndpoint;
+  /** Bounded context snapshot size per review (design §9: 32 KiB). */
+  maxContextBytes?: number;
+  /** Host→client round-trip budget for context resolution. */
+  contextTimeoutMs?: number;
+}
+
+/** Per-client mutable state: one connection = one verified identity. */
+interface ClientState {
+  plans: Map<string, StoredPlan>;
+  planVersions: Map<string, number>;
+  jobKeys: Set<string>;
+}
+
+interface StoredPlan {
+  planId: string;
+  planVersion: number;
+  expiresAt: number;
+  rules: SkillPlanRule[];
+}
+
+const MAX_PLANS_PER_CLIENT = 64;
+const MAX_JOBS_PER_CLIENT = 256;
+
+interface SkillsProtocolContext {
+  deps: SkillsProtocolDeps;
+  state: ClientState;
+  maxContextBytes: number;
+  contextTimeoutMs: number;
+  deliverResult: (outcome: SkillJobOutcome, rule: SkillPlanRule, jobId: string, eventId: string) => void;
+}
+
+export interface SkillsProtocol {
+  /**
+   * Route one client→host request. Returns true when the method belongs to
+   * the skills surface (and a response was sent); false when the caller
+   * should answer METHOD_NOT_FOUND.
+   */
+  handle(
+    method: string,
+    params: unknown,
+    respond: (result: unknown) => void,
+    respondError: (code: PiBrowserErrorCode, message: string) => void,
+  ): boolean;
+  /** Drop this client's plans and cancel its in-flight jobs. */
+  dispose(): void;
+  /** Live-plan diagnostics (skills_status / shutdown assertions). */
+  plans(): { count: number; armedRules: number };
+}
+
+function planKey(source: SkillsPlanParams["source"]): string {
+  return source.tabId !== undefined && source.frameId !== undefined
+    ? `doc:${source.tabId}:${source.frameId}:${source.documentGeneration ?? ""}`
+    : `mail:${source.accountId ?? "default"}`;
+}
+
+function handlePlan(ctx: SkillsProtocolContext, raw: unknown): SkillsPlanResult {
+  const { deps, state } = ctx;
+  const params = parseSkillsPlanParams(raw) as SkillsPlanParams;
+  const key = planKey(params.source);
+  const version = (state.planVersions.get(key) ?? 0) + 1;
+  state.planVersions.set(key, version);
+  let compiled;
+  try {
+    compiled = deps.planner.compile(
+      {
+        application: params.source.application,
+        url: params.url,
+        documentGeneration: params.source.documentGeneration ?? "mail",
+        ...(params.source.accountId ? { accountId: params.source.accountId } : {}),
+      },
+      deps.grants(),
+      deps.adapters(),
+      version,
+    );
+  } catch (err) {
+    deps.log.warn(`skills plan failed for ${key}: ${err instanceof Error ? err.message : String(err)}`);
+    return { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
+  }
+  if (state.plans.size >= MAX_PLANS_PER_CLIENT && !state.plans.has(key)) state.plans.delete(state.plans.keys().next().value!);
+  state.plans.set(key, { planId: compiled.planId, planVersion: compiled.planVersion, expiresAt: compiled.expiresAt, rules: compiled.rules });
+  return { status: "ok", plan: compiled };
+}
+
+async function handleEvent(ctx: SkillsProtocolContext, raw: unknown): Promise<SkillsEventResult> {
+  const { deps, state } = ctx;
+  const params = parseSkillsEventParams(raw) as SkillsEventParams;
+  const evt = params.event;
+  const key = planKey(evt.source);
+  const stored = state.plans.get(key);
+  if (!stored || stored.planVersion !== evt.planVersion) {
+    return { status: "stale-plan", reason: "no plan for this document generation or version mismatch; re-plan" };
+  }
+  if (Date.now() > stored.expiresAt) {
+    return { status: "stale-plan", reason: "plan expired; re-plan" };
+  }
+  const rules = stored.rules.filter((rule) => rule.subscriptions.some((sub) => sub.event === evt.event));
+  if (rules.length === 0) return { status: "no-match" };
+
+  // Resolve the context snapshot through the coordinator's capability
+  // (design §7: contextRef resolves ONLY here, privacy by request).
+  // Manifest parsing already restricts context fields to SKILL_CONTEXT_FIELDS.
+  const resolved = await resolveEventContext(ctx, rules, evt);
+  if (resolved.payload === undefined) return { status: "unavailable", reason: resolved.reason ?? "context unavailable" };
+
+  const jobs = submitRuleJobs(ctx, evt, rules, resolved.payload);
+  return jobs.length ? { status: "accepted", jobs } : { status: "unavailable", reason: "no usable rules" };
+}
+
+async function resolveEventContext(
+  ctx: SkillsProtocolContext,
+  rules: SkillPlanRule[],
+  evt: SkillEvent,
+): Promise<{ payload?: string; reason?: string }> {
+  const { deps } = ctx;
+  const fields = [...new Set(
+    rules.flatMap((rule) => {
+      const skill = deps.registry.get(rule.skillKey);
+      return skill ? [...skill.definition.context.required, ...skill.definition.context.optional] : [];
+    }),
+  )] as SkillContextField[];
+  try {
+    const request: SkillsContextRequestParams = {
+      contextRef: evt.contextRef, interactionId: evt.interactionId,
+      planVersion: evt.planVersion, fields, maxBytes: ctx.maxContextBytes,
+    };
+    const response = await deps.endpoint.request<SkillsContextResult>(X_PI_BROWSER.skills_context, request, ctx.contextTimeoutMs);
+    const parsed = parseSkillsContextResult(response, ctx.maxContextBytes);
+    return { payload: JSON.stringify(parsed.context) };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    deps.log.warn(`skills context unavailable for ${evt.eventId}: ${reason}`);
+    return { reason: `context unavailable: ${reason}` };
+  }
+}
+
+function submitRuleJobs(
+  ctx: SkillsProtocolContext,
+  evt: SkillEvent,
+  rules: SkillPlanRule[],
+  contextPayload: string,
+): NonNullable<SkillsEventResult["jobs"]> {
+  const { deps, state } = ctx;
+  const jobs: NonNullable<SkillsEventResult["jobs"]> = [];
+  for (const rule of rules) {
+    const skill = deps.registry.get(rule.skillKey);
+    if (!skill) {
+      deps.log.warn(`skills rule names unknown skill ${rule.skillKey}; skipped`);
+      continue;
+    }
+    const jobId = `job:${evt.eventId}:${rule.skillKey}`;
+    const dedupeKey = `${rule.skillKey}:${evt.interactionId}:${evt.draftRevision ?? 0}`;
+    const kind = evt.event === "comment.before-submit" ? "gate" : "speculative";
+    void deps.host
+      .submit({
+        skill,
+        context: contextPayload,
+        eventId: evt.eventId,
+        jobId,
+        key: dedupeKey,
+        kind,
+        grantedTools: [],
+      })
+      .then((outcome) => ctx.deliverResult(outcome, rule, jobId, evt.eventId));
+    if (state.jobKeys.size >= MAX_JOBS_PER_CLIENT) state.jobKeys.delete(state.jobKeys.values().next().value!);
+    state.jobKeys.add(dedupeKey);
+    jobs.push({ jobId, skillKey: rule.skillKey, key: dedupeKey });
+  }
+  return jobs;
+}
+
+function handleCancel(ctx: SkillsProtocolContext, raw: unknown): { cancelled: number } {
+  const { deps, state } = ctx;
+  const params = parseSkillsCancelParams(raw) as SkillsCancelParams;
+  let cancelled = 0;
+  for (const key of [...state.jobKeys]) {
+    if (key.includes(`:${params.interactionId}:`)) {
+      cancelled += deps.host.cancel(key);
+      state.jobKeys.delete(key);
+    }
+  }
+  return { cancelled };
+}
+
+function handleStatus(ctx: SkillsProtocolContext): SkillsStatusResult {
+  const { deps, state } = ctx;
+  const stats = deps.host.service.stats;
+  return {
+    available: !stats.closed,
+    stats: {
+      running: stats.running,
+      queued: stats.queued,
+      replacements: stats.replacements,
+      closed: stats.closed,
+      outcomes: { ...stats.outcomes },
+    },
+    plans: state.plans.size,
+    armedRules: [...state.plans.values()].reduce((sum, p) => sum + p.rules.length, 0),
+  };
+}
+
+function deliverResult(
+  ctx: SkillsProtocolContext,
+  outcome: SkillJobOutcome,
+  rule: SkillPlanRule,
+  jobId: string,
+  eventId: string,
+): void {
+  const params: SkillsResultParams =
+    outcome.status === "done" && outcome.value
+      ? (() => {
+          const report = outcome.value as ReviewResult;
+          return {
+            jobId, eventId, skillKey: rule.skillKey, skillRevision: rule.skillRevision, status: "done" as const,
+            decision: report.decision,
+            ...(report.explanation !== undefined ? { explanation: report.explanation } : {}),
+            ...(report.replacementText !== undefined ? { replacementText: report.replacementText } : {}),
+          };
+        })()
+      : {
+          jobId, eventId, skillKey: rule.skillKey, skillRevision: rule.skillRevision, status: "unavailable",
+          reason: outcome.reason ?? outcome.error?.message ?? outcome.status,
+        };
+  // Delivery is best-effort and acked: a client that is gone (disconnect,
+  // navigation) must not wedge the already-settled job.
+  ctx.deps.endpoint
+    .request(X_PI_BROWSER.skills_result, params, ctx.contextTimeoutMs)
+    .catch((err: unknown) => ctx.deps.log.warn(`skills result delivery failed for ${jobId}: ${err instanceof Error ? err.message : String(err)}`));
+}
+
+export function createSkillsProtocol(deps: SkillsProtocolDeps): SkillsProtocol {
+  const state: ClientState = { plans: new Map(), planVersions: new Map(), jobKeys: new Set() };
+  const ctx: SkillsProtocolContext = {
+    deps,
+    state,
+    maxContextBytes: deps.maxContextBytes ?? 32_768,
+    contextTimeoutMs: deps.contextTimeoutMs ?? 5_000,
+    deliverResult: (outcome, rule, jobId, eventId) => deliverResult(ctx, outcome, rule, jobId, eventId),
+  };
+  return {
+    handle(method, params, respond, respondError): boolean {
+      const fail = (err: unknown) =>
+        respondError(PI_BROWSER_ERROR.INTERNAL, `skills: ${err instanceof Error ? err.message : String(err)}`);
+      try {
+        switch (method) {
+          case X_PI_BROWSER.skills_plan:
+            respond(handlePlan(ctx, params));
+            return true;
+          case X_PI_BROWSER.skills_event:
+            void handleEvent(ctx, params).then(respond, fail);
+            return true;
+          case X_PI_BROWSER.skills_cancel:
+            respond(handleCancel(ctx, params));
+            return true;
+          case X_PI_BROWSER.skills_status:
+            respond(handleStatus(ctx));
+            return true;
+          default:
+            return false;
+        }
+      } catch (err) {
+        fail(err);
+        return true;
+      }
+    },
+    dispose(): void {
+      for (const key of state.jobKeys) deps.host.cancel(key);
+      state.jobKeys.clear();
+      state.plans.clear();
+      state.planVersions.clear();
+    },
+    plans(): { count: number; armedRules: number } {
+      return { count: state.plans.size, armedRules: [...state.plans.values()].reduce((sum, p) => sum + p.rules.length, 0) };
+    },
+  };
+}

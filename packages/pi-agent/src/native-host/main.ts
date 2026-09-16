@@ -32,7 +32,8 @@ import {
   type BrowserToolBridge,
 } from "../tool-bridge.js";
 import { createStdioTransport, type Dispatcher } from "./transport.js";
-import { startSkillsRuntime, type SkillsHost } from "./skills-startup.js";
+import { createClientSkillsProtocol, startSkillsRuntime } from "./skills-startup.js";
+import type { SkillsHost } from "../skills/pi-integration.js";
 import { AcpAgent } from "../acp/agent.js";
 import { MockBackend } from "../acp/mock-backend.js";
 import { PiSdkBackend } from "../acp/sdk-backend.js";
@@ -240,7 +241,7 @@ async function main(): Promise<void> {
   // Skills runtime (skills-runtime-design.md §10, §13): the broker owns the
   // registry, the bounded SkillsService, and the isolated job runner.
   // Best-effort: degrades to "no skills" without blocking startup.
-  const skillsHost: SkillsHost | undefined = await startSkillsRuntime({ log, backend, toolBridge });
+  const skillsRuntime = await startSkillsRuntime({ log, backend, toolBridge });
 
   // Browser-tools MCP server: lets pi-subagent children (separate node
   // processes with no ACP channel) reach the browser tools over MCP on a
@@ -274,13 +275,19 @@ async function main(): Promise<void> {
     agents,
     provider,
     backend,
-    skillsHost,
+    skillsHost: skillsRuntime?.host,
     brokerServer: () => brokerServer,
     mcpServer: () => mcpServer,
   });
 
   const wireClient = (clientId: string, dispatcher: Dispatcher) => {
     clients.add(clientId);
+    // One skills protocol surface per client connection (design §7):
+    // verified source identity is per-connection, results route back on
+    // the same transport.
+    const clientSkills = skillsRuntime
+      ? createClientSkillsProtocol({ log, runtime: skillsRuntime, transport: dispatcher.transport })
+      : undefined;
     const agent = new AcpAgent({
       backend,
       provider,
@@ -290,12 +297,14 @@ async function main(): Promise<void> {
       clientId,
       registry,
       bridge: toolBridge,
+      extendedRequest: clientSkills?.extendedRequest,
     });
     agents.set(clientId, agent);
     dispatcher.transport.onEof = () => {
       clients.delete(clientId);
       agents.delete(clientId);
       registry.remove(clientId);
+      clientSkills?.dispose();
       agent.shutdown();
       log.info(`client ${clientId} disconnected (${clients.size} connected)`);
       if (clients.size === 0) void shutdown("last client disconnected");

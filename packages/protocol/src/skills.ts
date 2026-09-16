@@ -210,6 +210,186 @@ function parseEventSource(value: unknown): SkillEvent["source"] {
   }
   return result;
 }
+export type SkillEventSource = SkillEvent["source"];
+
+// ---------------------------------------------------------------------------
+// ACP protocol surface (skills-runtime-design.md §2, §7)
+//
+// Application messages ride the existing ACP transport under the negotiated
+// x-pi-browser/ namespace (X_PI_BROWSER.skills_*). Standard prompt traffic
+// stays separate; neither ACP nor MCP is the scheduler.
+// ---------------------------------------------------------------------------
+
+/** One armed rule in a compiled page plan (host → client, display + arming). */
+export interface SkillPlanRule {
+  skillKey: string;
+  skillRevision: string;
+  adapterId: string;
+  adapterVersion: string;
+  subscriptions: SkillSubscription[];
+  mode: "advisory" | "review-before-submit";
+  capabilities: SkillCapability[];
+}
+
+/** Compiled page plan delivered to the coordinator for one document. */
+export interface PagePlan {
+  planId: string;
+  planVersion: number;
+  documentGeneration: string;
+  /** Plans expire; the coordinator re-plans before arming again. */
+  expiresAt: number;
+  rules: SkillPlanRule[];
+  unavailable: { skillKey: string; reason: string }[];
+}
+
+/** Context fields a rule may request from the coordinator's snapshot. */
+export const SKILL_CONTEXT_FIELDS = ["draft", "replyTarget", "parentPost", "visibleAncestors", "mail", "applicationRecord"] as const;
+export type SkillContextField = (typeof SKILL_CONTEXT_FIELDS)[number];
+
+/** Client → host: compile a page plan for a verified source identity. */
+export interface SkillsPlanParams {
+  source: SkillEventSource;
+  /** The frame's own URL, supplied by the addon, never a page payload. */
+  url: string;
+}
+export interface SkillsPlanResult {
+  status: "ok" | "unavailable";
+  reason?: string;
+  plan?: PagePlan;
+}
+
+/** Client → host: submit a verified skill event. */
+export interface SkillsEventParams {
+  event: SkillEvent;
+}
+export interface SkillsEventJob {
+  jobId: string;
+  skillKey: string;
+  /** Scheduler key the coordinator can target with skills_cancel. */
+  key: string;
+}
+export interface SkillsEventResult {
+  status: "accepted" | "no-match" | "stale-plan" | "unavailable" | "duplicate";
+  reason?: string;
+  jobs?: SkillsEventJob[];
+}
+
+/** Client → host: cancel pending skill work for one interaction. */
+export interface SkillsCancelParams {
+  interactionId: string;
+}
+export interface SkillsCancelResult {
+  cancelled: number;
+}
+
+/** Client → host: probe the skill runtime. */
+export interface SkillsStatusResult {
+  available: boolean;
+  stats: { running: number; queued: number; replacements: number; closed: boolean; outcomes: Record<string, number> };
+  plans: number;
+  armedRules: number;
+}
+
+/** Host → client: resolve a contextRef against the coordinator's bounded snapshot store. */
+export interface SkillsContextRequestParams {
+  contextRef: string;
+  interactionId: string;
+  planVersion: number;
+  /** Only these snapshot fields are returned (privacy by request). */
+  fields: SkillContextField[];
+  maxBytes: number;
+}
+export interface SkillsContextResult {
+  contextRef: string;
+  context: Record<string, unknown>;
+  bytes: number;
+}
+
+/** Host → client: deliver a job outcome; the coordinator acks delivery. */
+export interface SkillsResultParams {
+  jobId: string;
+  eventId: string;
+  skillKey: string;
+  skillRevision: string;
+  status: "done" | "unavailable";
+  decision?: "clear" | "suggest" | "abstain";
+  reason?: string;
+  explanation?: string;
+  replacementText?: string;
+}
+export interface SkillsResultAck {
+  delivered: true;
+}
+
+function parseDocumentUrl(value: unknown): string {
+  const raw = text(value, 2048);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("Invalid document URL");
+  }
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Unsupported document URL");
+  return raw;
+}
+
+export function parseSkillsPlanParams(value: unknown): SkillsPlanParams {
+  const entry = object(value, ["source", "url"]);
+  return { source: parseEventSource(entry.source), url: parseDocumentUrl(entry.url) };
+}
+
+export function parseSkillsEventParams(value: unknown): SkillsEventParams {
+  const entry = object(value, ["event"]);
+  return { event: parseSkillEvent(entry.event) };
+}
+
+export function parseSkillsCancelParams(value: unknown): SkillsCancelParams {
+  const entry = object(value, ["interactionId"]);
+  return { interactionId: text(entry.interactionId) };
+}
+
+export function parseSkillsContextRequestParams(value: unknown): SkillsContextRequestParams {
+  const entry = object(value, ["contextRef", "interactionId", "planVersion", "fields", "maxBytes"]);
+  return {
+    contextRef: text(entry.contextRef), interactionId: text(entry.interactionId),
+    planVersion: integer(entry.planVersion, 0, Number.MAX_SAFE_INTEGER),
+    fields: list(entry.fields, (f) => choice(f, SKILL_CONTEXT_FIELDS), 8),
+    maxBytes: integer(entry.maxBytes, 1, 32_768),
+  };
+}
+
+/** The coordinator's snapshot payload; the host binds it to the job identity. */
+export function parseSkillsContextResult(value: unknown, maxBytes: number): SkillsContextResult {
+  const entry = object(value, ["contextRef", "context", "bytes"]);
+  const inner = object(entry.context, SKILL_CONTEXT_FIELDS);
+  const json = JSON.stringify(inner);
+  if (json.length > maxBytes) throw new Error("Context snapshot exceeds limit");
+  return { contextRef: text(entry.contextRef), context: inner, bytes: json.length };
+}
+
+export function parseSkillsResultParams(value: unknown): SkillsResultParams {
+  const entry = object(value, ["jobId", "eventId", "skillKey", "skillRevision", "status", "decision", "reason", "explanation", "replacementText"]);
+  const result: SkillsResultParams = {
+    jobId: text(entry.jobId), eventId: text(entry.eventId), skillKey: text(entry.skillKey),
+    skillRevision: text(entry.skillRevision), status: choice(entry.status, ["done", "unavailable"] as const),
+  };
+  if (result.status === "done") {
+    result.decision = choice(entry.decision, ["clear", "suggest", "abstain"] as const);
+    if (entry.explanation !== undefined) result.explanation = text(entry.explanation, 4096);
+    if (entry.replacementText !== undefined) {
+      if (result.decision !== "suggest") throw new Error("Only suggestions can replace text");
+      if (typeof entry.replacementText !== "string" || entry.replacementText.length > 32_768) throw new Error("Invalid replacement text");
+      result.replacementText = entry.replacementText;
+    }
+  } else {
+    if (entry.decision !== undefined || entry.explanation !== undefined || entry.replacementText !== undefined) {
+      throw new Error("Unavailable results carry no decision");
+    }
+    result.reason = text(entry.reason, 4096);
+  }
+  return result;
+}
+
 /** Parse semantic output only. The caller must bind it to the immutable job identity. */
 export function parseReviewResult(value: unknown): ReviewResult {
   const entry = object(value, ["jobId", "eventId", "skillKey", "skillRevision", "decision", "explanation", "replacementText"]);

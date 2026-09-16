@@ -1,4 +1,5 @@
 export * from "./acp-client.js";
+export * from "./skills/coordinator.js";
 export * from "./session-store.js";
 export * from "./theme.js";
 export * from "./permissions.js";
