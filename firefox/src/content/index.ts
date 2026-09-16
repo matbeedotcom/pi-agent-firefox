@@ -1430,3 +1430,29 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
     });
   return true; // async sendResponse
 });
+
+// ---------------------------------------------------------------------------
+// Skills test bridge (tests/skills-e2e, controlled matrix).
+//
+// Inert in normal use: exposed ONLY when the top-level URL carries
+// `skills_test=1` (the e2e harness serves the fixtures with that query).
+// The harness reads state through the host's browser_evaluate tool, which
+// can call `window.__skillsTest.state()` / `.action(...)` — the same
+// background dispatch the review UI uses, with sender-verified identity —
+// and `.accept()` applies the current suggestion exactly like the card's
+// Apply button.
+// ---------------------------------------------------------------------------
+if (window.top === window && /[?&]skills_test=1\b/.test(location.search)) {
+  const bridge = {
+    action: (name: string, payload: Record<string, unknown> = {}) => skillsAction(name, payload),
+    state: () => skillsAction("skills_state"),
+    fixture: () => (window as { __fixture?: unknown }).__fixture ?? null,
+    accept: () => {
+      const view = skillsRuntime?.currentView;
+      const suggestion = view?.suggestions.find((s) => s.decision === "suggest" && s.replacementText);
+      if (!suggestion?.replacementText) throw new Error("no actionable suggestion");
+      applySuggestion(suggestion.replacementText);
+    },
+  };
+  (window as { __skillsTest?: unknown }).__skillsTest = bridge;
+}
