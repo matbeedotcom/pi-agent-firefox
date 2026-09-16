@@ -386,9 +386,11 @@ test("mcp: install → status → idempotent reinstall → uninstall lifecycle",
     // Install creates the config with the pi-browser entry.
     result = await runCommand("mcp", ctx); // default sub: install
     assert.equal(result.ok, true);
-    let config = JSON.parse(await readFile(file, "utf8")) as {
+    type McpConfig = {
       mcpServers: Record<string, { socket: string; directTools: boolean }>;
+      settings?: unknown;
     };
+    let config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
     const expectedSocket = path.join(home, ".pi", "run", "agent-broker-mcp.sock");
     assert.deepEqual(config.mcpServers["pi-browser"], { socket: expectedSocket, directTools: true });
 
@@ -402,7 +404,7 @@ test("mcp: install → status → idempotent reinstall → uninstall lifecycle",
     result = await runCommand("mcp", ctx);
     assert.equal(result.ok, true);
     assert.ok(result.lines.some((l) => l.includes("already configured")), JSON.stringify(result.lines));
-    config = JSON.parse(await readFile(file, "utf8")) as typeof config & { settings?: unknown };
+    config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
     assert.deepEqual(config.settings, { directTools: false }, "unrelated keys preserved");
 
     // A stale socket path is detected.

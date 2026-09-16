@@ -32,6 +32,7 @@ import {
   type BrowserToolBridge,
 } from "../tool-bridge.js";
 import { createStdioTransport, type Dispatcher } from "./transport.js";
+import { startSkillsRuntime, type SkillsHost } from "./skills-startup.js";
 import { AcpAgent } from "../acp/agent.js";
 import { MockBackend } from "../acp/mock-backend.js";
 import { PiSdkBackend } from "../acp/sdk-backend.js";
@@ -45,6 +46,7 @@ import {
 } from "./broker-ipc.js";
 import { startMcpBrowserServer, type McpBrowserServerHandle } from "./mcp-server.js";
 import { runRelay } from "./relay.js";
+import type { Logger } from "../logger.js";
 
 const require = createRequire(import.meta.url);
 
@@ -82,6 +84,72 @@ function pruneOldLogs(dir: string): void {
       // concurrent removal — ignore
     }
   }
+}
+
+/**
+ * The host's graceful shutdown sequence.
+ *
+ * Hard-exit backstop: a half-open socket must never keep the host alive
+ * (e.g. a relay that was SIGKILLed instead of closing its pipe).
+ */
+function createShutdownSequence(deps: {
+  log: Logger;
+  agents: Map<string, AcpAgent>;
+  provider: CapabilityToolProvider;
+  backend: PiSdkBackend | MockBackend;
+  skillsHost: SkillsHost | undefined;
+  brokerServer: () => BrokerServerHandle | undefined;
+  mcpServer: () => McpBrowserServerHandle | undefined;
+}): (reason: string) => Promise<void> {
+  let shuttingDown = false;
+  return async (reason: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    deps.log.info(`shutting down: ${reason}`);
+    const backstop = setTimeout(() => {
+      deps.log.warn("shutdown timed out; forcing exit");
+      process.exit(0);
+    }, 5_000);
+    backstop.unref?.();
+    try {
+      for (const agent of deps.agents.values()) agent.shutdown();
+      deps.agents.clear();
+      // Drain/abort skill jobs before the provider goes down — a running job
+      // may still be routing browser tool calls through it.
+      if (deps.skillsHost) {
+        try {
+          await deps.skillsHost.close();
+        } catch (err) {
+          deps.log.warn("skills host close error", err);
+        }
+      }
+      try {
+        await deps.provider.shutdown();
+      } catch (err) {
+        deps.log.warn("provider shutdown error", err);
+      }
+      const broker = deps.brokerServer();
+      if (broker) {
+        try {
+          await broker.close();
+        } catch (err) {
+          deps.log.warn("broker close error", err);
+        }
+      }
+      const mcp = deps.mcpServer();
+      if (mcp) {
+        try {
+          await mcp.close();
+        } catch (err) {
+          deps.log.warn("mcp server close error", err);
+        }
+      }
+      deps.backend.dispose();
+    } finally {
+      clearTimeout(backstop);
+      process.exit(0);
+    }
+  };
 }
 
 function piVersion(): string {
@@ -169,6 +237,11 @@ async function main(): Promise<void> {
   };
   setBrowserToolBridge(toolBridge);
 
+  // Skills runtime (skills-runtime-design.md §10, §13): the broker owns the
+  // registry, the bounded SkillsService, and the isolated job runner.
+  // Best-effort: degrades to "no skills" without blocking startup.
+  const skillsHost: SkillsHost | undefined = await startSkillsRuntime({ log, backend, toolBridge });
+
   // Browser-tools MCP server: lets pi-subagent children (separate node
   // processes with no ACP channel) reach the browser tools over MCP on a
   // private unix socket. Unix sockets only — skipped in standalone Windows
@@ -193,47 +266,18 @@ async function main(): Promise<void> {
   };
   const clients = new Set<string>();
   let relaySeq = 0;
-  let shuttingDown = false;
 
-  const shutdown = async (reason: string) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    log.info(`shutting down: ${reason}`);
-    // Hard-exit backstop: a half-open socket must never keep the host alive
-    // (e.g. a relay that was SIGKILLed instead of closing its pipe).
-    const backstop = setTimeout(() => {
-      log.warn("shutdown timed out; forcing exit");
-      process.exit(0);
-    }, 5_000);
-    backstop.unref?.();
-    try {
-      for (const agent of agents.values()) agent.shutdown();
-      agents.clear();
-      try {
-        await provider.shutdown();
-      } catch (err) {
-        log.warn("provider shutdown error", err);
-      }
-      if (brokerServer) {
-        try {
-          await brokerServer.close();
-        } catch (err) {
-          log.warn("broker close error", err);
-        }
-      }
-      if (mcpServer) {
-        try {
-          await mcpServer.close();
-        } catch (err) {
-          log.warn("mcp server close error", err);
-        }
-      }
-      backend.dispose();
-    } finally {
-      clearTimeout(backstop);
-      process.exit(0);
-    }
-  };
+  // Getters defer to the brokerServer/mcpServer bindings, which initialize
+  // later in startup; shutdown only ever runs after they have.
+  const shutdown = createShutdownSequence({
+    log,
+    agents,
+    provider,
+    backend,
+    skillsHost,
+    brokerServer: () => brokerServer,
+    mcpServer: () => mcpServer,
+  });
 
   const wireClient = (clientId: string, dispatcher: Dispatcher) => {
     clients.add(clientId);

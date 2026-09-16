@@ -69,6 +69,7 @@ import type {
   ToolSpec,
 } from "./backend.js";
 import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { createSkillsExtensionFactory } from "../skills/extension.js";
 import type { Logger } from "../logger.js";
 
 interface PiBackendOptions {
@@ -103,6 +104,13 @@ export class PiSdkBackend implements PiBackend {
     return this.runtimePromise;
   }
 
+  /** The shared model runtime, once initialized. Other in-process consumers
+   *  (the skills host) reuse it so provider credentials resolve identically. */
+  async sharedModelRuntime(): Promise<ModelRuntime> {
+    await this.ready;
+    return this.modelRuntime as ModelRuntime;
+  }
+
   private async initRuntime(): Promise<void> {
     if (this.modelRuntime) return;
     this.modelRuntime = await ModelRuntime.create({
@@ -134,7 +142,15 @@ export class PiSdkBackend implements PiBackend {
     const modelRuntime = await this.runtime();
     const existing = this.servicesByCwd.get(cwd);
     if (existing) return existing;
-    const extensionFactories = await this.builtinFactoriesOnce();
+    // The shared skills integration extension is installed once in the
+    // host's controlled runtime configuration (skills-runtime-design.md §3):
+    // every host-spawned session loads it; isolated skill-job sessions never
+    // do (noExtensions in the job's resource loader). In a session without a
+    // skills host installed the extension registers nothing.
+    const extensionFactories = [
+      ...(await this.builtinFactoriesOnce()),
+      { name: "pi-browser-skills", factory: createSkillsExtensionFactory() },
+    ];
     const services = await createAgentSessionServices({
       cwd,
       modelRuntime,
