@@ -43,6 +43,7 @@ import {
   tryRelayAttach,
   type BrokerServerHandle,
 } from "./broker-ipc.js";
+import { startMcpBrowserServer, type McpBrowserServerHandle } from "./mcp-server.js";
 import { runRelay } from "./relay.js";
 
 const require = createRequire(import.meta.url);
@@ -168,6 +169,22 @@ async function main(): Promise<void> {
   };
   setBrowserToolBridge(toolBridge);
 
+  // Browser-tools MCP server: lets pi-subagent children (separate node
+  // processes with no ACP channel) reach the browser tools over MCP on a
+  // private unix socket. Unix sockets only — skipped in standalone Windows
+  // mode, same as the relay socket.
+  let mcpServer: McpBrowserServerHandle | undefined;
+  if (isBrokerIpcSupported()) {
+    try {
+      mcpServer = await startMcpBrowserServer({ log, bridge: toolBridge });
+    } catch (err) {
+      // Non-fatal: the in-process bridge (extensions/pi-browser-tools.ts)
+      // keeps working for foreground children; only subagent MCP access is
+      // unavailable until the socket is free again.
+      log.warn("could not start mcp browser server", err);
+    }
+  }
+
   const agents = new Map<string, AcpAgent>();
   // A peer app connected/disconnected: tell every client so its UI can
   // update the "capabilities:" line (display-only, plan §29).
@@ -202,6 +219,13 @@ async function main(): Promise<void> {
           await brokerServer.close();
         } catch (err) {
           log.warn("broker close error", err);
+        }
+      }
+      if (mcpServer) {
+        try {
+          await mcpServer.close();
+        } catch (err) {
+          log.warn("mcp server close error", err);
         }
       }
       backend.dispose();

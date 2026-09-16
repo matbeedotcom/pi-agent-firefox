@@ -201,6 +201,13 @@ export const PI_BROKER = {
   runDir: "run",
   /** Unix socket file name inside the run directory (0600). */
   socketFile: "agent-broker.sock",
+  /**
+   * MCP server socket file name inside the run directory (0600). Exposes
+   * the browser tools as a plain MCP server (JSONL JSON-RPC) so separate
+   * pi-subagent child processes — which have no ACP channel and no
+   * in-process tool bridge — can reach them over MCP.
+   */
+  mcpSocketFile: "agent-broker-mcp.sock",
   /** Broker state file name inside the run directory (0600: pid + token). */
   stateFile: "agent-broker.json",
   /** First frame a relay sends after connecting (carries the token). */
