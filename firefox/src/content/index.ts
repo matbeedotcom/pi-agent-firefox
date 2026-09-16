@@ -1,3 +1,6 @@
+import { PageRuntime, adapterById, type GateState, type GateView } from "@pi-browser/webext";
+import type { PagePlan, SkillsPlanResult } from "@pi-browser/protocol";
+
 /**
  * Content script: DOM access, stable element references, and page
  * interaction (PRODUCT.md §32–34).
@@ -1200,9 +1203,219 @@ async function handle(msg: ContentMessage): Promise<unknown> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Skills submission gate (skills-runtime-design.md §6, §8)
+//
+// On document load the content script PROBES the background for a compiled
+// page plan. Only when a rule names a PACKAGED page adapter does it start a
+// PageRuntime; on every other page nothing is attached (design §2: no
+// non-matching handlers, no model work until a relevant interaction).
+// The runtime makes the synchronous "hold" decision on the submit gesture;
+// the background gate re-validates every allowed gesture. Gate-view pushes
+// ("pi/skills_state") update the local mirror + the review card.
+// ---------------------------------------------------------------------------
+
+let skillsRuntime: PageRuntime | undefined;
+let skillsCard: HTMLElement | undefined;
+let skillsPlan: PagePlan | undefined;
+let skillsInteractionId = `int:${Date.now().toString(36)}${Math.floor(Math.random() * 1_000_000).toString(36)}`;
+
+async function skillsAction(action: string, payload: Record<string, unknown> = {}): Promise<unknown> {
+  const res = (await browser.runtime.sendMessage({ type: "pi/action", action, payload })) as {
+    ok?: boolean;
+    result?: unknown;
+    error?: { message?: string };
+  } | undefined;
+  if (!res || res.ok !== true) throw new Error(res?.error?.message ?? "skills action failed");
+  return res.result;
+}
+
+async function probeSkills(): Promise<void> {
+  try {
+    const result = (await skillsAction("skills_plan")) as SkillsPlanResult;
+    if (result.status !== "ok" || !result.plan) return;
+    const rule = result.plan.rules[0];
+    const adapter = adapterById(rule.adapterId);
+    if (!adapter) return; // generic adapter: advisory observations only, no page coverage
+    skillsPlan = result.plan;
+    const documentGeneration = result.plan.documentGeneration;
+    skillsRuntime = new PageRuntime({
+      adapter,
+      mode: rule.mode,
+      target: {
+        // Real DOM events (Event/EventTarget) meet the runtime's narrow
+        // SkillEventLike contract at this one bridge point.
+        addEventListener: (type, fn) => document.addEventListener(type, fn as unknown as EventListener),
+        removeEventListener: (type, fn) => document.removeEventListener(type, fn as unknown as EventListener),
+        query: (selector) => document.querySelector(selector),
+      },
+      interactionId: skillsInteractionId,
+      arm: (input) =>
+        skillsAction("skills_arm", {
+          documentGeneration,
+          plan: skillsPlan,
+          identity: {
+            documentGeneration,
+            frameId: 0,
+            interactionId: skillsInteractionId,
+            replyTarget: input.replyTarget,
+            draft: input.draft,
+            contextRevision: input.contextRevision,
+            // memoryRevision 0 = no memory revision claimed; the host owns memory state.
+            reviewers: skillsPlan!.rules.map((r) => ({ key: r.skillKey, revision: r.skillRevision, memoryRevision: 0 })),
+          },
+        }).then(() => undefined),
+      onGesture: (phase) => {
+        // Bookkeeping only: the background gate already re-validated.
+        void skillsAction("skills_gesture", { documentGeneration, chainId: adapter.chainId, phase }).catch(() => {});
+      },
+      log: (message) => {
+        console.warn(`[pi-browser skills] ${message}`);
+      },
+    });
+    skillsRuntime.start();
+    showReviewCard();
+  } catch {
+    /* no host, no plan, or no matching adapter: this page stays inert */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Review card (inert unless a plan matched; scoped classes only)
+// ---------------------------------------------------------------------------
+
+const REVIEW_CARD_CSS = `
+.pb-review-card{position:fixed;bottom:16px;right:16px;z-index:2147483647;max-width:340px;
+  background:#1c1b1a;color:#fbfbfa;border:1px solid #5b5a58;border-radius:10px;
+  padding:12px 14px;font:13px/1.45 system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.pb-review-card[hidden]{display:none}
+.pb-review-card h2{margin:0 0 6px;font-size:13px;font-weight:600}
+.pb-review-card p{margin:4px 0;opacity:.85}
+.pb-review-card ul{margin:6px 0;padding-left:18px}
+.pb-review-card .pb-review-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.pb-review-card button{font:inherit;padding:4px 10px;border-radius:6px;border:1px solid #5b5a58;
+  background:#2b2a28;color:#fbfbfa;cursor:pointer}
+.pb-review-card button:hover{background:#3a3936}
+`;
+
+const REVIEW_CARD_TITLES: Record<GateState, string> = {
+  dirty: "Preparing review…",
+  reviewing: "Reviewing your comment…",
+  suggestion: "Review finished — suggestions below",
+  clear: "Review clear — you can post",
+  unavailable: "Review unavailable — you can keep your own text",
+  authorized: "You kept your own text",
+  closed: "",
+};
+
+function showReviewCard(): void {
+  if (skillsCard) return;
+  const style = document.createElement("style");
+  style.textContent = REVIEW_CARD_CSS;
+  document.documentElement.appendChild(style);
+  const card = document.createElement("div");
+  card.className = "pb-review-card";
+  card.setAttribute("role", "status");
+  card.hidden = true;
+  document.documentElement.appendChild(card);
+  skillsCard = card;
+  updateReviewCard();
+}
+
+function updateReviewCard(): void {
+  const card = skillsCard;
+  if (!card) return;
+  const view = skillsRuntime?.currentView;
+  if (!view || view.state === "closed" || view.state === "dirty") {
+    card.hidden = true;
+    card.replaceChildren();
+    return;
+  }
+  card.hidden = false;
+  card.replaceChildren();
+  const title = document.createElement("h2");
+  title.textContent = `Pi Browser — ${REVIEW_CARD_TITLES[view.state]}`;
+  card.appendChild(title);
+  if (view.reason) {
+    const reason = document.createElement("p");
+    reason.textContent = view.reason;
+    card.appendChild(reason);
+  }
+  if (view.suggestions.length > 0) {
+    const list = document.createElement("ul");
+    for (const suggestion of view.suggestions.slice(0, 3)) {
+      const item = document.createElement("li");
+      const text = document.createElement("span");
+      text.textContent = suggestion.replacementText ?? suggestion.explanation ?? "(suggestion)";
+      item.appendChild(text);
+      if (suggestion.replacementText) {
+        const apply = document.createElement("button");
+        apply.textContent = " Apply ";
+        apply.addEventListener("click", () => applySuggestion(suggestion.replacementText!));
+        item.appendChild(apply);
+      }
+      list.appendChild(item);
+    }
+    card.appendChild(list);
+  }
+  const actions = document.createElement("div");
+  actions.className = "pb-review-actions";
+  if (["reviewing", "suggestion", "unavailable", "dirty"].includes(view.state)) {
+    const keep = document.createElement("button");
+    keep.textContent = "Post my text";
+    keep.addEventListener("click", () => {
+      void skillsAction("skills_authorize", { documentGeneration: skillsPlan?.documentGeneration }).catch(() => {});
+    });
+    actions.appendChild(keep);
+  }
+  if (["reviewing", "suggestion", "unavailable"].includes(view.state)) {
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel review";
+    cancel.addEventListener("click", () => {
+      void skillsAction("skills_cancel", { interactionId: skillsInteractionId }).catch(() => {});
+    });
+    actions.appendChild(cancel);
+  }
+  card.appendChild(actions);
+}
+
+/** User-applied suggestion: replace the active composer's draft (a fresh arm follows). */
+function applySuggestion(text: string): void {
+  const plan = skillsPlan;
+  const runtime = skillsRuntime;
+  if (!plan) return;
+  const rule = plan.rules[0];
+  const adapter = adapterById(rule.adapterId);
+  if (!adapter) return;
+  const composer = document.querySelector(adapter.composer.join(",")) as
+    | (HTMLTextAreaElement | HTMLInputElement | null)
+    | null;
+  if (composer && (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement)) {
+    composer.value = text;
+    composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  }
+  void runtime; // the input event drives the re-arm through the runtime's listeners
+}
+
+void probeSkills();
+
 browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   if (typeof message !== "object" || message === null) return;
   const msg = message as ContentMessage;
+  if (msg.type === "pi/skills_state") {
+    // Push from the background on every gate transition (no response).
+    if (
+      skillsRuntime &&
+      skillsPlan &&
+      msg.documentGeneration === skillsPlan.documentGeneration &&
+      typeof msg.view === "object" &&
+      msg.view !== null
+    ) {
+      skillsRuntime.setView(msg.view as GateView);
+      updateReviewCard();
+    }
+    return;
+  }
   if (typeof msg.type !== "string" || !msg.type.startsWith("pi:")) return;
   void handle(msg)
     .then((data) => {

@@ -144,15 +144,34 @@ const skills = new SkillsRuntime({
   },
 });
 
+/**
+ * Document generation: the ADDON stamps a fresh one per top-level
+ * navigation (design §13: the coordinator stamps every event — a page
+ * payload can never claim a generation). Undefined until the first
+ * observed navigation of this event-page lifetime (docKey falls back to "").
+ */
+const docGenerations = new Map<number, string>();
+let docGenerationSeq = 0;
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== "loading" && typeof changeInfo.url !== "string") return;
+  // The old document is gone: close its skills session, stamp a fresh generation.
+  skills.closeTab(tabId);
+  docGenerations.set(tabId, `gen:${tabId}:${++docGenerationSeq}`);
+});
+browser.tabs.onRemoved.addListener((tabId) => {
+  docGenerations.delete(tabId);
+});
+
 /** Verified document identity from the message sender (never page claims). */
-function skillsDocument(sender: { tab?: { id?: number; frameId?: number; url?: string } } | undefined, generation?: string): DocumentIdentity | undefined {
+function skillsDocument(sender: { tab?: { id?: number; frameId?: number; url?: string } } | undefined): DocumentIdentity | undefined {
   const tabId = sender?.tab?.id;
   if (tabId === undefined) return undefined;
+  const generation = docGenerations.get(tabId);
   return {
     application: "firefox",
     tabId,
     frameId: sender?.tab?.frameId ?? 0,
-    ...(generation ? { documentGeneration: generation } : {}),
+    ...(generation !== undefined ? { documentGeneration: generation } : {}),
     url: sender?.tab?.url ?? "",
   };
 }
@@ -570,12 +589,12 @@ browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =
 async function handleSkillsAction(action: string, payload: ActionPayload, sender?: { tab?: { id?: number; frameId?: number; url?: string } }): Promise<unknown> {
   switch (action) {
     case "skills_plan": {
-      const document = skillsDocument(sender, payload.documentGeneration);
+      const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       return skills.plan(document);
     }
     case "skills_arm": {
-      const document = skillsDocument(sender, payload.documentGeneration);
+      const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       if (!payload.identity || !payload.plan) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_arm requires identity and plan");
       return skills.arm({
@@ -587,26 +606,26 @@ async function handleSkillsAction(action: string, payload: ActionPayload, sender
       });
     }
     case "skills_gesture": {
-      const document = skillsDocument(sender, payload.documentGeneration);
+      const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       const phase = payload.phase === "click" || payload.phase === "keyboard" || payload.phase === "submit" ? payload.phase : undefined;
       if (!phase || !payload.chainId) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_gesture requires chainId and phase");
       return { verdict: skills.gesture(document, { chainId: payload.chainId, phase }) };
     }
     case "skills_draft": {
-      const document = skillsDocument(sender, payload.documentGeneration);
+      const document = skillsDocument(sender);
       if (!document || !payload.identity) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_draft requires identity");
       skills.draftChanged(document, payload.identity);
       return {};
     }
     case "skills_composition": {
-      const document = skillsDocument(sender, payload.documentGeneration);
+      const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       skills.compositionChanged(document, payload.composing === true);
       return {};
     }
     case "skills_authorize": {
-      const document = skillsDocument(sender, payload.documentGeneration);
+      const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       return { authorized: skills.authorize(document) };
     }
@@ -616,7 +635,7 @@ async function handleSkillsAction(action: string, payload: ActionPayload, sender
       return skills.cancel(interactionId);
     }
     case "skills_state": {
-      const document = skillsDocument(sender, payload.documentGeneration);
+      const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       const view = skills.view(document);
       return { ...(view ? { view } : {}) };
