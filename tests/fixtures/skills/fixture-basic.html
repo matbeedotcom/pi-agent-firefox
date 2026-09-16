@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fixture — basic comment page</title>
+<script src="_recorder.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 40rem; line-height: 1.5; }
+  .post { border: 1px solid #ccc; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+  .author { font-weight: 600; }
+  textarea { width: 100%; min-height: 4rem; box-sizing: border-box; font: inherit; padding: 0.5rem; }
+  .row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  button { font: inherit; padding: 0.35rem 0.9rem; cursor: pointer; }
+  #receipt { color: #0a7a0a; font-weight: 600; }
+  #fixture-log { background: #f5f5f5; padding: 0.5rem; overflow: auto; max-height: 12rem; }
+</style>
+</head>
+<body>
+<h1>Fixture — basic comment page</h1>
+
+<div class="post">
+  <span class="author">Alice</span>
+  <p data-skill-fixture="target">Anyone up for a hike this weekend?</p>
+</div>
+
+<textarea data-skill-fixture></textarea>
+<div class="row">
+  <button type="button" data-skill-fixture="submit">Post reply</button>
+  <button type="button" id="reset">Reset</button>
+</div>
+
+<p id="receipt" hidden></p>
+<details>
+  <summary>Fixture log</summary>
+  <pre id="fixture-log"></pre>
+</details>
+
+<script>
+(function () {
+  "use strict";
+  var composer = document.querySelector("textarea[data-skill-fixture]");
+  var submitButton = document.querySelector('button[data-skill-fixture="submit"]');
+
+  function submit(event) {
+    if (event && event.defaultPrevented) {
+      // The add-on's page-runtime held this gesture: the page must not post.
+      window.__fixture.record("held", { via: "click" });
+      return;
+    }
+    var draft = composer.value;
+    if (draft.trim() === "") {
+      window.__fixture.record("rejected-empty");
+      return;
+    }
+    window.__fixture.markSubmitted(draft);
+  }
+
+  submitButton.addEventListener("click", submit);
+  document.getElementById("reset").addEventListener("click", function () {
+    composer.value = "";
+    window.__fixture.reset();
+  });
+})();
+</script>
+</body>
+</html>

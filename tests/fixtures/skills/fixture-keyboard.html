@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fixture — keyboard submit page</title>
+<script src="_recorder.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 40rem; line-height: 1.5; }
+  .post { border: 1px solid #ccc; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+  .author { font-weight: 600; }
+  textarea { width: 100%; min-height: 4rem; box-sizing: border-box; font: inherit; padding: 0.5rem; }
+  .row { display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center; }
+  button { font: inherit; padding: 0.35rem 0.9rem; cursor: pointer; }
+  #receipt { color: #0a7a0a; font-weight: 600; }
+  #fixture-log { background: #f5f5f5; padding: 0.5rem; overflow: auto; max-height: 12rem; }
+  .keynote { color: #555; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>Fixture — keyboard submit page</h1>
+
+<p class="keynote">Press Enter in the composer to submit. Enter with any modifier key is ignored (recorded only).</p>
+
+<div class="post">
+  <span class="author">Alice</span>
+  <p data-skill-fixture="target">Meeting moved to Friday — does that work?</p>
+</div>
+
+<textarea data-skill-fixture="composer"></textarea>
+<div class="row">
+  <button type="button" data-skill-fixture="submit">Post reply</button>
+  <button type="button" id="reset">Reset</button>
+  <span>Last key: <output id="fixture-last-key"></output></span>
+</div>
+
+<p id="receipt" hidden></p>
+<details>
+  <summary>Fixture log</summary>
+  <pre id="fixture-log"></pre>
+</details>
+
+<script>
+(function () {
+  "use strict";
+  var composer = document.querySelector('textarea[data-skill-fixture="composer"]');
+  var submitButton = document.querySelector('button[data-skill-fixture="submit"]');
+  var lastKey = document.getElementById("fixture-last-key");
+
+  function submit(event) {
+    if (event && event.defaultPrevented) {
+      // The add-on's page-runtime held this gesture: the page must not post.
+      window.__fixture.record("held", { via: event && event.key === "Enter" ? "keyboard" : "click" });
+      return;
+    }
+    var draft = composer.value;
+    if (draft.trim() === "") {
+      window.__fixture.record("rejected-empty");
+      return;
+    }
+    window.__fixture.markSubmitted(draft);
+  }
+
+  submitButton.addEventListener("click", submit);
+
+  composer.addEventListener("keydown", function (event) {
+    lastKey.textContent = event.key;
+    if (event.key !== "Enter") return;
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+      window.__fixture.record("key-ignored", {
+        key: event.key,
+        ctrl: event.ctrlKey,
+        meta: event.metaKey,
+        alt: event.altKey,
+        shift: event.shiftKey,
+      });
+      return;
+    }
+    // Plain Enter: same submit path as the button. No preventDefault here —
+    // holding the gesture is the add-on's job.
+    submit(event);
+  });
+
+  document.getElementById("reset").addEventListener("click", function () {
+    composer.value = "";
+    lastKey.textContent = "";
+    window.__fixture.reset();
+  });
+})();
+</script>
+</body>
+</html>

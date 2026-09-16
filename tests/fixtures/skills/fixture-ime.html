@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>fixture-ime — skills fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
+    h1 { font-size: 1.25rem; }
+    .thread { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; }
+    .target { background: #f5f5f5; padding: 0.5rem 0.75rem; border-radius: 6px; }
+    .author { font-weight: 600; }
+    textarea { width: 100%; box-sizing: border-box; min-height: 3rem; margin: 0.5rem 0; padding: 0.4rem; }
+    button { margin-right: 0.5rem; padding: 0.35rem 0.75rem; cursor: pointer; }
+    #fixture-ime { background: #2e5e8b; color: #fff; border: none; border-radius: 4px; }
+    #receipt { color: #14661f; font-weight: 600; }
+    details { margin-top: 1.5rem; }
+    #fixture-log { background: #111; color: #ddd; padding: 0.75rem; border-radius: 6px; min-height: 2rem; white-space: pre-wrap; }
+  </style>
+  <script src="_recorder.js"></script>
+</head>
+<body>
+  <h1>fixture-ime — deterministic IME composition</h1>
+
+  <div class="thread">
+    <p class="target" data-skill-fixture="target"><span class="author">Alice:</span> Anyone up for a hike this weekend?</p>
+    <textarea id="fixture-composer" data-skill-fixture aria-label="Reply to Alice"></textarea>
+    <button data-skill-fixture="submit">Post reply</button>
+    <button id="fixture-ime" data-skill-fixture="ime">Simulate IME composition</button>
+  </div>
+
+  <button id="fixture-reset">Reset</button>
+  <p id="receipt" hidden></p>
+
+  <details>
+    <summary>Fixture event log</summary>
+    <pre id="fixture-log"></pre>
+  </details>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var composer = document.getElementById("fixture-composer");
+
+      // Respect the add-on: if the page-runtime held the gesture, it has
+      // already preventDefault()'d the event — the site must not post.
+      // (The page itself never calls preventDefault().)
+      function submit(event) {
+        if (event.defaultPrevented) {
+          window.__fixture.record("held", { thread: "main" });
+          return;
+        }
+        var draft = composer.value.trim();
+        if (draft === "") {
+          window.__fixture.record("rejected-empty");
+          return;
+        }
+        window.__fixture.markSubmitted(draft);
+      }
+
+      document.querySelector("button[data-skill-fixture=submit]").addEventListener("click", submit);
+
+      // Deterministic CJK composition: the add-on's composition-suspend path
+      // must NOT arm a review on the preedit input, only after compositionend.
+      document.getElementById("fixture-ime").addEventListener("click", function () {
+        window.__fixture.record("ime-start");
+        composer.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        composer.value = composer.value + "你好";
+        composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        composer.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "你好" }));
+        window.__fixture.record("ime-end", { draft: composer.value });
+      });
+
+      document.getElementById("fixture-reset").addEventListener("click", function () {
+        composer.value = "";
+        window.__fixture.reset();
+      });
+    })();
+  </script>
+</body>
+</html>

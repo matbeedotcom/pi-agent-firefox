@@ -40,9 +40,12 @@ export interface PageAdapter {
 /**
  * Built-in adapter catalog (V1).
  *
- * "fixture/comment-page" is the controlled test fixture from delivery
- * step 2 — a plain comment page (textarea + named target + submit button)
- * used by the test suites. It claims no real-site coverage.
+ * "fixture/*" adapters are the controlled test fixtures from delivery
+ * step 2 (tests/fixtures/skills/): plain comment pages (textarea + named
+ * target + submit button) used by the E2E scenarios. They claim no
+ * real-site coverage. Real-site adapters join only with observed, tested
+ * coverage (design §6: "Only adapters with observed, tested coverage may
+ * appear here").
  */
 export const BUILTIN_ADAPTERS: Record<string, PageAdapter> = {
   "fixture/comment-page": {
@@ -50,6 +53,29 @@ export const BUILTIN_ADAPTERS: Record<string, PageAdapter> = {
     composer: ["textarea[data-skill-fixture]"],
     submit: ["button[data-skill-fixture=submit]"],
     chainId: "fixture-comment-submit",
+    capture: {
+      maxDraftChars: 262_144,
+      replyTarget: ["[data-skill-fixture=target]"],
+    },
+  },
+  "fixture/keyboard-page": {
+    adapterId: "fixture/keyboard-page",
+    composer: ["textarea[data-skill-fixture=composer]"],
+    submit: ["button[data-skill-fixture=submit]"],
+    // Enter with NO modifiers is the tested submit gesture; modifier+
+    // Enter must not enter the chain (page-runtime checks exactness).
+    submitKey: { key: "Enter", modifiers: [] },
+    chainId: "fixture-keyboard-submit",
+    capture: {
+      maxDraftChars: 262_144,
+      replyTarget: ["[data-skill-fixture=target]"],
+    },
+  },
+  "fixture/contenteditable-page": {
+    adapterId: "fixture/contenteditable-page",
+    composer: ["div[data-skill-fixture=composer][contenteditable]"],
+    submit: ["button[data-skill-fixture=submit]"],
+    chainId: "fixture-contenteditable-submit",
     capture: {
       maxDraftChars: 262_144,
       replyTarget: ["[data-skill-fixture=target]"],
