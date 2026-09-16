@@ -87,12 +87,69 @@ export class ToolDispatcher {
     return { tabId, url };
   }
 
+  /**
+   * Core bind (shared by browser_bind_tab and the pi_bind_tab control tool):
+   * verify the tab exists, release it from any other session (a tab serves
+   * one session), rebind, and make it the REPL restore point. Works without
+   * a prior binding — that is the point.
+   */
+  async bindSessionTab(sessionId: string, tabId: unknown): Promise<{ tabId: number; url: string; title: string }> {
+    if (typeof tabId !== "number" || !Number.isInteger(tabId) || tabId <= 0) {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "bind_tab requires a tabId number");
+    }
+    let tab: browser.tabs.Tab;
+    try {
+      tab = await browser.tabs.get(tabId);
+    } catch {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
+    }
+    // A tab serves one session: release it from any other binding first.
+    const previous = this.store.sessionForRef(tabId);
+    if (previous && previous !== sessionId) {
+      this.store.unbind(previous);
+      console.info(`[pi-browser] bind_tab: tab ${tabId} released from session ${previous}`);
+    }
+    this.store.bind(sessionId, {
+      ref: tabId,
+      refId: tabId,
+      label: tab.title,
+      windowId: tab.windowId ?? 0,
+      owner: "bound",
+      // legacy fields kept so persisted state + the sidebar's inline type stay valid
+      tabId,
+      tabTitle: tab.title,
+    });
+    // An explicit bind becomes the restore point for REPL tabs.
+    this.replTabs.rememberHome(sessionId, this.store.getBinding(sessionId)!);
+    return { tabId, url: tab.url ?? "", title: tab.title ?? "" };
+  }
+
+  /**
+   * Core unbind (shared by browser_unbind_tab and the pi_unbind_tab control
+   * tool): drop the session's binding and reap its REPL-owned tabs (idempotent).
+   */
+  async unbindSession(sessionId: string): Promise<void> {
+    this.store.unbind(sessionId);
+    for (const tabId of this.replTabs.clear(sessionId)) {
+      await browser.tabs.remove(tabId).catch(() => {}); // may already be gone
+    }
+  }
+
   private async openTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
     const url = args?.url;
     if (typeof url !== "string" || !url.trim()) {
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_open_tab requires a url string");
     }
     return textResult(await this.openAgentTab(sessionId, url.trim()));
+  }
+
+  private async bindTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
+    return textResult(await this.bindSessionTab(sessionId, args?.tabId));
+  }
+
+  private async unbindTab(sessionId: string): Promise<unknown> {
+    await this.unbindSession(sessionId);
+    return textResult({ unbound: true });
   }
 
   private async closeTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
@@ -163,6 +220,19 @@ export class ToolDispatcher {
     const def = getBrowserTool(tool);
     if (!def) {
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${tool}`);
+    }
+
+    // Tab-lifecycle tools are useful (and must work) with NO bound tab —
+    // that is how an agent acquires its first tab and hands it off.
+    switch (tool) {
+      case "browser_open_tab":
+        return this.openTab(sessionId, args);
+      case "browser_list_tabs":
+        return this.listTabs(sessionId);
+      case "browser_bind_tab":
+        return this.bindTab(sessionId, args);
+      case "browser_unbind_tab":
+        return this.unbindTab(sessionId);
     }
 
     const binding = this.store.getBinding(sessionId);
@@ -314,12 +384,8 @@ export class ToolDispatcher {
         return this.navigate(tab, args);
       case "browser_download":
         return this.download(tab, args, timeoutMs);
-      case "browser_open_tab":
-        return this.openTab(sessionId, args);
       case "browser_close_tab":
         return this.closeTab(sessionId, args);
-      case "browser_list_tabs":
-        return this.listTabs(sessionId);
       default:
         throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `no handler for ${tool}`);
     }

@@ -58,13 +58,6 @@ async function restoreAfterReplTabClosed(sessionId: string, tabId: number): Prom
   }
 }
 
-/** Close every REPL-owned tab of the session (session unbinds / ends). */
-async function closeReplTabs(sessionId: string): Promise<void> {
-  for (const tabId of replTabs.clear(sessionId)) {
-    await browser.tabs.remove(tabId).catch(() => {}); // may already be gone
-  }
-}
-
 /**
  * Control tools (pi_*) served over the MCP channel (PRODUCT.md §26, Phase 5).
  * They execute the same handlers as the sidebar's pi/action bridge, so the
@@ -622,36 +615,11 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
     case "bind_tab": {
       const sessionId = String(payload.sessionId);
       if (!store.get(sessionId)) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
-      const tabId = payload.tabId;
-      if (typeof tabId !== "number" || !Number.isInteger(tabId) || tabId <= 0) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "pi_bind_tab requires a tabId number");
-      }
-      let tab: browser.tabs.Tab;
-      try {
-        tab = await browser.tabs.get(tabId);
-      } catch {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
-      }
-      // A tab serves one session: release it from any other binding first.
-      const previous = store.sessionForRef(tabId);
-      if (previous && previous !== sessionId) {
-        store.unbind(previous);
-        console.info(`[pi-browser] pi_bind_tab: tab ${tabId} released from session ${previous}`);
-      }
-      store.bind(sessionId, {
-        ref: tabId,
-        refId: tabId,
-        label: tab.title,
-        windowId: tab.windowId ?? 0,
-        owner: "bound",
-        // legacy fields kept so persisted state + the sidebar's inline type stay valid
-        tabId,
-        tabTitle: tab.title,
-      });
-      // An explicit bind becomes the restore point for REPL tabs.
-      replTabs.rememberHome(sessionId, store.getBinding(sessionId)!);
+      // Same steal/bind/restore-point semantics as browser_bind_tab — the
+      // dispatcher owns the tab + binding state.
+      const result = await dispatcher.bindSessionTab(sessionId, payload.tabId);
       pushState();
-      return { tabId, url: tab.url, title: tab.title };
+      return result;
     }
     case "list_tabs": {
       const sessionId = String(payload.sessionId);
@@ -673,9 +641,8 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
     }
     case "unbind": {
       const sessionId = String(payload.sessionId);
-      store.unbind(sessionId);
       // The REPL's auxiliary tabs are owned by the session: unbind reaps them.
-      await closeReplTabs(sessionId);
+      await dispatcher.unbindSession(sessionId);
       pushState();
       return {};
     }

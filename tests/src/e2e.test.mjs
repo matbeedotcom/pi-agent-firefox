@@ -118,12 +118,54 @@ class FakeTabs {
   /**
    * Execute a browser tool against the session's tab.
    * Throws structured error objects (code+message) for failures, mirroring
-   * the Firefox add-on's ToolDispatcher behavior.
+   * the Firefox add-on's ToolDispatcher behavior — including its gate: every
+   * tool EXCEPT the tab-lifecycle tools (open/list/bind/unbind) requires a
+   * bound tab.
    */
   async dispatch(params) {
     this.calls.push(params);
     if (this.dispatchDelayMs > 0) await new Promise((r) => setTimeout(r, this.dispatchDelayMs));
     const { sessionId, tool, arguments: args = {} } = params;
+    const text = (payload) => ({ content: [{ type: "text", text: JSON.stringify(payload) }] });
+    // Tab-lifecycle tools work with NO bound tab (mirrors the dispatcher).
+    switch (tool) {
+      case "browser_open_tab": {
+        const url = typeof args.url === "string" ? args.url : "about:blank";
+        const tabId = this.addTab(url, "REPL Tab");
+        this.replOwned.add(tabId);
+        // The real add-on rebinds the session to the REPL tab (owner "repl");
+        // the previous binding is remembered as the home tab.
+        this.bind(sessionId, tabId);
+        return text({ tabId, url });
+      }
+      case "browser_list_tabs":
+        return text({
+          tabs: [...this.tabs.values()].filter((t) => !t.closed).map((t) => ({ id: t.id, url: t.url, title: t.title, bound: t.id === this.bindings.get(sessionId) })),
+        });
+      case "browser_bind_tab": {
+        const tabId = Number(args.tabId);
+        if (!Number.isInteger(tabId) || tabId <= 0) {
+          throw toErrorObject(PI_BROWSER_ERROR.INTERNAL, "bind_tab requires a tabId number");
+        }
+        const boundTab = this.tabs.get(tabId);
+        if (!boundTab || boundTab.closed) {
+          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
+        }
+        // A tab serves one session: release it from any other binding first.
+        for (const [sid, bid] of this.bindings) {
+          if (bid === tabId && sid !== sessionId) this.unbind(sid);
+        }
+        this.bind(sessionId, tabId);
+        return text({ tabId, url: boundTab.url, title: boundTab.title });
+      }
+      case "browser_unbind_tab": {
+        this.unbind(sessionId);
+        // The REPL's auxiliary tabs are owned by the session: unbind reaps them.
+        for (const tabId of [...this.replOwned]) this.closeTab(tabId);
+        this.replOwned.clear();
+        return text({ unbound: true });
+      }
+    }
     const lookup = this.tabFor(sessionId);
     if (lookup.state === "unbound") {
       throw toErrorObject(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, `session ${sessionId} has no bound tab`);
@@ -132,7 +174,6 @@ class FakeTabs {
       throw toErrorObject(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `bound tab no longer exists for session ${sessionId}`);
     }
     const tab = lookup.tab;
-    const text = (payload) => ({ content: [{ type: "text", text: JSON.stringify(payload) }] });
     switch (tool) {
       case "browser_get_page":
         return text({ url: tab.url, title: tab.title, viewport: { width: 1280, height: 800 } });
@@ -219,15 +260,6 @@ class FakeTabs {
         return text({ scrolled: { tag: "button", role: "button" } });
       case "browser_type_focused":
         return text({ typed: { tag: "input", role: "textbox" }, chars: String(args.text ?? "").length });
-      case "browser_open_tab": {
-        const url = typeof args.url === "string" ? args.url : "about:blank";
-        const tabId = this.addTab(url, "REPL Tab");
-        this.replOwned.add(tabId);
-        // The real add-on rebinds the session to the REPL tab (owner "repl");
-        // the previous binding is remembered as the home tab.
-        this.bind(sessionId, tabId);
-        return text({ tabId, url });
-      }
       case "browser_close_tab": {
         const tabId = Number(args.tabId);
         if (!this.replOwned.has(tabId)) {
@@ -242,10 +274,6 @@ class FakeTabs {
         }
         return text({ closed: tabId });
       }
-      case "browser_list_tabs":
-        return text({
-          tabs: [...this.tabs.values()].filter((t) => !t.closed).map((t) => ({ id: t.id, url: t.url, title: t.title, bound: t.id === this.bindings.get(sessionId) })),
-        });
       default:
         throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${tool}`);
     }
@@ -1127,6 +1155,84 @@ test("control tools (MCP-over-ACP): agent-driven session orchestration end to en
     // State after the turn: the new session is listed (via the host's ACP).
     const list = await host.request(AGENT_METHODS.session_list, { cwd: null });
     assert.ok(list.sessions.some((s) => s.sessionId === newSessionId), "new session listed by the host");
+  } finally {
+    await shutdown(host);
+  }
+});
+
+test("browser tools (legacy transport): agent creates + binds + unbinds tabs from an unbound session", async () => {
+  const tabs = new FakeTabs();
+  const fakeFirefox = makeFakeFirefox(tabs);
+
+  // Tab 1 is the user's tab; the fake ids are deterministic, so the script
+  // can reference it directly. Session A starts UNBOUND — every page tool
+  // would fail until it acquires a tab itself.
+  const userTab = tabs.addTab("http://orig.test/", "Orig");
+  const script = writeScript([
+    { match: "create", toolCalls: [{ toolName: "browser_open_tab", args: { url: "http://fresh.test/" } }] },
+    { match: "move", toolCalls: [
+      { toolName: "browser_list_tabs", args: {} },
+      { toolName: "browser_bind_tab", args: { tabId: userTab } },
+    ] },
+    { match: "release", toolCalls: [{ toolName: "browser_unbind_tab", args: {} }] },
+  ]);
+  const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
+  fakeFirefox.attach(host);
+  try {
+    await initialize(host);
+
+    const a = await host.request(AGENT_METHODS.session_new, { cwd: "/work/a" });
+    const b = await host.request(AGENT_METHODS.session_new, { cwd: "/work/b" });
+    tabs.bind(b.sessionId, userTab); // B holds the user tab before A moves in
+
+    // Unbound A: page tools are gated...
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: a.sessionId, prompt: [{ type: "text", text: "create" }] },
+      60_000,
+    );
+    let endsA = host
+      .sessionUpdates(a.sessionId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update))
+      .join("\n");
+    assert.ok(endsA.includes("http://fresh.test/"), "browser_open_tab worked from an unbound session");
+    assert.equal(tabs.bindings.get(a.sessionId), 2, "session A bound to the new REPL tab");
+    assert.equal(tabs.tabs.get(2)?.closed, false, "REPL tab open");
+
+    // Move: list (marks the REPL tab bound) then steal the user tab from B.
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: a.sessionId, prompt: [{ type: "text", text: "move" }] },
+      60_000,
+    );
+    endsA = host
+      .sessionUpdates(a.sessionId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update))
+      .join("\n");
+    // The tool-result text is JSON-escaped inside the update, so allow any
+    // number of backslashes before the quote.
+    assert.ok(/bound\\*":true/.test(endsA), "browser_list_tabs marked A's tab bound");
+    assert.ok(endsA.includes("http://orig.test/"), "browser_bind_tab reported the stolen tab");
+    assert.equal(tabs.bindings.get(a.sessionId), userTab, "session A now bound to the user tab");
+    assert.equal(tabs.bindings.has(b.sessionId), false, "steal released session B");
+
+    // Release: unbind reaps the session's REPL tab, keeps the user tab open.
+    await host.request(
+      AGENT_METHODS.session_prompt,
+      { sessionId: a.sessionId, prompt: [{ type: "text", text: "release" }] },
+      60_000,
+    );
+    endsA = host
+      .sessionUpdates(a.sessionId)
+      .filter((u) => u.params.update?.sessionUpdate === "tool_call_update")
+      .map((u) => JSON.stringify(u.params.update))
+      .join("\n");
+    assert.ok(endsA.includes("unbound"), "browser_unbind_tab reported success");
+    assert.equal(tabs.bindings.has(a.sessionId), false, "session A unbound");
+    assert.equal(tabs.tabs.get(2)?.closed, true, "REPL tab reaped on unbind");
+    assert.equal(tabs.tabs.get(userTab)?.closed, false, "user tab left open");
   } finally {
     await shutdown(host);
   }

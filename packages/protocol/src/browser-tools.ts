@@ -370,8 +370,9 @@ export const BROWSER_TOOLS: readonly BrowserToolDef[] = [
   {
     name: "browser_open_tab",
     description:
-      "Open a new tab (REPL-owned) and rebind the session to it. The previously bound tab stays open and is restored " +
-      "when the REPL tab is closed or the session unbinds. REPL-owned tabs are closed automatically at session unbind.",
+      "Open a new tab (REPL-owned) and bind the session to it — works even when the session has no bound tab yet " +
+      "(create + bind in one step; this is how an agent acquires its first tab). The previously bound tab stays open " +
+      "and is restored when the REPL tab is closed or the session unbinds. REPL-owned tabs are closed automatically at session unbind.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
@@ -398,9 +399,32 @@ export const BROWSER_TOOLS: readonly BrowserToolDef[] = [
   {
     name: "browser_list_tabs",
     description:
-      "List all open tabs of the browser: {tabs: [{id, url, title, bound}]} — bound marks the session's current tab.",
+      "List all open tabs of the browser: {tabs: [{id, url, title, bound}]} — bound marks the session's current tab. " +
+      "Works without a bound tab; use it to find a tab id for browser_bind_tab.",
     inputSchema: { ...OBJECT_SCHEMA_BASE, properties: {} },
     readOnly: true,
+  },
+  {
+    name: "browser_bind_tab",
+    description:
+      "Bind an existing tab (from browser_list_tabs) to this session — works even when the session has no bound tab. " +
+      "Replaces the session's current binding and releases the tab from any other session bound to it.",
+    inputSchema: {
+      ...OBJECT_SCHEMA_BASE,
+      properties: {
+        tabId: { type: "number", description: "Firefox tab id (from browser_list_tabs)." },
+      },
+      required: ["tabId"],
+    },
+    readOnly: false,
+  },
+  {
+    name: "browser_unbind_tab",
+    description:
+      "Unbind this session from its tab — no user tab is closed, but the session's own REPL-owned tabs are reaped. " +
+      "Idempotent; works without a bound tab.",
+    inputSchema: { ...OBJECT_SCHEMA_BASE, properties: {} },
+    readOnly: false,
   },
 ];
 

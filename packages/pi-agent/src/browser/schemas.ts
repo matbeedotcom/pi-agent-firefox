@@ -219,6 +219,15 @@ const SCHEMAS: Record<string, TSchema> = {
   ),
 
   browser_list_tabs: empty(),
+
+  browser_bind_tab: Type.Object(
+    {
+      tabId: Type.Number({ description: "Firefox tab id (from browser_list_tabs)." }),
+    },
+    { additionalProperties: false, required: ["tabId"] },
+  ),
+
+  browser_unbind_tab: empty(),
 };
 
 export interface BrowserToolSchema {
