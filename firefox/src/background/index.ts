@@ -23,7 +23,8 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@pi-browser/protocol";
-import { AcpClient, bindingRefId, fetchPiTheme, notifyHost, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
+import { AcpClient, bindingRefId, fetchPiTheme, notifyHost, SessionStore, SkillsRuntime, type DocumentIdentity, type GateIdentity, type HostStatus, type PiTheme } from "@pi-browser/webext";
+import type { PagePlan } from "@pi-browser/protocol";
 import { PromptRecovery } from "./prompt-recovery.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
 import { McpServer, type ControlHandler } from "./mcp-server.js";
@@ -112,6 +113,49 @@ let initialized = false;
 let bootstrapInFlight = false;
 /** Active browser theme snapshot (browser.theme); undefined when unavailable. */
 let theme: PiTheme | undefined;
+
+// ---------------------------------------------------------------------------
+// Skills runtime (skills-runtime-design.md §2, §8, §13)
+// ---------------------------------------------------------------------------
+
+/**
+ * One skills runtime per event page: the coordinator owns verified identity,
+ * plans, snapshots, and dedup; the per-document gates own submission policy.
+ * The request closure targets `client` at call time (after start()).
+ */
+const skills = new SkillsRuntime({
+  application: "firefox",
+  mode: "review-before-submit",
+  // Explicit generic return type: `skills` and `client` reference each
+  // other, and the closure must not join that inference cycle.
+  request: <T = unknown>(method: string, params?: unknown, timeoutMs?: number): Promise<T> =>
+    client.request<T>(method, params, timeoutMs),
+  onCardState: (document, view) => {
+    // Card sync to the armed document's content script (fire-and-forget).
+    if (document.tabId !== undefined) {
+      browser.tabs.sendMessage(document.tabId, {
+        type: "pi/skills_state",
+        documentGeneration: document.documentGeneration,
+        view,
+      }).catch(() => {
+        /* no content script on this tab */
+      });
+    }
+  },
+});
+
+/** Verified document identity from the message sender (never page claims). */
+function skillsDocument(sender: { tab?: { id?: number; frameId?: number; url?: string } } | undefined, generation?: string): DocumentIdentity | undefined {
+  const tabId = sender?.tab?.id;
+  if (tabId === undefined) return undefined;
+  return {
+    application: "firefox",
+    tabId,
+    frameId: sender?.tab?.frameId ?? 0,
+    ...(generation ? { documentGeneration: generation } : {}),
+    url: sender?.tab?.url ?? "",
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Permission prompts (PRODUCT.md §55)
@@ -342,6 +386,9 @@ const client = new AcpClient(
     // Keep streaming state consistent even if a response was missed.
   },
   onToolCall: (params) => dispatcher.handleToolCall(params),
+  // Host→client skills traffic (skills_context, skills_result) routes to the
+  // coordinator; unknown methods answer METHOD_NOT_FOUND.
+  onExtensionRequest: (method, params) => skills.handleHostRequest(method, params),
   onMcpConnect: (params) => mcpServer.handleConnect(params),
   onMcpMessage: (params) => mcpServer.handleMessage(params),
   onMcpDisconnect: (params) => mcpServer.handleDisconnect(params),
@@ -375,7 +422,11 @@ const client = new AcpClient(
     // status to "connected" on success) and sync session state. Deferred to
     // a later task so connect() has fully finished (port assigned, listeners
     // attached) before any request goes out.
+    if (status.state === "connected") skills.setConnected(true);
     if (status.state === "connecting" && !initialized && !bootstrapInFlight) {
+      // A (re)connect is a fresh native epoch: every skills identity, plan,
+      // and job mapping from the previous connection is invalid.
+      skills.noteConnection();
       bootstrapInFlight = true;
       setTimeout(() => {
         void bootstrap().finally(() => {
@@ -385,6 +436,8 @@ const client = new AcpClient(
     }
     if (status.state === "disconnected" || status.state === "not_installed") {
       initialized = false;
+      // Link down: every gate degrades to its usable local bypass.
+      skills.setConnected(false);
     }
   },
   });
@@ -444,6 +497,7 @@ async function bootstrap(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 browser.tabs.onRemoved.addListener((tabId) => {
+  skills.closeTab(tabId);
   const boundSession = store.sessionForRef(tabId);
   if (boundSession) {
     const wasReplOwned = replTabs.has(boundSession, tabId);
@@ -481,7 +535,7 @@ browser.tabs.onActivated.addListener(async () => {
 // Sidebar actions
 // ---------------------------------------------------------------------------
 
-browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (typeof message !== "object" || message === null) return;
   const msg = message as { type?: string; action?: string; payload?: Record<string, unknown> };
   if (msg.type === "pi/permission_response") {
@@ -499,7 +553,7 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
     return;
   }
   if (msg.type !== "pi/action") return;
-  void handleAction(msg.action ?? "", (msg.payload ?? {}) as never)
+  void handleAction(msg.action ?? "", (msg.payload ?? {}) as never, sender)
     .then((result) => sendResponse({ ok: true, ...(result !== undefined ? { result } : {}) }))
     .catch((err) => {
       const data = err instanceof PiBrowserProtocolError ? { piBrowserError: err.code, message: err.message } : { message: String(err) };
@@ -508,7 +562,71 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
   return true; // async response
 });
 
-async function handleAction(action: string, payload: ActionPayload): Promise<unknown> {
+/**
+ * Skills runtime actions (skills-runtime-design.md §7, §8). Kept in their
+ * own dispatch table: the content script drives these, and document
+ * identity comes from the SENDER, never the payload.
+ */
+async function handleSkillsAction(action: string, payload: ActionPayload, sender?: { tab?: { id?: number; frameId?: number; url?: string } }): Promise<unknown> {
+  switch (action) {
+    case "skills_plan": {
+      const document = skillsDocument(sender, payload.documentGeneration);
+      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      return skills.plan(document);
+    }
+    case "skills_arm": {
+      const document = skillsDocument(sender, payload.documentGeneration);
+      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      if (!payload.identity || !payload.plan) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_arm requires identity and plan");
+      return skills.arm({
+        document,
+        identity: payload.identity,
+        plan: payload.plan,
+        ...(payload.snapshot !== undefined ? { snapshot: payload.snapshot } : {}),
+        ...(payload.draftRevision !== undefined ? { draftRevision: payload.draftRevision } : {}),
+      });
+    }
+    case "skills_gesture": {
+      const document = skillsDocument(sender, payload.documentGeneration);
+      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      const phase = payload.phase === "click" || payload.phase === "keyboard" || payload.phase === "submit" ? payload.phase : undefined;
+      if (!phase || !payload.chainId) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_gesture requires chainId and phase");
+      return { verdict: skills.gesture(document, { chainId: payload.chainId, phase }) };
+    }
+    case "skills_draft": {
+      const document = skillsDocument(sender, payload.documentGeneration);
+      if (!document || !payload.identity) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_draft requires identity");
+      skills.draftChanged(document, payload.identity);
+      return {};
+    }
+    case "skills_composition": {
+      const document = skillsDocument(sender, payload.documentGeneration);
+      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      skills.compositionChanged(document, payload.composing === true);
+      return {};
+    }
+    case "skills_authorize": {
+      const document = skillsDocument(sender, payload.documentGeneration);
+      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      return { authorized: skills.authorize(document) };
+    }
+    case "skills_cancel": {
+      const interactionId = String(payload.interactionId ?? "");
+      if (!interactionId) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_cancel requires interactionId");
+      return skills.cancel(interactionId);
+    }
+    case "skills_state": {
+      const document = skillsDocument(sender, payload.documentGeneration);
+      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      const view = skills.view(document);
+      return { ...(view ? { view } : {}) };
+    }
+    default:
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `unknown skills action: ${action}`);
+  }
+}
+
+async function handleAction(action: string, payload: ActionPayload, sender?: { tab?: { id?: number; frameId?: number; url?: string } }): Promise<unknown> {
   switch (action) {
     case "get_state": {
       return {
@@ -519,8 +637,19 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
         ...(store.lastSession ? { lastSessionId: store.lastSession } : {}),
         ...(theme ? { theme } : {}),
         permissionRequests: pendingPermissionRequests(),
+        skills: skills.state(),
       };
     }
+    // Skills runtime dispatch (skills-runtime-design.md §7, §8).
+    case "skills_plan":
+    case "skills_arm":
+    case "skills_gesture":
+    case "skills_draft":
+    case "skills_composition":
+    case "skills_authorize":
+    case "skills_cancel":
+    case "skills_state":
+      return handleSkillsAction(action, payload, sender);
     case "new_session": {
       if (!client.connected) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.NATIVE_HOST_NOT_INSTALLED, "not connected to native host");
       const cwd = String(payload.cwd ?? "").trim() || processCwdLikeFallback();
@@ -697,6 +826,16 @@ interface ActionPayload {
   state?: string;
   url?: string;
   tabId?: number;
+  // Skills runtime actions.
+  documentGeneration?: string;
+  identity?: GateIdentity;
+  plan?: PagePlan;
+  snapshot?: Record<string, unknown>;
+  draftRevision?: number;
+  chainId?: string;
+  phase?: "click" | "keyboard" | "submit";
+  composing?: boolean;
+  interactionId?: string;
 }
 
 function processCwdLikeFallback(): string {

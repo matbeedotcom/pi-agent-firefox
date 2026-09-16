@@ -110,7 +110,8 @@ export class SkillsCoordinator {
     this.log(`skills coordinator: new connection epoch ${this.epoch}`);
   }
 
-  private docKey(id: DocumentIdentity): string {
+  /** Stable per-document key (tabs: tab/frame/document, mail: account). */
+  docKey(id: DocumentIdentity): string {
     return id.tabId !== undefined && id.frameId !== undefined
       ? `doc:${id.tabId}:${id.frameId}:${id.documentGeneration ?? ""}`
       : `mail:${id.accountId ?? "default"}`;
@@ -159,6 +160,12 @@ export class SkillsCoordinator {
     origin: "user" | "site" | "skill";
     causedBy?: string;
     snapshot?: Record<string, unknown>;
+    /**
+     * Opaque ID the host must echo on skills_result. The submission gate
+     * supplies its own eventId so review outcomes map back to the exact
+     * armed identity; omitted, the coordinator generates one.
+     */
+    eventId?: string;
   }): Promise<SkillsEventResult> {
     const key = this.docKey(input.document);
     // Redelivery dedup (at-least-once transport, design §11). The identity
@@ -186,7 +193,7 @@ export class SkillsCoordinator {
 
     const event: SkillEvent = {
       version: 1,
-      eventId: `evt:${uuid()}`,
+      eventId: input.eventId ?? `evt:${uuid()}`,
       event: input.event,
       source: this.source(input.document),
       interactionId: input.interactionId,

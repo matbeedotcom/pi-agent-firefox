@@ -129,6 +129,12 @@ export class SubmissionGate {
     this.invalidate("unavailable", reason.slice(0, 512));
   }
 
+  /** No job will ever deliver (event rejected, plan gone): degrade to bypass. */
+  failAll(reason: string): void {
+    if (this.status !== "reviewing" && this.status !== "suggestion") return;
+    this.invalidate("unavailable", reason.slice(0, 512));
+  }
+
   /** Local user decision only: edits still require update() and another review. Never posts. */
   authorizeOriginal(): boolean {
     this.expire();

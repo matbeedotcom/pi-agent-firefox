@@ -1,0 +1,48 @@
+/* Unified decision UI for skill review (one card, every required reviewer). */
+.review-card {
+  font-family: inherit;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: normal;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  animation: activity-arrive 220ms ease-out;
+}
+.review-head { padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+.review-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.review-title { font-weight: 600; }
+.review-card[data-state="reviewing"] .review-dot { background: var(--accent-2); animation: activity-pulse 1.4s ease-in-out infinite; }
+.review-card[data-state="clear"] .review-dot,
+.review-card[data-state="authorized"] .review-dot { background: var(--ok); }
+.review-card[data-state="suggestion"] .review-dot { background: var(--warn); }
+.review-card[data-state="unavailable"] .review-dot { background: var(--err); }
+.review-card[data-state="clear"] .review-title,
+.review-card[data-state="authorized"] .review-title { color: var(--ok); }
+.review-card[data-state="suggestion"] .review-title { color: var(--warn); }
+.review-card[data-state="unavailable"] .review-title { color: var(--err); }
+.review-note { margin: 0; padding: 0 12px 10px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.review-note:empty { padding: 0; }
+.review-suggestions { padding: 0 12px; display: grid; gap: 8px; }
+.review-suggestion { border: 1px solid var(--border); border-radius: 9px; background: var(--bg-3); }
+.review-suggestion-summary { cursor: pointer; padding: 9px 10px; font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 8px; list-style: none; overflow-wrap: anywhere; }
+.review-suggestion-summary::-webkit-details-marker { display: none; }
+.review-suggestion[open] > summary, .review-suggestion-summary:hover { color: var(--text); }
+.review-suggestion-name { font-weight: 600; }
+.review-suggestion-decision { margin-left: auto; font-size: 9px; padding: 2px 6px; border-radius: 5px; background: var(--bg); color: var(--warn); }
+.review-suggestion-content { padding: 0 10px 10px; border-top: 1px solid var(--border); }
+.review-suggestion-explanation { margin: 9px 0; font-size: 11px; overflow-wrap: anywhere; }
+.review-suggestion-preview-label { display: block; margin-top: 6px; font-size: 10px; color: var(--muted); }
+.review-suggestion-preview { margin: 4px 0 0; font-family: inherit; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; background: var(--bg); border-radius: 7px; padding: 9px; }
+.review-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px 12px; }
+.review-actions:empty { display: none; }
+.review-apply, .review-keep, .review-bypass, .review-dismiss {
+  font-family: inherit; font-size: 11px; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-3); color: var(--text); cursor: pointer;
+}
+.review-apply:hover, .review-keep:hover, .review-bypass:hover, .review-dismiss:hover { border-color: var(--accent-2); }
+.review-apply:focus-visible, .review-keep:focus-visible, .review-bypass:focus-visible, .review-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.review-apply { border-color: var(--accent-2); color: var(--accent-2); font-weight: 600; }
+.review-bypass { border-color: var(--err); color: var(--err); }
+@media (prefers-reduced-motion: reduce) {
+  .review-card, .review-card *, .review-card *::before { animation: none !important; transition: none !important; }
+}
