@@ -197,13 +197,16 @@ test("broker: dir permissions enforced despite umask", async () => {
   // chmod the parent to something unusual; startBrokerServer must 0700 the dir.
   const dir = path.join(tmp, "weird-run");
   process.env.PI_BROWSER_BROKER_DIR = dir;
-  const server = await startBrokerServer({ log: quiet, onClient: () => {} });
+  let server: BrokerServerHandle | undefined;
   try {
+    server = await startBrokerServer({ log: quiet, onClient: () => {} });
     const stat = await import("node:fs").then((fs) => fs.promises.stat(dir));
     assert.equal(stat.mode & 0o777, 0o700);
   } finally {
-    await server.close();
+    // Restore the env even when startBrokerServer throws; otherwise the
+    // leaked dir poisons the socket paths of every later test.
     process.env.PI_BROWSER_BROKER_DIR = brokerDir;
+    if (server) await server.close();
   }
 });
 

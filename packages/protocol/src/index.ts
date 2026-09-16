@@ -11,3 +11,4 @@ export * from "./mail-mutation-tools.js";
 export * from "./contacts-tools.js";
 export * from "./permission.js";
 export * from "./tool-capabilities.js";
+export * from "./skills.js";

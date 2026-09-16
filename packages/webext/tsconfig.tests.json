@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "rootDir": ".", "outDir": "dist-tests", "types": ["node", "firefox-webext-browser"] },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
