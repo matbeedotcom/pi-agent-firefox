@@ -90,7 +90,11 @@ function loadMockSkillsConfig(
     log.warn("PI_BROWSER_SKILLS_CONFIG shape invalid (needs grants[], adapters[], optional job{}); ignoring");
     return undefined;
   }
-  return { grants: entry.grants, adapters: entry.adapters, job: (entry.job as ScriptedJob | undefined) ?? {} };
+  // Mock grants are explicit test-arm declarations: they are enabled by
+  // construction (SkillGrant.enabled is required and the config has no
+  // per-grant enable field).
+  const grants = (entry.grants as { skillKey: string; revision: string; capabilities: SkillGrant["capabilities"]; mode?: "advisory" | "review-before-submit" }[]).map((g) => ({ enabled: true, ...g }));
+  return { grants, adapters: entry.adapters, job: (entry.job as ScriptedJob | undefined) ?? {} };
 }
 
 /**

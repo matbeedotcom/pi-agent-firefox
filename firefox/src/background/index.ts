@@ -166,7 +166,15 @@ browser.tabs.onRemoved.addListener((tabId) => {
 function skillsDocument(sender: { tab?: { id?: number; frameId?: number; url?: string } } | undefined): DocumentIdentity | undefined {
   const tabId = sender?.tab?.id;
   if (tabId === undefined) return undefined;
-  const generation = docGenerations.get(tabId);
+  let generation = docGenerations.get(tabId);
+  if (generation === undefined) {
+    // The document loaded before this event-page lifetime observed its
+    // navigation (browser start / event-page reload): stamp it lazily.
+    // The stamp is still opaque to the page and rotates on every observed
+    // navigation, so the §13 invariant holds.
+    generation = `gen:${tabId}:${++docGenerationSeq}`;
+    docGenerations.set(tabId, generation);
+  }
   return {
     application: "firefox",
     tabId,
@@ -575,8 +583,19 @@ browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =
   void handleAction(msg.action ?? "", (msg.payload ?? {}) as never, sender)
     .then((result) => sendResponse({ ok: true, ...(result !== undefined ? { result } : {}) }))
     .catch((err) => {
-      const data = err instanceof PiBrowserProtocolError ? { piBrowserError: err.code, message: err.message } : { message: String(err) };
-      sendResponse({ ok: false, error: data });
+      // Host-side JSON-RPC errors arrive as plain {code, message} objects
+      // (acp-client rejects with the raw object), not Error instances —
+      // String(err) would hand the UI "[object Object]".
+      const rpc = (err && typeof err === "object" && "message" in err
+        ? err as { code?: unknown; message?: unknown }
+        : undefined) ?? (err instanceof Error ? { code: err.name, message: err.message } : { message: String(err) });
+      sendResponse({
+        ok: false,
+        error: {
+          ...(typeof rpc.code === "string" ? { piBrowserError: rpc.code } : {}),
+          message: typeof rpc.message === "string" ? rpc.message : String(rpc),
+        },
+      });
     });
   return true; // async response
 });

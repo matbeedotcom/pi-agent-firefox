@@ -304,8 +304,11 @@ export function createSkillsProtocol(deps: SkillsProtocolDeps): SkillsProtocol {
   };
   return {
     handle(method, params, respond, respondError): boolean {
-      const fail = (err: unknown) =>
-        respondError(PI_BROWSER_ERROR.INTERNAL, `skills: ${err instanceof Error ? err.message : String(err)}`);
+      const fail = (err: unknown) => {
+        const message = `skills: ${err instanceof Error ? err.message : JSON.stringify(err)}`;
+        deps.log.warn(`skills protocol error (${method}): ${message}`);
+        respondError(PI_BROWSER_ERROR.INTERNAL, message);
+      };
       try {
         switch (method) {
           case X_PI_BROWSER.skills_plan:

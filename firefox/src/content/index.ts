@@ -1230,7 +1230,9 @@ async function skillsAction(action: string, payload: Record<string, unknown> = {
   return res.result;
 }
 
+let skillsProbeRetriesLeft = 10;
 async function probeSkills(): Promise<void> {
+  if (skillsRuntime) return; // already armed; stop re-probing
   try {
     const result = (await skillsAction("skills_plan")) as SkillsPlanResult;
     if (result.status !== "ok" || !result.plan) return;
@@ -1245,8 +1247,12 @@ async function probeSkills(): Promise<void> {
       target: {
         // Real DOM events (Event/EventTarget) meet the runtime's narrow
         // SkillEventLike contract at this one bridge point.
-        addEventListener: (type, fn) => document.addEventListener(type, fn as unknown as EventListener),
-        removeEventListener: (type, fn) => document.removeEventListener(type, fn as unknown as EventListener),
+        // CAPTURE phase: the gate's synchronous hold decision must run
+        // BEFORE the page's own gesture handlers, so a held gesture reaches
+        // the page's handler with defaultPrevented already set (design §9:
+        // the consult happens "before the event proceeds").
+        addEventListener: (type, fn) => document.addEventListener(type, fn as unknown as EventListener, true),
+        removeEventListener: (type, fn) => document.removeEventListener(type, fn as unknown as EventListener, true),
         query: (selector) => document.querySelector(selector),
       },
       interactionId: skillsInteractionId,
@@ -1264,19 +1270,44 @@ async function probeSkills(): Promise<void> {
             // memoryRevision 0 = no memory revision claimed; the host owns memory state.
             reviewers: skillsPlan!.rules.map((r) => ({ key: r.skillKey, revision: r.skillRevision, memoryRevision: 0 })),
           },
+          // One bounded snapshot per arm: the host resolves the job context
+          // (draft/replyTarget) against it via the skills_context round-trip;
+          // without it the contextRef is "none" and the review job settles
+          // unavailable.
+          snapshot: { draft: input.draft, replyTarget: input.replyTarget },
         }).then(() => undefined),
       onGesture: (phase) => {
         // Bookkeeping only: the background gate already re-validated.
         void skillsAction("skills_gesture", { documentGeneration, chainId: adapter.chainId, phase }).catch(() => {});
       },
+      onArm: (state) => {
+        // TEMP e2e diagnostic: record arm lifecycle into the beacon.
+        window.postMessage({ __skillsTestRecord: { type: "arm", detail: { state } } }, "*");
+      },
       log: (message) => {
         console.warn(`[pi-browser skills] ${message}`);
+        // TEMP e2e diagnostic: mirror runtime logs into the beacon.
+        window.postMessage({ __skillsTestRecord: { type: "runtime-log", detail: { message } } }, "*");
       },
     });
     skillsRuntime.start();
     showReviewCard();
+    // Test-bridge visibility: the e2e input step waits for this before typing,
+    // so scripted gestures never race the plan/arm round-trip (real users type
+    // slowly; the scripted agent does not).
+    if (/[?&]skills_test=1\b/.test(location.search)) {
+      document.documentElement.setAttribute("data-skills-armed", String(documentGeneration));
+    }
   } catch {
-    /* no host, no plan, or no matching adapter: this page stays inert */
+    // The native host can still be starting up when the document loads
+    // (spawn + initialize takes longer than page load on a cold browser):
+    // a failed probe must not leave the page inert forever. Definitive
+    // negatives (no rules, no matching adapter) return above and are not
+    // retried; only request failures re-probe, bounded.
+    if (skillsProbeRetriesLeft > 0) {
+      skillsProbeRetriesLeft--;
+      setTimeout(() => void probeSkills(), 1000);
+    }
   }
 }
 
@@ -1412,6 +1443,9 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
       msg.view !== null
     ) {
       skillsRuntime.setView(msg.view as GateView);
+      // TEMP e2e diagnostic: record gate-view transitions into the beacon.
+      const gv = msg.view as GateView;
+      window.postMessage({ __skillsTestRecord: { type: "gate-view", detail: { state: gv.state, reason: gv.reason ?? null, suggestions: gv.suggestions.length } } }, "*");
       updateReviewCard();
     }
     return;
@@ -1443,16 +1477,23 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
 // Apply button.
 // ---------------------------------------------------------------------------
 if (window.top === window && /[?&]skills_test=1\b/.test(location.search)) {
-  const bridge = {
-    action: (name: string, payload: Record<string, unknown> = {}) => skillsAction(name, payload),
-    state: () => skillsAction("skills_state"),
-    fixture: () => (window as { __fixture?: unknown }).__fixture ?? null,
-    accept: () => {
-      const view = skillsRuntime?.currentView;
-      const suggestion = view?.suggestions.find((s) => s.decision === "suggest" && s.replacementText);
-      if (!suggestion?.replacementText) throw new Error("no actionable suggestion");
-      applySuggestion(suggestion.replacementText);
-    },
-  };
-  (window as { __skillsTest?: unknown }).__skillsTest = bridge;
+  // Page-world bridge: the e2e harness reads state through browser_evaluate,
+  // which runs in the PAGE's JS world (where window.__fixture lives) and
+  // cannot see this isolated world. The fixture's _recorder.js installs a
+  // page-world window.__skillsTest wrapper that round-trips through this
+  // router (postMessage crosses the world boundary in both directions).
+  window.addEventListener("message", (event: MessageEvent) => {
+    const data = event.data as { __skillsTest?: unknown; id?: unknown; name?: unknown; payload?: unknown } | null;
+    if (!data || data.__skillsTest !== true || typeof data.name !== "string" || typeof data.id !== "number") return;
+    window.postMessage({ __skillsTestTrace: "router-received", name: data.name }, "*");
+    void skillsAction(data.name, (data.payload as Record<string, unknown>) ?? {})
+      .then((result) => {
+        window.postMessage({ __skillsTestTrace: "router-settled", name: data.name }, "*");
+        window.postMessage({ __skillsTestReply: true, id: data.id, ok: true, result: result ?? null }, "*");
+      })
+      .catch((err: unknown) => {
+        window.postMessage({ __skillsTestTrace: "router-error", name: data.name, error: String(err) }, "*");
+        window.postMessage({ __skillsTestReply: true, id: data.id, ok: false, error: err instanceof Error ? err.message : String(err) }, "*");
+      });
+  });
 }

@@ -9,3 +9,4 @@ tests/.tmp/
 amo/*.zip
 dist-tests/
 VERIFICATION-evidence/
+.ripwire_quality_baseline
