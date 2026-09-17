@@ -1,0 +1,91 @@
+{
+  "name": "ime-composition",
+  "fixture": "fixture-ime.html",
+  "prompt": "REVIEW-IME",
+  "pageUrl": "http://127.0.0.1:0/fixture-ime.html",
+  "skillsConfig": {
+    "grants": [
+      {
+        "skillKey": "fixture-reply/reply",
+        "revision": "*",
+        "capabilities": ["context.read", "suggestion.present", "draft.replace-on-accept"],
+        "mode": "review-before-submit"
+      }
+    ],
+    "adapters": [
+      {
+        "id": "fixture/comment-page",
+        "version": "1.0.0",
+        "hosts": ["127.0.0.1"],
+        "events": ["comment.draft.paused", "comment.before-submit"],
+        "gates": ["comment.before-submit"]
+      }
+    ]
+  },
+  "job": {
+    "delayMs": 5,
+    "report": {
+      "decision": "suggest",
+      "explanation": "Fixture suggestion for the IME draft.",
+      "replacementText": "Fixture reply: ime"
+    }
+  },
+  "steps": [
+    { "side": "agent", "type": "prompt", "text": "REVIEW-IME" },
+    { "side": "agent", "type": "say", "text": "IME composition must review the FINAL draft, not intermediates" },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { if (document.documentElement.hasAttribute('data-skills-armed')) { document.querySelector(\"button[data-skill-fixture='ime']\").click(); return setTimeout(() => resolve({ value: document.querySelector('textarea').value, attr: document.documentElement.getAttribute('data-skills-armed'), types: window.__fixture.log.map((e) => e.type) }), 800); } if (Date.now() - t0 > 5000) return resolve({ armTimeout: true, attr: document.documentElement.getAttribute('data-skills-armed') }); setTimeout(tick, 100); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { Promise.resolve().then(() => window.__skillsTest.state()).then((s) => { if (s && s.state === 'suggestion') return resolve({ state: s.state, ms: Date.now() - t0 }); if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: s && s.state }); setTimeout(tick, 250); }).catch(() => { if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: 'error' }); setTimeout(tick, 250); }); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "Promise.resolve().then(() => window.__skillsTest.state()).then((s) => { const card = document.querySelector('.pb-review-card'); window.__fixture.record('diag-card', { state: s && s.state, card: card ? { hidden: card.hidden, buttons: Array.from(card.querySelectorAll('button')).map((b) => ({ text: b.textContent.trim(), disabled: b.disabled })) } : 'noCard' }); return (s && s.state) || 'no-state'; })()"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { const card = document.querySelector('.pb-review-card'); if (!card) return window.__fixture.record('diag-auth', { result: 'noCard' }), { noCard: true }; const b = Array.from(card.querySelectorAll('button')).find((x) => x.textContent.includes('Post my text')); if (!b) return window.__fixture.record('diag-auth', { result: 'noBtn' }), { noBtn: true, hidden: card.hidden }; b.click(); window.__fixture.record('diag-auth', { result: 'clicked', disabled: b.disabled }); return 'authorize-requested'; })()"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { Promise.resolve().then(() => window.__skillsTest.state()).then((s) => { if (s && s.state === 'authorized') return resolve({ state: s.state, ms: Date.now() - t0 }); if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: s && s.state }); setTimeout(tick, 250); }).catch(() => { if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: 'error' }); setTimeout(tick, 250); }); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+      }
+    }
+  ],
+  "expect": {
+    "submitted": true,
+    "logIncludes": ["ime-end", "submitted"],
+    "receiptIncludes": "你好",
+    "note": "deterministic compositionstart->input(你)->compositionend->input(你好): gate reviews the final 你好 draft, posts it"
+  }
+}

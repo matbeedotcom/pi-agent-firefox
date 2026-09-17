@@ -1,0 +1,107 @@
+{
+  "name": "stale-draft",
+  "fixture": "fixture-stale.html",
+  "prompt": "REVIEW-STALE",
+  "pageUrl": "http://127.0.0.1:0/fixture-stale.html",
+  "skillsConfig": {
+    "grants": [
+      {
+        "skillKey": "fixture-reply/reply",
+        "revision": "*",
+        "capabilities": [
+          "context.read",
+          "suggestion.present",
+          "draft.replace-on-accept"
+        ],
+        "mode": "review-before-submit"
+      }
+    ],
+    "adapters": [
+      {
+        "id": "fixture/comment-page",
+        "version": "1.0.0",
+        "hosts": [
+          "127.0.0.1"
+        ],
+        "events": [
+          "comment.draft.paused",
+          "comment.before-submit"
+        ],
+        "gates": [
+          "comment.before-submit"
+        ]
+      }
+    ]
+  },
+  "job": {
+    "delayMs": 5,
+    "report": {
+      "decision": "suggest",
+      "explanation": "Fixture suggestion for the stale draft.",
+      "replacementText": "Fixture reply: stale"
+    }
+  },
+  "steps": [
+    {
+      "side": "agent",
+      "type": "prompt",
+      "text": "REVIEW-STALE"
+    },
+    {
+      "side": "agent",
+      "type": "say",
+      "text": "reviewing a draft that the site will edit mid-review"
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { if (document.documentElement.hasAttribute('data-skills-armed')) { return resolve((() => { const t = document.querySelector('textarea'); t.value = 'Draft one'; t.dispatchEvent(new InputEvent('input', { bubbles: true })); return { value: t.value }; })()); } if (Date.now() - t0 > 5000) return resolve({ armTimeout: true }); setTimeout(tick, 100); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { Promise.resolve().then(() => window.__skillsTest.state()).then((s) => { if (s && s.state === 'suggestion') return resolve({ state: s.state, ms: Date.now() - t0 }); if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: s && s.state }); setTimeout(tick, 250); }).catch(() => { if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: 'error' }); setTimeout(tick, 250); }); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { const b = document.querySelector(\"button[data-skill-fixture='tamper']\"); b.click(); return new Promise((r) => setTimeout(() => r({ value: document.querySelector('textarea').value, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), held: window.__fixture.log.filter((e) => e.type === 'held').length }), 800)); })()"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), value: document.querySelector('textarea').value, types: window.__fixture.log.map((e) => e.type) }), 1500))"
+      }
+    }
+  ],
+  "expect": {
+    "submitted": false,
+    "logIncludes": [
+      "tampered",
+      "held"
+    ],
+    "logExcludes": [
+      "submitted"
+    ],
+    "note": "type -> suggestion -> site tampers the draft -> submit must be HELD (draft dirty, re-arm pending), nothing posts"
+  }
+}

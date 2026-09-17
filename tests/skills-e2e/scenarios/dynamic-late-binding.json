@@ -1,0 +1,112 @@
+{
+  "name": "dynamic-late-binding",
+  "fixture": "fixture-dynamic.html",
+  "prompt": "REVIEW-DYNAMIC",
+  "pageUrl": "http://127.0.0.1:0/fixture-dynamic.html",
+  "skillsConfig": {
+    "grants": [
+      {
+        "skillKey": "fixture-reply/reply",
+        "revision": "*",
+        "capabilities": [
+          "context.read",
+          "suggestion.present",
+          "draft.replace-on-accept"
+        ],
+        "mode": "review-before-submit"
+      }
+    ],
+    "adapters": [
+      {
+        "id": "fixture/comment-page",
+        "version": "1.0.0",
+        "hosts": [
+          "127.0.0.1"
+        ],
+        "events": [
+          "comment.draft.paused",
+          "comment.before-submit"
+        ],
+        "gates": [
+          "comment.before-submit"
+        ]
+      }
+    ]
+  },
+  "job": {
+    "delayMs": 5,
+    "report": {
+      "decision": "suggest",
+      "explanation": "Fixture suggestion for the late-bound composer.",
+      "replacementText": "Fixture reply: dynamic"
+    }
+  },
+  "steps": [
+    {
+      "side": "agent",
+      "type": "prompt",
+      "text": "REVIEW-DYNAMIC"
+    },
+    {
+      "side": "agent",
+      "type": "say",
+      "text": "composer is hidden at load; binding must survive the Reply click"
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { const b = document.querySelector(\"button[data-skill-fixture='open']\"); b.click(); return new Promise((r) => setTimeout(() => r({ focused: document.activeElement && document.activeElement.tagName }), 400)); })()"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { if (document.documentElement.hasAttribute('data-skills-armed')) { return resolve((() => { const t = document.querySelector('textarea'); t.focus(); t.value = 'Reply after opening'; t.dispatchEvent(new InputEvent('input', { bubbles: true })); return { value: t.value }; })()); } if (Date.now() - t0 > 5000) return resolve({ armTimeout: true }); setTimeout(tick, 100); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { Promise.resolve().then(() => window.__skillsTest.state()).then((s) => { if (s && s.state === 'suggestion') return resolve({ state: s.state, ms: Date.now() - t0 }); if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: s && s.state }); setTimeout(tick, 250); }).catch(() => { if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: 'error' }); setTimeout(tick, 250); }); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { const card = document.querySelector('.pb-review-card'); if (!card) return { noCard: true }; const b = Array.from(card.querySelectorAll('button')).find((x) => x.textContent.includes('Post my text')); if (!b) return { noBtn: true, hidden: card.hidden }; b.click(); return 'authorize-requested'; })()"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { Promise.resolve().then(() => window.__skillsTest.state()).then((s) => { if (s && s.state === 'authorized') return resolve({ state: s.state, ms: Date.now() - t0 }); if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: s && s.state }); setTimeout(tick, 250); }).catch(() => { if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: 'error' }); setTimeout(tick, 250); }); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+      }
+    }
+  ],
+  "expect": {
+    "submitted": true,
+    "logIncludes": [
+      "submitted"
+    ],
+    "receiptIncludes": "Reply after opening",
+    "note": "composer hidden at load -> Reply click reveals+focuses -> type -> suggestion -> authorized -> submit posts"
+  }
+}

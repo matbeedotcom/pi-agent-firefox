@@ -1,0 +1,104 @@
+{
+  "name": "threads-active-composer",
+  "fixture": "fixture-threads.html",
+  "prompt": "REVIEW-THREADS",
+  "pageUrl": "http://127.0.0.1:0/fixture-threads.html",
+  "skillsConfig": {
+    "grants": [
+      {
+        "skillKey": "fixture-reply/reply",
+        "revision": "*",
+        "capabilities": [
+          "context.read",
+          "suggestion.present",
+          "draft.replace-on-accept"
+        ],
+        "mode": "review-before-submit"
+      }
+    ],
+    "adapters": [
+      {
+        "id": "fixture/comment-page",
+        "version": "1.0.0",
+        "hosts": [
+          "127.0.0.1"
+        ],
+        "events": [
+          "comment.draft.paused",
+          "comment.before-submit"
+        ],
+        "gates": [
+          "comment.before-submit"
+        ]
+      }
+    ]
+  },
+  "job": {
+    "delayMs": 5,
+    "report": {
+      "decision": "suggest",
+      "explanation": "Fixture suggestion for the thread-2 reply.",
+      "replacementText": "Fixture reply: threads"
+    }
+  },
+  "steps": [
+    {
+      "side": "agent",
+      "type": "prompt",
+      "text": "REVIEW-THREADS"
+    },
+    {
+      "side": "agent",
+      "type": "say",
+      "text": "two threads: the gate must follow the ACTIVE composer (thread 2)"
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { if (document.documentElement.hasAttribute('data-skills-armed')) { return resolve((() => { const t = document.getElementById('fixture-thread-2-composer'); t.focus(); t.value = 'from thread two'; t.dispatchEvent(new InputEvent('input', { bubbles: true })); return { value: t.value, active: document.activeElement === t }; })()); } if (Date.now() - t0 > 5000) return resolve({ armTimeout: true }); setTimeout(tick, 100); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { Promise.resolve().then(() => window.__skillsTest.state()).then((s) => { if (s && s.state === 'suggestion') return resolve({ state: s.state, ms: Date.now() - t0 }); if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: s && s.state }); setTimeout(tick, 250); }).catch(() => { if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: 'error' }); setTimeout(tick, 250); }); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { const card = document.querySelector('.pb-review-card'); if (!card) return { noCard: true }; const b = Array.from(card.querySelectorAll('button')).find((x) => x.textContent.includes('Post my text')); if (!b) return { noBtn: true, hidden: card.hidden }; b.click(); return 'authorize-requested'; })()"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { Promise.resolve().then(() => window.__skillsTest.state()).then((s) => { if (s && s.state === 'authorized') return resolve({ state: s.state, ms: Date.now() - t0 }); if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: s && s.state }); setTimeout(tick, 250); }).catch(() => { if (Date.now() - t0 > 5000) return resolve({ timeout: true, last: 'error' }); setTimeout(tick, 250); }); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { const submits = document.querySelectorAll(\"button[data-skill-fixture='submit']\"); submits[1].click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+      }
+    }
+  ],
+  "expect": {
+    "submitted": true,
+    "logIncludes": [
+      "submitted"
+    ],
+    "receiptIncludes": "thread2: from thread two",
+    "note": "only thread 2 is typed; thread-2's submit posts the thread-2 text (active-composer tracking)"
+  }
+}

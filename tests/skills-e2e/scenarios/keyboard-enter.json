@@ -1,0 +1,91 @@
+{
+  "name": "keyboard-enter",
+  "fixture": "fixture-keyboard.html",
+  "prompt": "REVIEW-KEYBOARD",
+  "pageUrl": "http://127.0.0.1:0/fixture-keyboard.html",
+  "skillsConfig": {
+    "grants": [
+      {
+        "skillKey": "fixture-keyboard/reply",
+        "revision": "*",
+        "capabilities": [
+          "context.read",
+          "suggestion.present",
+          "draft.replace-on-accept"
+        ],
+        "mode": "review-before-submit"
+      }
+    ],
+    "adapters": [
+      {
+        "id": "fixture/keyboard-page",
+        "version": "1.0.0",
+        "hosts": [
+          "127.0.0.1"
+        ],
+        "events": [
+          "comment.draft.paused",
+          "comment.before-submit"
+        ],
+        "gates": [
+          "comment.before-submit"
+        ]
+      }
+    ]
+  },
+  "job": {
+    "delayMs": 5,
+    "report": {
+      "decision": "suggest",
+      "explanation": "Fixture suggestion for the keyboard reply.",
+      "replacementText": "Fixture reply: keyboard"
+    }
+  },
+  "steps": [
+    {
+      "side": "agent",
+      "type": "prompt",
+      "text": "REVIEW-KEYBOARD"
+    },
+    {
+      "side": "agent",
+      "type": "say",
+      "text": "keyboard (Enter) submit chain through the review gate"
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { if (document.documentElement.hasAttribute('data-skills-armed')) { const t = document.querySelector(\"textarea[data-skill-fixture='composer']\"); t.value = 'Reply via keyboard'; t.dispatchEvent(new InputEvent('input', { bubbles: true })); window.__fixture.record('set-value', { v: t.value, attr: document.documentElement.getAttribute('data-skills-armed') }); return resolve({ value: t.value, attr: document.documentElement.getAttribute('data-skills-armed') }); } if (Date.now() - t0 > 5000) { window.__fixture.record('set-value', { v: 'ARM-TIMEOUT', attr: document.documentElement.getAttribute('data-skills-armed') }); return resolve({ armTimeout: true }); } setTimeout(tick, 100); }; tick(); })"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "(() => { const t = document.querySelector(\"textarea[data-skill-fixture='composer']\"); t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), held: window.__fixture.log.filter((e) => e.type === 'held').length, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+      }
+    },
+    {
+      "side": "agent",
+      "type": "tool",
+      "tool": "browser_evaluate",
+      "args": {
+        "expression": "Promise.resolve().then(() => window.__skillsTest.state()).then((s) => ({ finalState: s && s.state }))"
+      }
+    }
+  ],
+  "expect": {
+    "submitted": true,
+    "logIncludes": [
+      "submitted"
+    ],
+    "logExcludes": [
+      "held"
+    ],
+    "receiptIncludes": "Reply via keyboard",
+    "note": "V1 LIMITATION (documented, Firefox 155 verified): a content-world preventDefault on keydown is NOT observable in the page world (event.defaultPrevented stays false), so a JS-handler Enter chain cannot be hard-held even in review-before-submit mode. The gate consults + records the keyboard gesture (advisory outcome) and the user's own text posts. Click/form-default chains ARE hard-held (see basic-approve-apply); form-Enter (the default action) is holdable, JS-handler Enter is not."
+  }
+}
