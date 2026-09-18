@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { open, realpath, readdir } from "node:fs/promises";
 import path from "node:path";
-import { parseSkillManifest, type RegisteredSkill } from "@pi-browser/protocol";
+import { parseSkillPackage, type RegisteredSkill, type SkillPackageManifest } from "@pi-browser/protocol";
 
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_INSTRUCTION_BYTES = 32 * 1024;
@@ -32,18 +32,26 @@ async function packageFile(root: string, relative: string, maxBytes: number): Pr
   }
 }
 
-/** Host-owned registry. Reload publishes all definitions together or preserves the old snapshot. */
+/**
+ * Host-owned registry. Reload publishes all definitions together or preserves
+ * the old snapshot. A skill's revision covers its whole package manifest
+ * (shared targets/events) plus its own instructions — any site-definition
+ * change re-revisions every skill in the package.
+ */
 export class SkillsRegistry {
   private entries = new Map<string, RegisteredSkill>();
   private generation = 0;
   private reloadTail: Promise<void> = Promise.resolve();
 
   get version(): number { return this.generation; }
+  get size(): number { return this.entries.size; }
   snapshot(): RegisteredSkill[] { return structuredClone([...this.entries.values()]); }
   get(key: string): RegisteredSkill | undefined {
     const skill = this.entries.get(key);
     return skill && structuredClone(skill);
   }
+  /** Current revision for a key without cloning the definition (grant rebinding). */
+  revisionOf(key: string): string { return this.entries.get(key)?.revision ?? ""; }
 
   /** Explicit external paths are allowed; nested instruction paths remain confined to each root. */
   reload(packageRoots: readonly string[]): Promise<void> {
@@ -62,18 +70,19 @@ export class SkillsRegistry {
     for (const packageRoot of packageRoots) {
       const root = await realpath(packageRoot);
       const raw = await packageFile(root, "activation.json", MAX_MANIFEST_BYTES);
-      const manifest = parseSkillManifest(JSON.parse(raw));
+      const manifest: SkillPackageManifest = parseSkillPackage(JSON.parse(raw));
       if (packageIds.has(manifest.packageId)) throw new Error(`Duplicate package ID: ${manifest.packageId}`);
       packageIds.add(manifest.packageId);
       totalBytes += Buffer.byteLength(raw);
+      const manifestJson = JSON.stringify(manifest);
       for (const definition of manifest.skills) {
         const instructions = await packageFile(root, definition.instructions, MAX_INSTRUCTION_BYTES);
         if (!instructions.trim()) throw new Error("Skill instructions are empty");
         totalBytes += Buffer.byteLength(instructions);
         if (totalBytes > MAX_REGISTRY_BYTES || next.size >= 16_384) throw new Error("Skill registry exceeds limit");
         const key = `${manifest.packageId}/${definition.id}`;
-        const revision = createHash("sha256").update(JSON.stringify(definition)).update("\0").update(instructions).digest("hex");
-        next.set(key, { key, revision, definition, instructions });
+        const revision = createHash("sha256").update(manifestJson).update("\0").update(instructions).digest("hex");
+        next.set(key, { key, revision, packageId: manifest.packageId, definition, instructions, manifest });
       }
       if (totalBytes > MAX_REGISTRY_BYTES) throw new Error("Skill registry exceeds limit");
     }

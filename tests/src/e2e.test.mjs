@@ -238,7 +238,30 @@ class FakeTabs {
         return text({ navigatingTo: tab.url });
       }
       case "browser_get_accessibility_tree": {
-        // The REPL snapshot() asks for the structured nodes format.
+        // The REPL snapshot() defaults to the structured tree format (format:
+        // "tree", nested { role, name, children[] }); format "nodes" is the
+        // flat node-list variant; no format / "text" is the indented outline.
+        if (args.format === "tree") {
+          return text({
+            tree: {
+              role: "generic",
+              name: tab.title || "Fake Page",
+              ref: "root",
+              // nodeCount excludes the synthetic root (matches the real a11yTreeNodes).
+              children: [
+                {
+                  role: "main",
+                  children: [
+                    { role: "heading", level: 1, name: "Fake Page" },
+                    { role: "button", name: "Go", ref: "el-2", rect: { x: 90, y: 90, width: 20, height: 20 } },
+                  ],
+                },
+              ],
+            },
+            nodeCount: 3,
+            truncated: false,
+          });
+        }
         if (args.format === "nodes") {
           return text({
             nodes: tab.dom.map((d) => ({ ref: d.ref, role: d.role, name: d.text, ...(d.role === "heading" ? { level: 1 } : {}), rect: { x: 90, y: 90, width: 20, height: 20 } })),
@@ -1845,7 +1868,9 @@ test("javascript REPL (primitives): snapshot/goto/interact/tabs/checkpoint throu
   const replDir = path.join(tmpRoot ?? (tmpRoot = mkdtempSync(path.join(tmpdir(), "pi-browser-e2e-"))), "repl-primitives");
   const wsDir = path.join(tmpRoot, "ws-repl-p");
   const script = writeScript([
-    { match: "repl-snap", toolCalls: [{ toolName: "javascript", args: { code: "const s = await page.snapshot(); JSON.stringify(s.nodes.map((n) => n.role))" } }] },
+    // The replayed cell navigates the nested tree that page.snapshot() now
+    // returns by default (a synthetic root whose children are the real nodes).
+    { match: "repl-snap", toolCalls: [{ toolName: "javascript", args: { code: "const s = await page.snapshot(); const roles = (n) => [n.role, ...(n.children ?? []).flatMap(roles)].join(\',\'); roles(s.tree)" } }] },
     { match: "repl-goto", toolCalls: [{ toolName: "javascript", args: { code: "const p = await page.goto('http://a.test/next'); p.url" } }] },
     { match: "repl-act", toolCalls: [{ toolName: "javascript", args: { code: "const r = await page.clickAt(95, 95); [r.clicked.text, (await page.typeFocused('hi')).chars, (await page.focus('el-2')).focused.tag, (await page.scroll('el-2')).scrolled.tag].join('/')" } }] },
     { match: "repl-tabs", toolCalls: [{ toolName: "javascript", args: { code: "const t = await tabs.open('http://aux.test/r'); const l = await tabs.list(); await page.close(); l.length" } }] },
@@ -1875,13 +1900,13 @@ test("javascript REPL (primitives): snapshot/goto/interact/tabs/checkpoint throu
         .join("\n");
     };
 
-    // P2.5: structured snapshot (nodes + refs + rects). (The last expression
-    // is a string, so the REPL prints it quoted — assert on the roles.)
+    // P2.5: structured snapshot — tree (refs + rects + hierarchy). (The last
+    // expression is a string, so the REPL prints it quoted — assert on the roles.)
     let outs = await runCell("repl-snap");
     assert.ok(outs.includes("heading") && outs.includes("button"), `snapshot roles: ${outs}`);
     assert.ok(
-      tabs.calls.some((c) => c.tool === "browser_get_accessibility_tree" && c.sessionId === s.sessionId && c.arguments?.format === "nodes"),
-      "snapshot used the structured nodes format",
+      tabs.calls.some((c) => c.tool === "browser_get_accessibility_tree" && c.sessionId === s.sessionId && c.arguments?.format === "tree"),
+      "snapshot used the nested tree format",
     );
 
     // P2.5: goto = navigate + readyState poll + info.

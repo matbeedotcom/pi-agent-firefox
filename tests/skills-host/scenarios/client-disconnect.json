@@ -4,21 +4,22 @@
   "pageUrl": "http://127.0.0.1:9/fixture-basic.html",
   "skillsConfig": {
     "grants": [
-      { "skillKey": "fixture-skill/fixture-reply", "revision": "*", "capabilities": ["context.read", "suggestion.present"] }
-    ],
-    "adapters": [
       {
-        "id": "fixture-adapter",
-        "version": "1.0.0",
-        "hosts": ["127.0.0.1"],
-        "events": ["comment.draft.paused", "comment.before-submit"],
-        "gates": ["comment.before-submit"]
+        "skillKey": "fixture-skill/fixture-reply",
+        "revision": "*",
+        "capabilities": [
+          "context.read",
+          "suggestion.present"
+        ]
       }
     ]
   },
   "job": {
     "delayMs": 400,
-    "report": { "decision": "clear", "explanation": "never delivered" }
+    "report": {
+      "decision": "clear",
+      "explanation": "never delivered"
+    }
   },
   "steps": [
     {
@@ -26,10 +27,18 @@
       "type": "extended",
       "method": "x-pi-browser/skills_plan",
       "params": {
-        "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+        "source": {
+          "application": "firefox",
+          "connectionEpoch": "epoch-1",
+          "documentGeneration": "gen-1",
+          "tabId": 1,
+          "frameId": 0
+        },
         "url": "{{page_url}}"
       },
-      "expect": { "status": "ok" }
+      "expect": {
+        "status": "ok"
+      }
     },
     {
       "side": "client",
@@ -39,8 +48,14 @@
         "event": {
           "version": 1,
           "eventId": "evt-disc-1",
-          "event": "comment.before-submit",
-          "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+          "event": "fixture-skill:before-submit",
+          "source": {
+            "application": "firefox",
+            "connectionEpoch": "epoch-1",
+            "documentGeneration": "gen-1",
+            "tabId": 1,
+            "frameId": 0
+          },
           "interactionId": "int-disc-1",
           "draftRevision": 1,
           "contextRevision": 1,
@@ -49,13 +64,18 @@
           "contextRef": "ctx-disc-1"
         }
       },
-      "expect": { "status": "accepted" }
+      "expect": {
+        "status": "accepted"
+      }
     },
-    { "side": "client", "type": "close" }
+    {
+      "side": "client",
+      "type": "close"
+    }
   ],
   "expect": {
     "results": 0,
     "abortedOutcomes": 1,
-    "note": "client drops while a job is in flight: dispose() cancels the client's jobs (service.cancel -> aborted, NOT unavailable — unavailable is reserved for jobs that never ran), and nothing is delivered to a client that is gone"
+    "note": "client drops while a job is in flight: dispose() cancels the client's jobs (service.cancel -> aborted, NOT unavailable \u2014 unavailable is reserved for jobs that never ran), and nothing is delivered to a client that is gone"
   }
 }

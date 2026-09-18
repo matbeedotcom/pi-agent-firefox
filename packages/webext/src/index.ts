@@ -1,7 +1,6 @@
 export * from "./acp-client.js";
 export * from "./skills/coordinator.js";
 export * from "./skills/activation-history.js";
-export * from "./skills/adapters.js";
 export * from "./skills/page-runtime.js";
 export * from "./skills/review-card.js";
 export * from "./skills/review-session.js";

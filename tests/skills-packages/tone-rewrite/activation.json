@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 2,
+  "packageId": "tone-rewrite",
+  "application": "firefox",
+  "hosts": ["facebook.com"],
+  "subdomainHosts": ["www.facebook.com", "m.facebook.com"],
+  "targets": {
+    "composer": "div[contenteditable=\"true\"][data-lexical-editor=\"true\"]",
+    "submit": "el => el.matches('[role=\"button\"]') && !!el.closest('form') && !!el.closest('form').querySelector('div[data-lexical-editor=\"true\"]') && el === [...el.closest('form').querySelectorAll('[role=\"button\"]')].pop()"
+  },
+  "events": {
+    "draft.paused": {
+      "kind": "debounced",
+      "debounceMs": 1000,
+      "suspendDuringComposition": true,
+      "sequence": [{ "dom": "input", "target": "composer" }],
+      "payload": {
+        "draft": { "from": "composer", "field": "text" }
+      }
+    },
+    "before-submit": {
+      "kind": "gate",
+      "chainId": "tone-comment-submit",
+      "alternatives": [[{ "dom": "click", "target": "submit" }]],
+      "payload": {
+        "draft": { "from": "composer", "field": "text", "resolve": "document" }
+      }
+    }
+  },
+  "skills": [
+    {
+      "id": "tone",
+      "type": "triggered",
+      "instructions": "tone/SKILL.md",
+      "subscriptions": [
+        { "event": "draft.paused", "conditions": { "minCharacters": 20 } },
+        { "event": "before-submit" }
+      ],
+      "context": {
+        "required": ["draft"],
+        "optional": []
+      },
+      "review": {
+        "defaultMode": "advisory"
+      },
+      "capabilities": ["context.read", "suggestion.present", "draft.replace-on-accept"],
+      "execution": {
+        "handler": "agent",
+        "timeoutMs": 10000
+      }
+    }
+  ]
+}

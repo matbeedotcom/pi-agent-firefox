@@ -11,7 +11,7 @@
  * Scenario JSON contract (tests/skills-host/scenarios/):
  * - "pageUrl"            document URL for {{page_url}} substitution.
  * - "skillsConfig"       { grants: [{skillKey, revision ("*" = resolve from
- *                          registry), capabilities}], adapters: [...] } —
+ *                          registry), capabilities}] } —
  *                          the same shape the mock host reads from
  *                          PI_BROWSER_SKILLS_CONFIG.
  * - "job"                scripted isolated job: { report?, fail?, delayMs? }.
@@ -44,7 +44,7 @@ import { CapabilityToolProvider } from "../../src/browser/provider.js";
 import { PermissionStore } from "../../src/permission-store.js";
 import { discoverSkillPackages, SkillsRegistry } from "../../src/skills/registry.js";
 import { createSkillsHost } from "../../src/skills/pi-integration.js";
-import { SkillsPlanner, type SkillAdapterCoverage, type SkillGrant } from "../../src/skills/planner.js";
+import { SkillsPlanner, type SkillGrant } from "../../src/skills/planner.js";
 import { createClientSkillsProtocol } from "../../src/native-host/skills-startup.js";
 import { createScriptedSessionFactory, type ScriptedJob } from "../../src/skills/mock-session-factory.js";
 import type { NormalizedToolResult } from "../../src/browser/provider.js";
@@ -82,7 +82,6 @@ export interface Scenario {
   pageUrl: string;
   skillsConfig?: {
     grants: { skillKey: string; revision: string; capabilities: SkillGrant["capabilities"] }[];
-    adapters: SkillAdapterCoverage[];
   };
   job?: ScriptedJob;
   bridge?: Record<string, { delayMs?: number; result?: NormalizedToolResult; fail?: { code: string; message: string } }>;
@@ -277,7 +276,6 @@ export async function runScenario(scenario: Scenario, opts: { log?: Logger; pack
     runtime: { host, registry, planner: new SkillsPlanner(snapshot) },
     transport: b.transport,
     grants: () => grants,
-    adapters: () => scenario.skillsConfig?.adapters ?? [],
   });
 
   const agent = new AcpAgent({

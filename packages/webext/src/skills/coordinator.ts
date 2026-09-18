@@ -23,9 +23,7 @@ import {
   X_PI_BROWSER,
   parseSkillsContextRequestParams,
   parseSkillsResultParams,
-  type SkillContextField,
   type SkillEvent,
-  type SkillEventName,
   type SkillEventSource,
   type SkillsCancelParams,
   type SkillsCancelResult,
@@ -152,7 +150,8 @@ export class SkillsCoordinator {
    */
   async submitEvent(input: {
     document: DocumentIdentity;
-    event: SkillEventName;
+    /** Qualified event identity: `<packageId>:<local event name>`. */
+    event: string;
     interactionId: string;
     planVersion: number;
     contextRevision: number;

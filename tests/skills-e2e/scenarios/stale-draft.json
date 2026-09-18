@@ -73,7 +73,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { const b = document.querySelector(\"button[data-skill-fixture='tamper']\"); b.click(); return new Promise((r) => setTimeout(() => r({ value: document.querySelector('textarea').value, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+        "expression": "(() => { const b = document.querySelector(\"button[data-skill-fixture='tamper']\"); b.click(); return new Promise((r) => setTimeout(() => r({ value: document.querySelector('textarea').value, types: window.__fixture.log.map((e) => e.type) }), 100)); })()"
       }
     },
     {
@@ -81,7 +81,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), held: window.__fixture.log.filter((e) => e.type === 'held').length }), 800)); })()"
+        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), held: window.__fixture.log.filter((e) => e.type === 'gate-hold').length }), 100)); })()"
       }
     },
     {
@@ -89,7 +89,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), value: document.querySelector('textarea').value, types: window.__fixture.log.map((e) => e.type) }), 1500))"
+        "expression": "new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), value: document.querySelector('textarea').value, types: window.__fixture.log.map((e) => e.type) }), 5000))"
       }
     }
   ],
@@ -97,7 +97,7 @@
     "submitted": false,
     "logIncludes": [
       "tampered",
-      "held"
+      "gate-hold"
     ],
     "logExcludes": [
       "submitted"

@@ -5,8 +5,8 @@
  * channel to the connected app and no in-process tool bridge (the bridge
  * module state lives only in this broker process). This server gives them
  * browser access the standard way — the broker, which owns both the ACP
- * pipe and the tool bridge, exposes the 24 browser tools as a plain MCP
- * server on a private unix socket.
+ * pipe and the tool bridge, exposes the browser tools + the host-side
+ * `javascript` REPL as a plain MCP server on a private unix socket.
  *
  * Wire format: MCP JSON-RPC 2.0, newline-delimited (the same JSONL framing
  * as the MCP stdio transport; pi-mcp-adapter's UnixSocketClientTransport
@@ -25,7 +25,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { PI_BROWSER_META, PI_BROKER } from "@pi-browser/protocol";
-import { BROWSER_TOOL_SCHEMAS } from "../browser/schemas.js";
+import { BROWSER_TOOL_SCHEMAS, REPL_TOOL_SCHEMAS } from "../browser/schemas.js";
 import { MCP_PROTOCOL_VERSION } from "../browser/mcp-acp-client.js";
 import type { Logger } from "../logger.js";
 import type { BrowserToolBridge } from "../tool-bridge.js";
@@ -94,7 +94,8 @@ async function dispatch(
       return;
     case "tools/list":
       reply(socket, id, {
-        tools: BROWSER_TOOL_SCHEMAS.map((t) => ({
+        // Browser tools (add-on-routed) + the host-side `javascript` REPL.
+        tools: [...BROWSER_TOOL_SCHEMAS, ...REPL_TOOL_SCHEMAS].map((t) => ({
           name: t.name,
           ...(t.description ? { description: t.description } : {}),
           inputSchema: t.parameters,
@@ -105,7 +106,7 @@ async function dispatch(
       const p = isRecord(params) ? params : {};
       const tool = typeof p.name === "string" ? p.name : "";
       const args = isRecord(p.arguments) ? p.arguments : {};
-      const known = BROWSER_TOOL_SCHEMAS.some((t) => t.name === tool);
+      const known = [...BROWSER_TOOL_SCHEMAS, ...REPL_TOOL_SCHEMAS].some((t) => t.name === tool);
       if (!known) {
         if (isNotification) return;
         replyError(socket, id, -32602, `unknown tool: ${tool}`);

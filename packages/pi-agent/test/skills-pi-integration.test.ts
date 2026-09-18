@@ -28,15 +28,27 @@ const QUIET: Logger = createLogger({ level: "error", stderr: { write: () => true
 const skill: RegisteredSkill = {
   key: "pkg/friendliness",
   revision: "rev-1",
+  packageId: "pkg",
   instructions: "Review the draft for friendliness.",
   definition: {
     id: "friendliness",
     type: "triggered",
-    instructions: "Review the draft for friendliness.",
-    scope: { applications: ["firefox"], hosts: ["facebook.com"] },
+    instructions: "skills/friendliness/SKILL.md",
+    subscriptions: [{ event: "before-submit" }],
     context: { required: ["draft"], optional: [] },
     capabilities: ["context.read", "suggestion.present"],
     execution: { handler: "agent", timeoutMs: 5000 },
+  },
+  manifest: {
+    schemaVersion: 2,
+    packageId: "pkg",
+    application: "firefox",
+    hosts: ["facebook.com"],
+    targets: { composer: { selector: "composer-x", kind: "css" } },
+    events: { "before-submit": { kind: "gate", chainId: "pkg-submit",
+      alternatives: [[{ dom: "click", target: "composer" }]],
+      payload: { draft: { from: "composer", field: "value" } } } },
+    skills: [],
   },
 };
 

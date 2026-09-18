@@ -91,9 +91,27 @@
         action: function (name, payload) {
           var id = ++seq;
           return new Promise(function (resolve, reject) {
-            pending[id] = { resolve: resolve, reject: reject };
+            // The content script's router registers at document_idle; the
+            // first post can land before it exists and be LOST. Re-post on a
+            // short interval until the router replies (bounded ~2s), then the
+            // overall 30s timeout is the backstop.
+            var attempts = 0;
+            var maxAttempts = 20;
+            var retry = setInterval(function () {
+              if (!Object.prototype.hasOwnProperty.call(pending, id)) { clearInterval(retry); return; }
+              if (++attempts >= maxAttempts) { clearInterval(retry); return; }
+              window.postMessage({ __skillsTest: true, id: id, name: name, payload: payload || {} }, "*");
+            }, 100);
+            pending[id] = {
+              resolve: function (r) { clearInterval(retry); resolve(r); },
+              reject: function (e) { clearInterval(retry); reject(e); },
+            };
             setTimeout(function () {
-              if (pending[id]) { delete pending[id]; reject(new Error("skills test action timed out: " + name)); }
+              if (Object.prototype.hasOwnProperty.call(pending, id)) {
+                clearInterval(retry);
+                delete pending[id];
+                reject(new Error("skills test action timed out: " + name));
+              }
             }, 30000);
             window.postMessage({ __skillsTest: true, id: id, name: name, payload: payload || {} }, "*");
           });
@@ -115,15 +133,32 @@
     if (!promptText) return;
     // Give the content script (document_idle) time to register its
     // postMessage router before the first round-trip.
-    setTimeout(run, 500);
+    setTimeout(run, 50);
     function run() {
     if (!window.__skillsTest) return;
     const step = (name, detail) =>
       fixture.record("driver", { step: name, detail: detail === undefined ? null : detail });
     (async () => {
+      // The add-on connects to the native host ~2.5s after Firefox starts,
+      // but the page (opened via --start-url) loads before that: an early
+      // new_session fails with "not connected to native host". Retry with a
+      // short delay until the port is up (bounded ~4s).
+      const withHostRetry = async (name, payload) => {
+        let lastErr;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          try {
+            return await window.__skillsTest.action(name, payload);
+          } catch (err) {
+            lastErr = err;
+            if (!/not connected to native host/i.test(String(err && err.message))) throw err;
+            await new Promise((r) => setTimeout(r, 200));
+          }
+        }
+        throw lastErr;
+      };
       try {
         step("start", { csProbe: document.documentElement.getAttribute("data-cs-probe") });
-        const s = (await window.__skillsTest.action("new_session", { cwd: "/tmp" })) || {};
+        const s = (await withHostRetry("new_session", { cwd: "/tmp" })) || {};
         const sessionId = s.sessionId;
         if (!sessionId) throw new Error("no sessionId: " + JSON.stringify(s));
         step("session", { sessionId });

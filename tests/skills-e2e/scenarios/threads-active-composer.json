@@ -89,7 +89,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { const submits = document.querySelectorAll(\"button[data-skill-fixture='submit']\"); submits[1].click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+        "expression": "(() => { const submits = document.querySelectorAll(\"button[data-skill-fixture='submit']\"); submits[1].click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 100)); })()"
       }
     }
   ],

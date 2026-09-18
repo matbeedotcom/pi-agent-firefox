@@ -23,6 +23,11 @@ test("page evaluation compiles without eval, preserves globals/arguments, and aw
   assert.equal((await run("arg => Object.hasOwn(arg, '__proto__')", JSON.parse('{"__proto__":42}'))).value, true);
   assert.equal((await run("arg => arg === undefined")).value, true);
   assert.equal((await run("1 + 2 // comment")).value, 3);
+  // IIFEs are VALUE expressions (already invoked): evaluate them, never
+  // re-apply the result (the old head-regex misread "(() => …)()" as a fn).
+  const iife = (await run("(() => ({ v: 1 }))()")).value as { v: number };
+  assert.equal(iife.v, 1, "IIFE is evaluated, not re-applied");
+  assert.equal((await run("(() => Promise.resolve(7))()")).value, 7);
   assert.equal((await run("undefined")).value, null);
   assert.match((await run("new Function('return 1')()")).error!, /Code generation from strings disallowed/);
   assert.match((await run("(() => { count++; throw new EvalError('blocked by CSP'); })()")).error!, /blocked by CSP/);

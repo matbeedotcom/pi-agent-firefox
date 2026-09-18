@@ -36,10 +36,12 @@ const plan: PagePlan = {
   documentGeneration: "doc-1",
   expiresAt: Date.now() + 60_000,
   rules: [
-    { skillKey: "p/friendliness", skillRevision: "v1", adapterId: "a", adapterVersion: "1",
-      subscriptions: [{ event: "comment.before-submit" }], mode: "review-before-submit", capabilities: ["context.read"] },
-    { skillKey: "p/tone", skillRevision: "v2", adapterId: "a", adapterVersion: "1",
-      subscriptions: [{ event: "comment.before-submit" }], mode: "review-before-submit", capabilities: ["context.read"] },
+    { skillKey: "p/friendliness", skillRevision: "v1", packageId: "p", world: "isolated", targets: {},
+      events: { "before-submit": { kind: "gate" as const, chainId: "c1", alternatives: [[{ dom: "click" as const, target: "submit" }]] } },
+      subscriptions: [{ event: "before-submit" }], mode: "review-before-submit", capabilities: ["context.read"] },
+    { skillKey: "p/tone", skillRevision: "v2", packageId: "p", world: "isolated", targets: {},
+      events: { "before-submit": { kind: "gate" as const, chainId: "c1", alternatives: [[{ dom: "click" as const, target: "submit" }]] } },
+      subscriptions: [{ event: "before-submit" }], mode: "review-before-submit", capabilities: ["context.read"] },
   ],
   unavailable: [],
 };
@@ -75,14 +77,14 @@ function setup(options: FakeHostOptions = {}) {
       const ack = options.eventAck ?? {
         status: "accepted",
         jobs: plan.rules
-          .filter((r) => r.subscriptions.some((s) => s.event === event.event))
+          .filter((r) => r.subscriptions.some((s) => `${r.packageId}:${s.event}` === event.event))
           .map((r) => ({ jobId: `job:${event.eventId}:${r.skillKey}`, skillKey: r.skillKey, key: `${r.skillKey}:composer-7:0` })),
       } satisfies SkillsEventResult;
       return Promise.resolve(ack);
     }
     return Promise.reject(new Error(`unexpected host request: ${method}`));
   };
-  const runtime = new SkillsRuntime({ application: "firefox", mode: "review-before-submit", request: request as never });
+  const runtime = new SkillsRuntime({ application: "firefox", request: request as never });
   /** Host→client delivery (skills_result / skills_context). */
   const hostDelivers = (method: string, params: unknown): unknown => runtime.handleHostRequest(method, params);
   return { runtime, events, hostDelivers };
@@ -102,7 +104,7 @@ function deliver(hostDelivers: (m: string, p: unknown) => unknown, jobId: string
 
 test("arm sends ONE transport event carrying the gate eventId; host jobs map to tickets; two clears release the gesture", async () => {
   const { runtime, events, hostDelivers } = setup();
-  const { tickets, jobs } = await runtime.arm({ document: doc, identity: identity(), plan, snapshot: { draft: "Nice post!" } });
+  const { tickets, jobs } = await runtime.arm({ document: doc, event: "p:before-submit", identity: identity(), plan, snapshot: { draft: "Nice post!" } });
   assert.equal(tickets.length, 2);
   assert.equal(jobs.length, 2);
   assert.equal(events.length, 1);
@@ -116,11 +118,11 @@ test("arm sends ONE transport event carrying the gate eventId; host jobs map to 
   assert.notEqual(jobs[0]!.jobId, tickets[0]!.jobId);
   deliver(hostDelivers, jobs[0]!.jobId, tickets[0]!, { decision: "clear" });
   assert.equal(runtime.view(doc)?.state, "reviewing");
-  assert.equal(runtime.gesture(doc, { chainId: "c1", phase: "click" }), "hold");
+  assert.equal(runtime.gesture(doc, "p:before-submit", { chainId: "c1", phase: "click" }), "hold");
   deliver(hostDelivers, jobs[1]!.jobId, tickets[1]!, { decision: "clear" });
   assert.equal(runtime.view(doc)?.state, "clear");
-  assert.equal(runtime.gesture(doc, { chainId: "c1", phase: "click" }), "allow");
-  assert.equal(runtime.gesture(doc, { chainId: "c1", phase: "submit" }), "allow");
+  assert.equal(runtime.gesture(doc, "p:before-submit", { chainId: "c1", phase: "click" }), "allow");
+  assert.equal(runtime.gesture(doc, "p:before-submit", { chainId: "c1", phase: "submit" }), "allow");
 
   // Redelivered results drop (mapping consumed) and never re-enter the gate.
   deliver(hostDelivers, jobs[0]!.jobId, tickets[0]!, { decision: "clear" });
@@ -137,20 +139,20 @@ test("suggestion holds and syncs the card; unavailable delivery leaves a usable 
     }
     return Promise.reject(new Error(method));
   };
-  const runtime = new SkillsRuntime({ application: "firefox", mode: "review-before-submit", request: request as never, onCardState: (_d, v) => states.push(v) });
+  const runtime = new SkillsRuntime({ application: "firefox", request: request as never, onCardState: (_d, _v, _e) => states.push(_v) });
   const deliverHere = (m: string, p: unknown): unknown => runtime.handleHostRequest(m, p);
 
-  const first = await runtime.arm({ document: doc, identity: identity(), plan });
+  const first = await runtime.arm({ document: doc, event: "p:before-submit", identity: identity(), plan });
   deliver(deliverHere, first.jobs[0]!.jobId, first.tickets[0]!, { decision: "suggest", explanation: "too formal", replacementText: "hey!" });
   const view = runtime.view(doc)!;
   assert.equal(view.state, "suggestion");
   assert.equal(view.suggestions.length, 1);
-  assert.equal(runtime.gesture(doc, { chainId: "c1", phase: "click" }), "hold");
+  assert.equal(runtime.gesture(doc, "p:before-submit", { chainId: "c1", phase: "click" }), "hold");
   assert.ok(states.some((s) => s.state === "suggestion"));
 
   // Runtime failure on a fresh arm (host job crashed): local bypass stays usable.
   // New contextRevision: the same interaction at the old revision is a redelivery (deduped).
-  const second = await runtime.arm({ document: doc, identity: { ...identity("edited"), contextRevision: 2 }, plan });
+  const second = await runtime.arm({ document: doc, event: "p:before-submit", identity: { ...identity("edited"), contextRevision: 2 }, plan });
   const ack = runtime.handleHostRequest(X_PI_BROWSER.skills_result, {
     jobId: second.jobs[0]!.jobId, eventId: second.tickets[0]!.eventId, skillKey: "p/friendliness", skillRevision: "v1",
     status: "unavailable", reason: "host down",
@@ -158,24 +160,24 @@ test("suggestion holds and syncs the card; unavailable delivery leaves a usable 
   assert.deepEqual(ack, { delivered: true });
   assert.equal(runtime.view(doc)?.state, "unavailable");
   assert.ok(runtime.authorize(doc));
-  assert.equal(runtime.gesture(doc, { chainId: "c1", phase: "click" }), "allow");
+  assert.equal(runtime.gesture(doc, "p:before-submit", { chainId: "c1", phase: "click" }), "allow");
   assert.equal(runtime.history.summarize().byOutcome.unavailable, 1);
 });
 
 test("rejected event degrades the gate to a usable bypass (no false protection)", async () => {
   const { runtime } = setup({ eventAck: { status: "no-match" } });
-  await runtime.arm({ document: doc, identity: identity(), plan });
+  await runtime.arm({ document: doc, event: "p:before-submit", identity: identity(), plan });
   assert.equal(runtime.view(doc)?.state, "unavailable");
   assert.ok(runtime.authorize(doc));
   assert.equal(runtime.view(doc)?.state, "authorized");
-  assert.equal(runtime.gesture(doc, { chainId: "c1", phase: "click" }), "allow");
+  assert.equal(runtime.gesture(doc, "p:before-submit", { chainId: "c1", phase: "click" }), "allow");
   assert.equal(runtime.history.summarize().byOutcome.unavailable, 0); // no "unavailable" RESULT was delivered; the gate degraded locally
 });
 
 test("editing during review drops stale results (acceptance check)", async () => {
   const { runtime, hostDelivers } = setup();
-  const { tickets, jobs } = await runtime.arm({ document: doc, identity: identity("original"), plan });
-  runtime.draftChanged(doc, fullIdentity("edited"));
+  const { tickets, jobs } = await runtime.arm({ document: doc, event: "p:before-submit", identity: identity("original"), plan });
+  runtime.draftChanged(doc, "p:before-submit", fullIdentity("edited"));
   assert.equal(runtime.view(doc)?.state, "dirty");
   deliver(hostDelivers, jobs[0]!.jobId, tickets[0]!, { decision: "clear" });
   // The gate rejects the stale ticket; nothing is recorded.
@@ -185,7 +187,7 @@ test("editing during review drops stale results (acceptance check)", async () =>
 
 test("new connection epoch resets sessions and job mappings", async () => {
   const { runtime, hostDelivers } = setup();
-  const { tickets, jobs } = await runtime.arm({ document: doc, identity: identity(), plan });
+  const { tickets, jobs } = await runtime.arm({ document: doc, event: "p:before-submit", identity: identity(), plan });
   runtime.noteConnection();
   assert.equal(runtime.view(doc), undefined);
   deliver(hostDelivers, jobs[0]!.jobId, tickets[0]!, { decision: "clear" });
@@ -194,7 +196,7 @@ test("new connection epoch resets sessions and job mappings", async () => {
 
 test("closeDocument drops the gate and its snapshots; closeTab covers unknown generations", async () => {
   const { runtime, events, hostDelivers } = setup();
-  const { tickets, jobs } = await runtime.arm({ document: doc, identity: identity(), plan, snapshot: { draft: "x" } });
+  const { tickets, jobs } = await runtime.arm({ document: doc, event: "p:before-submit", identity: identity(), plan, snapshot: { draft: "x" } });
   const ref = events[0]!.contextRef;
   runtime.closeDocument(doc);
   assert.equal(runtime.view(doc), undefined);
@@ -206,15 +208,80 @@ test("closeDocument drops the gate and its snapshots; closeTab covers unknown ge
 
   // Tab removal with a generation the background does not track.
   const other = { ...doc, documentGeneration: "doc-2" };
-  await runtime.arm({ document: other, identity: { ...identity(), documentGeneration: "doc-2" }, plan });
+  await runtime.arm({ document: other, event: "p:before-submit", identity: { ...identity(), documentGeneration: "doc-2" }, plan });
   assert.notEqual(runtime.view(other), undefined);
   runtime.closeTab(7);
   assert.equal(runtime.view(other), undefined);
 });
 
+test("speculative arm lands in the rule's GATE session (card shows review before first submit)", async () => {
+  const specPlan: PagePlan = {
+    planId: "plan-spec",
+    planVersion: 1,
+    documentGeneration: "doc-1",
+    expiresAt: Date.now() + 60_000,
+    rules: [
+      { skillKey: "p/friendliness", skillRevision: "v1", packageId: "p", world: "isolated", targets: {},
+        events: {
+          "draft.paused": { kind: "debounced" as const, debounceMs: 800 },
+          "before-submit": { kind: "gate" as const, chainId: "c1", alternatives: [[{ dom: "click" as const, target: "submit" }]] },
+        },
+        subscriptions: [{ event: "draft.paused" }, { event: "before-submit" }],
+        mode: "review-before-submit", capabilities: ["context.read"] },
+    ],
+    unavailable: [],
+  };
+  const events: SkillEvent[] = [];
+  const card: { event?: string; state?: string }[] = [];
+  const request = (method: string, params?: unknown): Promise<unknown> => {
+    if (method === X_PI_BROWSER.skills_plan) return Promise.resolve({ status: "ok", plan: specPlan });
+    if (method === X_PI_BROWSER.skills_event) {
+      const event = (params as { event: SkillEvent }).event;
+      events.push(event);
+      return Promise.resolve({ status: "accepted", jobs: [{ jobId: `job:${event.eventId}:p/friendliness`, skillKey: "p/friendliness", key: "k" }] });
+    }
+    return Promise.reject(new Error(method));
+  };
+  const runtime = new SkillsRuntime({
+    application: "firefox",
+    request: request as never,
+    onCardState: (_d, v, e) => card.push({ event: e, state: v.state }),
+  });
+  const deliverHere = (m: string, p: unknown): unknown => runtime.handleHostRequest(m, p);
+  // Single reviewer — the plan carries one rule (the module-level
+  // identity() names the two-rule plan's reviewers and would leave a
+  // second ticket unfulfilled).
+  const id = (draft: string, contextRevision: number): ArmIdentity => ({
+    documentGeneration: "doc-1", frameId: 0, interactionId: "composer-7", replyTarget: "post-1",
+    draft, contextRevision, reviewers: [{ key: "p/friendliness", revision: "v1", memoryRevision: 1 }],
+  });
+
+  // Speculative arm (draft paused): the transport keeps the armed event
+  // (host schedules the speculative job)...
+  const { tickets, jobs } = await runtime.arm({ document: doc, event: "p:draft.paused", identity: id("Nice post!", 1), plan: specPlan, snapshot: { draft: "Nice post!" } });
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.event, "p:draft.paused");
+  // ...while the card syncs the GATE event — the session submit consults.
+  assert.ok(card.length > 0);
+  assert.ok(card.every((c) => c.event === "p:before-submit"));
+
+  deliver(deliverHere, jobs[0]!.jobId, tickets[0]!, { decision: "suggest", explanation: "tone", replacementText: "hey!" });
+  assert.equal(runtime.view(doc)?.state, "suggestion");
+  // The gate event consults the SAME session the speculative review filled.
+  assert.equal(runtime.gesture(doc, "p:before-submit", { chainId: "c1", phase: "click" }), "hold");
+  assert.ok(runtime.authorize(doc, "p:before-submit"));
+  assert.equal(runtime.gesture(doc, "p:before-submit", { chainId: "c1", phase: "click" }), "allow");
+
+  // A later gate arm reuses the session (card keeps the gate event).
+  const second = await runtime.arm({ document: doc, event: "p:before-submit", identity: id("edited", 2), plan: specPlan });
+  assert.ok(card.every((c) => c.event === "p:before-submit"));
+  deliver(deliverHere, second.jobs[0]!.jobId, second.tickets[0]!, { decision: "clear" });
+  assert.equal(runtime.view(doc)?.state, "clear");
+});
+
 test("context resolution stays privacy-by-request through the runtime", async () => {
   const { runtime, events, hostDelivers } = setup();
-  await runtime.arm({ document: doc, identity: identity(), plan, snapshot: { draft: "d", secret: "no" } });
+  await runtime.arm({ document: doc, event: "p:before-submit", identity: identity(), plan, snapshot: { draft: "d", secret: "no" } });
   const resolved = hostDelivers(X_PI_BROWSER.skills_context, {
     contextRef: events[0]!.contextRef, interactionId: "composer-7", planVersion: 1, fields: ["draft"], maxBytes: 32_768,
   }) as { context: Record<string, unknown> };

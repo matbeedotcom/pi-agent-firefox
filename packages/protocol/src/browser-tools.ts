@@ -187,15 +187,16 @@ export const BROWSER_TOOLS: readonly BrowserToolDef[] = [
       "carry stable refs usable with browser_click and browser_type. Open web-component shadow roots are traversed; " +
       "iframes appear as leaf lines with their src — if the outline is thin, the content likely lives in a child frame: " +
       "re-run with the frame parameter (see the frames list in browser_get_dom). " +
-      "format \"nodes\" returns the same walk as structured node objects ({ref, role, name, rect, ...}) — used by the " +
-      "javascript REPL's page.snapshot().",
+      "format \"text\" (default) = the indented outline; format \"nodes\" = the same walk as a flat list of structured " +
+      "node objects ({ref, role, name, rect, ...}); format \"tree\" = the same walk as a nested node tree " +
+      "({role, name, children[]}) — used by the javascript REPL's page.snapshot() (its default format).",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: {
         format: {
-          anyOf: [{ const: "text" }, { const: "nodes" }],
+          anyOf: [{ const: "text" }, { const: "tree" }, { const: "nodes" }],
           description:
-            '\"text\" (default) = the indented outline; \"nodes\" = structured node objects with refs and rects.',
+            '"text" (default) = the indented outline; "tree" = nested node objects ({role, name, children[]}); "nodes" = flat structured node list with refs and rects.',
         },
         maxNodes: {
           type: "number",
@@ -203,7 +204,7 @@ export const BROWSER_TOOLS: readonly BrowserToolDef[] = [
         },
         maxDepth: {
           type: "number",
-          description: "Maximum outline depth (default 16, hard cap 40).",
+          description: "Maximum outline depth (default 60, hard cap 80).",
         },
         frame: { ...FRAME_PROPERTY },
       },
@@ -479,7 +480,11 @@ export const REPL_TOOLS: readonly BrowserToolDef[] = [
       "between steps of longer tasks). " +
       "State (variables, helpers) persists across calls; top-level await is supported; the last expression is printed. " +
       "Primitives: page.goto(url), page.info(), page.evaluate(fn|expr, arg?), page.waitFor(fn, arg?, {timeoutMs?}), " +
-      "page.snapshot({maxNodes?,maxDepth?}) -> {url,title,nodes:[{ref,role,name,...}]}, page.click(ref), page.clickAt(x,y), " +
+      "page.snapshot({maxNodes?,maxDepth?,format?:\"tree\"|\"flat\"}) -> {url,title,tree:{role,name,children[]}} (default, " +
+      "nested) or {nodes:[...]} with format:\"flat\" (legacy flat node list), " +
+      "page.snapshotVisible({maxNodes?,maxDepth?}) -> only nodes in the current viewport, " +
+      "page.snapshotDiff(before, after, {key?:\"content\"|\"structural\"}) -> {added,removed,changed,unchangedCount} (no extra browser call), " +
+      "page.click(ref), page.clickAt(x,y), " +
       "page.type(ref,text), page.typeFocused(text), page.focus(ref), page.scroll(ref), page.close(), tabs.list(), tabs.open(url), " +
       "tabs.get(targetId), screenshot(), snapshot(), artifact(name, data), checkpoint(name, value), reconnect(). " +
       "Downloads: page.download(url, path?) saves a file (image/video/anything) into the task workspace using the " +
@@ -499,7 +504,7 @@ export const REPL_TOOLS: readonly BrowserToolDef[] = [
           type: "string",
           description:
             "JavaScript to run as one REPL cell. Top-level await allowed. Example: " +
-            "`const s = await page.snapshot(); await page.click(s.nodes.find(n => n.name === 'Go').ref)`",
+            "`const s = await page.snapshot(); await page.click(s.tree.children.find(n => n.name === 'Go')?.ref)`",
         },
         timeoutMs: {
           type: "number",

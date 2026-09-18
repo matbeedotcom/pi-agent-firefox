@@ -107,7 +107,7 @@ function contractBlock(spec: SkillJobSpec): string {
     `eventId: ${spec.eventId}`,
     `skillKey: ${spec.skill.key}`,
     `skillRevision: ${spec.skill.revision}`,
-    'When done, call skill_report EXACTLY ONCE with these exact values, a decision ("clear" | "suggest" | "abstain"), a one-sentence explanation, and replacementText only when decision is "suggest". Then stop. You have no access to the user\'s chat session.',
+    'When done, call skill_report EXACTLY ONCE with a decision ("clear" | "suggest" | "abstain"), a one-sentence explanation, and replacementText only when decision is "suggest". Do NOT provide jobId/eventId/skillKey/skillRevision: the runtime binds the job identity for you. Then stop. You have no access to the user\'s chat session.',
   ].join("\n");
 }
 
@@ -136,23 +136,31 @@ function syntheticSkill(skill: RegisteredSkill): Skill {
   };
 }
 
-function reportTool(onReport: (raw: Record<string, unknown>) => void): ToolDefinition {
+function reportTool(spec: SkillJobSpec, onReport: (raw: Record<string, unknown>) => void): ToolDefinition {
   return defineTool({
     name: "skill_report",
     label: "Skill Report",
     description:
-      "Report the verified result of this skill job. Call exactly once with the exact job identity values from the system prompt, then stop.",
+      "Report the verified result of this skill job. Call exactly once with a decision, then stop. The job identity (jobId/eventId/skillKey/skillRevision) is bound by the runtime; you do not need to provide it.",
     parameters: Type.Object({
-      jobId: Type.String(),
-      eventId: Type.String(),
-      skillKey: Type.String(),
-      skillRevision: Type.String(),
       decision: Type.Union([Type.Literal("clear"), Type.Literal("suggest"), Type.Literal("abstain")]),
       explanation: Type.Optional(Type.String()),
       replacementText: Type.Optional(Type.String()),
     }),
     execute: async (toolCallId, params) => {
-      onReport(params as Record<string, unknown>);
+      const raw = { ...(params as Record<string, unknown>) };
+      // The job identity is immutable and known to the runner: ALWAYS bind it
+      // from the spec, ignoring whatever the model echoes. Small local models
+      // hallucinate opaque identity strings (jobId/revision) reliably enough
+      // to make echo-verification a dead end; the security property (a report
+      // can never name a foreign job) is preserved because the identity is the
+      // spec's, never the model's. The model supplies only decision,
+      // explanation, and replacementText.
+      raw.jobId = spec.jobId;
+      raw.eventId = spec.eventId;
+      raw.skillKey = spec.skill.key;
+      raw.skillRevision = spec.skill.revision;
+      onReport(raw);
       return { content: [{ type: "text" as const, text: "Report recorded. Stop now." }], details: { recorded: true } };
     },
   });
@@ -225,7 +233,7 @@ export class IsolatedSkillRunner {
       systemPromptAppend: [skillBlock(spec), contractBlock(spec)],
       taskPrompt: taskPrompt(spec),
       tools: ["skill_report", ...granted.map((t) => t.name)],
-      customTools: [reportTool((raw) => { rawReport = raw; }), ...granted],
+      customTools: [reportTool(spec, (raw) => { rawReport = raw; }), ...granted],
     };
 
     let session: IsolatedAgentSession;
@@ -265,7 +273,7 @@ export class IsolatedSkillRunner {
       this.opts.log.info(`skill job ${spec.jobId}: report accepted (decision=${report.decision})`);
       return { ok: true, report, transcript };
     } catch (err) {
-      this.opts.log.warn(`skill job ${spec.jobId}: invalid report: ${message(err)}`);
+      this.opts.log.warn(`skill job ${spec.jobId}: invalid report: ${message(err)} raw=${JSON.stringify(rawReport)}`);
       return { ok: false, transcript, error: `invalid report: ${message(err)}` };
     }
   }
@@ -320,6 +328,10 @@ async function defaultSessionFactory(opts: CreateIsolatedSessionOptions): Promis
     agentDir: opts.agentDir,
     ...(opts.modelRuntime ? { modelRuntime: opts.modelRuntime } : {}),
     ...(opts.model !== undefined ? { model: opts.model as never } : {}),
+    // Skill jobs run under a hard execution deadline (protocol cap 10 s):
+    // reasoning burns most of that budget before the first token, so the
+    // isolated job session always runs with reasoning off.
+    thinkingLevel: "off",
     tools: opts.tools,
     customTools: opts.customTools,
     resourceLoader: loader,

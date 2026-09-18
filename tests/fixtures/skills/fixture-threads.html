@@ -44,14 +44,10 @@
     (function () {
       "use strict";
 
-      // Respect the add-on: if the page-runtime held the gesture, it has
-      // already preventDefault()'d the event — the site must not post.
-      // (The page itself never calls preventDefault().)
+      // NON-COOPERATIVE handler: posts whenever it runs. A held gesture is
+      // stopped by the runtime (stopImmediatePropagation) and never reaches
+      // this listener, so no defaultPrevented check exists to honor.
       function submit(event, threadPrefix, composer) {
-        if (event.defaultPrevented) {
-          window.__fixture.record("held", { thread: threadPrefix });
-          return;
-        }
         var draft = composer.value.trim();
         if (draft === "") {
           window.__fixture.record("rejected-empty");

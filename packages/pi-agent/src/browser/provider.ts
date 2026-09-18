@@ -20,6 +20,7 @@ import {
   isContactsTool,
   isMailTool,
   isMailMutationTool,
+  isReplTool,
   COMPOSE_TOOL_TIMEOUT_MS,
   CONTACTS_TOOL_TIMEOUT_MS,
   MAIL_ATTACHMENT_TIMEOUT_MS,
@@ -77,6 +78,16 @@ export interface BrowserToolTransport {
 
 /** Incremental progress for an in-flight tool call (x-pi-browser/tool_update). */
 export type BrowserToolUpdate = BrowserToolUpdateParams["update"];
+
+/** JSON.stringify that never throws (cycles, BigInt, undefined) — tool I/O logging. */
+function safeJson(value: unknown): string {
+  try {
+    const out = JSON.stringify(value);
+    return out === undefined ? String(value) : out;
+  } catch {
+    return String(value);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Normalization
@@ -503,9 +514,23 @@ export class CapabilityToolProvider {
     ownerClientId: string | undefined,
     ownerApplication: AgentApplication,
   ): ToolSpec {
-    const executor: ReplToolExecutor = (sessionId, tool, args) =>
+    return this.repl.toolSpec(idRef, this.replExecutor(mode, mcpServerId, ownerClientId, ownerApplication));
+  }
+
+  /**
+   * The REPL executor shared by the ACP tool spec and the MCP/bridge path:
+   * routes a cell's page.* / tabs.* primitive through the standard routeTool
+   * path with the owning session's routing context, so in-cell browser tool
+   * calls keep the same transport + permission prompts as direct calls.
+   */
+  private replExecutor(
+    mode: BrowserMode,
+    mcpServerId: string | undefined,
+    ownerClientId: string | undefined,
+    ownerApplication: AgentApplication,
+  ): ReplToolExecutor {
+    return (sessionId, tool, args) =>
       this.routeTool(sessionId, `repl:${tool}:${crypto.randomUUID()}`, tool, args, mode, mcpServerId, ownerClientId, ownerApplication);
-    return this.repl.toolSpec(idRef, executor);
   }
 
   /**
@@ -522,6 +547,18 @@ export class CapabilityToolProvider {
     toolCallId?: string;
     ctx?: import("../tool-bridge.js").BridgeSessionContext;
   }): Promise<NormalizedToolResult> {
+    // The `javascript` REPL is host-executed (it owns a V8 worker child +
+    // per-session cell state) — it must run in THIS process, not be routed
+    // to the connected app like a browser tool. Runs for REPL tools only.
+    if (isReplTool(opts.tool)) {
+      const mode = opts.ctx?.mode ?? "legacy";
+      const spec = this.repl.toolSpec(
+        { id: opts.sessionId },
+        this.replExecutor(mode, opts.ctx?.mcpServerId, opts.ctx?.ownerClientId, opts.ctx?.ownerApplication ?? "firefox"),
+      );
+      const res = await spec.execute(opts.toolCallId ?? `bridge:${opts.tool}:${crypto.randomUUID()}`, opts.args, undefined);
+      return { content: res.content };
+    }
     return this.routeTool(
       opts.sessionId,
       opts.toolCallId ?? `bridge:${opts.tool}:${crypto.randomUUID()}`,
@@ -619,11 +656,16 @@ export class CapabilityToolProvider {
       startedAt: Date.now(),
     });
     const t0 = Date.now();
+    // The round-trip line logs only duration + isError — with
+    // PI_BROWSER_LOG_TOOL_IO the full request args and response are logged too.
+    const toolIo = this.logToolIo();
+    if (toolIo) this.log.info(`${toolName}: REQUEST ${safeJson(args)}`);
     try {
       const result = await this.executeWithTracking(transport, sessionId, toolName, args, toolCallId);
       this.log.info(
         `${toolName}: tool round-trip ${Date.now() - t0}ms (client=${target?.clientId ?? "legacy"}, transport=${useOwnerMcp ? "mcp-acp" : "callback"}, isError=${result.isError ?? false})`,
       );
+      if (toolIo) this.log.info(`${toolName}: RESPONSE ${safeJson(result)}`);
       return result;
     } catch (err) {
       this.log.info(`${toolName}: tool round-trip FAILED after ${Date.now() - t0}ms: ${String(err)}`);
@@ -644,6 +686,16 @@ export class CapabilityToolProvider {
     if (!raw) return false;
     const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
     return list.includes("*") || list.includes(toolName);
+  }
+
+  /**
+   * Test-only I/O logging seam: PI_BROWSER_LOG_TOOL_IO=1 makes the host log
+   * the FULL request args and response of every browser tool call. The skills
+   * e2e matrix sets it so each scripted step is reconstructable from
+   * host.log; off in production.
+   */
+  private logToolIo(): boolean {
+    return process.env.PI_BROWSER_LOG_TOOL_IO === "1";
   }
 
   // ------------------------------------------------------------------

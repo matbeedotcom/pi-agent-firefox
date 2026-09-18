@@ -8,7 +8,7 @@ import net from "node:net";
 import { createLogger } from "../src/logger.js";
 import { startMcpBrowserServer, type McpBrowserServerHandle } from "../src/native-host/mcp-server.js";
 import type { BrowserToolBridge } from "../src/tool-bridge.js";
-import { BROWSER_TOOL_SCHEMAS } from "../src/browser/schemas.js";
+import { BROWSER_TOOL_SCHEMAS, REPL_TOOL_SCHEMAS } from "../src/browser/schemas.js";
 
 const quiet = createLogger({ level: "error", stderr: { write: () => true } });
 
@@ -108,8 +108,11 @@ test("mcp server: initialize handshake + tools/list surface", async () => {
 
   const list = (await client.request("tools/list")) as { tools: Array<{ name: string }> };
   const names = list.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, BROWSER_TOOL_SCHEMAS.map((t) => t.name).sort());
-  assert.equal(names.length, 24);
+  // Browser tools (add-on-routed) + the host-side `javascript` REPL.
+  const expected = [...BROWSER_TOOL_SCHEMAS, ...REPL_TOOL_SCHEMAS].map((t) => t.name).sort();
+  assert.deepEqual(names, expected);
+  assert.ok(names.includes("javascript"));
+  assert.equal(names.length, 25);
   client.close();
 });
 

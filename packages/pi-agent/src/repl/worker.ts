@@ -250,11 +250,43 @@ const page = {
     }
   },
   /**
-   * Structured accessibility snapshot: { url, title, nodes } where each node
-   * carries a stable `ref` (valid until the page navigates) usable with
-   * page.click/page.type, plus role, name, and state/geometry fields.
+   * Structured accessibility snapshot of the bound tab. Defaults to a nested
+   * tree: { url, title, tree } where tree is the single synthetic root whose
+   * `children` hold the walk's nodes ({ role, name, children[] }, pre-order,
+   * unnamed containers promoted). Every real node carries a stable `ref` (valid
+   * until the page navigates) usable with page.click/page.type, plus role, name,
+   * and state/geometry fields. Pass format: "flat" (or "nodes") for the legacy
+   * flat node list { url, title, nodes[] }.
    */
-  async snapshot(options: { maxNodes?: number; maxDepth?: number; frame?: string | number } = {}) {
+  async snapshot(options: {
+    maxNodes?: number;
+    maxDepth?: number;
+    frame?: string | number;
+    format?: "tree" | "flat" | "nodes";
+  } = {}) {
+    if (options.format === "flat" || options.format === "nodes") {
+      return this.snapshotFlat(options);
+    }
+    const tree = (await callTool("browser_get_accessibility_tree", {
+      format: "tree",
+      ...(options.maxNodes !== undefined ? { maxNodes: options.maxNodes } : {}),
+      ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
+      ...(options.frame !== undefined ? { frame: options.frame } : {}),
+    })) as { tree?: unknown; truncated?: boolean; note?: string } | undefined;
+    const info = await this.info();
+    return {
+      ...info,
+      tree: tree?.tree,
+      ...(tree?.truncated ? { truncated: true } : {}),
+      ...(tree?.note ? { note: tree.note } : {}),
+    };
+  },
+  /**
+   * Flat variant of page.snapshot() — the legacy node list { url, title, nodes[] }
+   * (pre-order, stable refs). `snapshot({ format: "flat" })` and the viewport
+   * filter page.snapshotVisible() route through this.
+   */
+  async snapshotFlat(options: { maxNodes?: number; maxDepth?: number; frame?: string | number } = {}) {
     const tree = (await callTool("browser_get_accessibility_tree", {
       format: "nodes",
       ...(options.maxNodes !== undefined ? { maxNodes: options.maxNodes } : {}),
@@ -267,6 +299,154 @@ const page = {
       nodes: tree?.nodes ?? [],
       ...(tree?.truncated ? { truncated: true } : {}),
       ...(tree?.note ? { note: tree.note } : {}),
+    };
+  },
+  /**
+   * Snapshot the accessibility tree restricted to elements in the CURRENT
+   * viewport: nodes whose rect intersects the visible area. `rect` is
+   * viewport-relative, so the test is a plain intersection with no scroll
+   * offset. Rect-less container nodes (e.g. a bare form/banner) have no box
+   * of their own and are dropped. Pure post-filter over the flat snapshot.
+   */
+  async snapshotVisible(options: { maxNodes?: number; maxDepth?: number; frame?: string | number } = {}) {
+    const base = await this.snapshotFlat(options);
+    const vp = (await this.evaluate(
+      "() => ({ w: innerWidth, h: innerHeight })",
+      undefined,
+      options.frame !== undefined ? { frame: options.frame } : {},
+    )) as { w: number; h: number } | undefined;
+    if (!vp || !Number.isFinite(vp.w) || !Number.isFinite(vp.h)) {
+      throw new Error("page.snapshotVisible: could not read the viewport size.");
+    }
+    const inView = (n: { rect?: { x: number; y: number; width: number; height: number } }) => {
+      const r = n.rect;
+      if (!r) return false;
+      return r.x < vp.w && r.x + r.width > 0 && r.y < vp.h && r.y + r.height > 0;
+    };
+    const all = (base.nodes ?? []) as Array<{ rect?: { x: number; y: number; width: number; height: number } }>;
+    const nodes = all.filter(inView);
+    return {
+      ...base,
+      nodes,
+      visibleCount: nodes.length,
+      viewport: { width: vp.w, height: vp.h },
+    };
+  },
+  /**
+   * Diff two snapshots (from two snapshot()/snapshotVisible() calls) — pure
+   * in-worker computation, NO extra browser round-trip. `ref` changes between
+   * snapshots, so identity is a content signature by default (content mode:
+   * role+name+href+value+type, so an in-place value change shows as one removed
+   * + one added); structural mode keys only role+href and reports in-place
+   * name/value changes as `changed`.
+   * Pass the full snapshot objects — tree format carries `tree`, flat format
+   * carries `nodes` — or a bare node[]. A tree format is flattened pre-order
+   * (synthetic root excluded) before diffing.
+   */
+  snapshotDiff(
+    before: unknown,
+    after: unknown,
+    options: { key?: "content" | "structural" } = {},
+  ) {
+    const flattenTree = (n: unknown): Array<Record<string, unknown>> => {
+      if (typeof n !== "object" || n === null)
+        return [];
+      const children = (n as { children?: unknown[] }).children;
+      const subs: Array<Record<string, unknown>> = Array.isArray(children) ? children.flatMap(flattenTree) : [];
+      return [n as Record<string, unknown>, ...subs];
+    };
+    const nodesOf = (v: unknown): Array<Record<string, unknown>> => {
+      if (Array.isArray(v)) {
+        return v as Array<Record<string, unknown>>;
+      }
+      const obj = v as { nodes?: Array<Record<string, unknown>>; tree?: unknown } | null | undefined;
+      if (obj && Array.isArray(obj.nodes)) return obj.nodes;
+      if (obj && obj.tree !== undefined) return (obj.tree as { children?: unknown[] }).children?.flatMap(flattenTree) ?? [];
+      return [];
+    };
+    const b = nodesOf(before);
+    const a = nodesOf(after);
+    const mode = options.key === "structural" ? "structural" : "content";
+    type S = { n: Record<string, unknown>; content?: Record<string, unknown> };
+    const contentOf = (n: Record<string, unknown>) => {
+      const c: Record<string, unknown> = {};
+      for (const k of ["role", "name", "href", "value", "type"] as const) {
+        const v = n[k];
+        if (v !== undefined) c[k] = v;
+      }
+      return c;
+    };
+    const keyOf = (n: Record<string, unknown>): string =>
+      mode === "structural"
+        ? `${String(n.role ?? "")}::${String(n.href ?? "")}`
+        : JSON.stringify(contentOf(n));
+    type Bucket = { count: number; items: S[] };
+    const multiset = (arr: Array<Record<string, unknown>>) => {
+      const m = new Map<string, Bucket>();
+      for (const n of arr) {
+        const k = keyOf(n);
+        let e = m.get(k);
+        if (!e) {
+          e = { count: 0, items: [] };
+          m.set(k, e);
+        }
+        e.count += 1;
+        e.items.push({ n, ...(mode === "content" ? { content: contentOf(n) } : {}) });
+      }
+      return m;
+    };
+    const mb = multiset(b);
+    const ma = multiset(a);
+    const added: S[] = [];
+    const removed: S[] = [];
+    const unchanged: S[] = [];
+    const changed: Array<{ key: string; before: unknown; after: unknown }> = [];
+    const pushMany = (out: S[], bucket: Bucket | undefined, limit = 25) => {
+      if (!bucket) return;
+      for (let i = 0; i < bucket.items.length && out.length < limit; i++) out.push(bucket.items[i]);
+    };
+    for (const [k, ba] of mb) {
+      const aa = ma.get(k);
+      const min = Math.min(ba.count, aa?.count ?? 0);
+      if (min > 0) {
+        for (let i = 0; i < min; i++) pushMany(unchanged, ba);
+      }
+      if (ba.count > (aa?.count ?? 0)) pushMany(removed, ba);
+    }
+    for (const [k, aa] of ma) {
+      const ba = mb.get(k);
+      const min = Math.min(aa.count, ba?.count ?? 0);
+      if (aa.count > min) pushMany(added, aa);
+    }
+    if (mode === "structural") {
+      for (const [k, ba] of mb) {
+        const aa = ma.get(k);
+        if (!aa) continue;
+        const min = Math.min(ba.count, aa.count);
+        for (let i = 0; i < min && i < 25; i++) {
+          const x = ba.items[i];
+          const y = aa.items[i];
+          const cb = JSON.stringify(contentOf(x.n));
+          const ca = JSON.stringify(contentOf(y.n));
+          if (cb !== ca) changed.push({ key: k, before: JSON.parse(cb), after: JSON.parse(ca) });
+        }
+      }
+    }
+    const countByRole = (arr: S[]) =>
+      arr.reduce<Record<string, number>>((acc, { n }) => {
+        const r = String(n.role ?? "?");
+        acc[r] = (acc[r] ?? 0) + 1;
+        return acc;
+      }, {});
+    return {
+      mode,
+      added: { count: added.length, items: added },
+      removed: { count: removed.length, items: removed },
+      changed: { count: changed.length, items: changed },
+      unchangedCount: unchanged.length,
+      unchangedRoles: countByRole(unchanged),
+      ...(before && !Array.isArray(before) ? { beforeUrl: (before as { url?: string }).url } : {}),
+      ...(after && !Array.isArray(after) ? { afterUrl: (after as { url?: string }).url } : {}),
     };
   },
   /** Click an element by ref (from snapshot()/browser_get_dom). */
@@ -463,6 +643,14 @@ Object.assign(realm, {
   },
   async snapshot(options?: { maxNodes?: number; maxDepth?: number; frame?: string | number }) {
     return page.snapshot(options);
+  },
+  /** Accessible tree restricted to the elements in the current viewport. */
+  async snapshotVisible(options?: { maxNodes?: number; maxDepth?: number; frame?: string | number }) {
+    return page.snapshotVisible(options);
+  },
+  /** Diff two snapshot node arrays — see page.snapshotDiff. */
+  snapshotDiff(before: unknown, after: unknown, options?: { key?: "content" | "structural" }) {
+    return page.snapshotDiff(before, after, options);
   },
   async artifact(name: string, data: string | Uint8Array) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(name))

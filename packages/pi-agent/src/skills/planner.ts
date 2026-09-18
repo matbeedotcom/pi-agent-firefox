@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   normalizeSkillHost, type PagePlan, type RegisteredSkill, type SkillApplication,
-  type SkillCapability, type SkillEventName, type SkillPlanRule, type SkillScope, type SkillSubscription,
+  type SkillCapability, type SkillPlanRule, type SkillPackageManifest, type SkillSubscription,
 } from "@pi-browser/protocol";
 
 export interface SkillGrant {
@@ -9,7 +9,6 @@ export interface SkillGrant {
   /** Approval is revision-bound: package changes require a fresh grant. */
   revision: string;
   capabilities: SkillCapability[];
-  scope?: SkillScope;
   accounts?: string[];
   mode?: "advisory" | "review-before-submit";
   learningEnabled?: boolean;
@@ -21,75 +20,76 @@ export interface PlanContext {
   documentGeneration: string;
   accountId?: string;
 }
-export interface SkillAdapterCoverage {
-  id: string;
-  version: string;
-  hosts: string[];
-  events: SkillEventName[];
-  gates: SkillEventName[];
-}
 // The plan wire contract lives in @pi-browser/protocol (shared with the
 // coordinator); the planner produces it.
 export type { PagePlan, SkillPlanRule as PageRule } from "@pi-browser/protocol";
 
-function matchesScope(scope: SkillScope, context: PlanContext, url: URL): boolean {
-  if (!scope.applications.includes(context.application)) return false;
+/** Package-level scope match: the manifest owns hosts, the URL is the truth. */
+function matchesPackage(manifest: SkillPackageManifest, context: PlanContext, url: URL): boolean {
+  if (manifest.application !== context.application) return false;
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (scope.hosts !== undefined || scope.subdomainHosts !== undefined) {
-    const exact = scope.hosts?.includes(host);
-    const subdomain = scope.subdomainHosts?.some((base) => host === base || host.endsWith(`.${base}`));
-    if (!exact && !subdomain) return false;
-  }
-  return scope.pathPrefixes === undefined || scope.pathPrefixes.some((prefix) => url.pathname.startsWith(prefix));
+  const exact = manifest.hosts.includes(host);
+  const subdomain = manifest.subdomainHosts?.some((base) => host === base || host.endsWith(`.${base}`)) ?? false;
+  if (!exact && !subdomain) return false;
+  return manifest.pathPrefixes === undefined || manifest.pathPrefixes.some((prefix) => url.pathname.startsWith(prefix));
 }
 
-/** Compact app/host index; global rules have a separate bounded bucket. No handlers are imported. */
+/**
+ * Compact app/host index over package manifests. The package IS its adapter:
+ * coverage of a subscription is derived from the manifest's own event
+ * definitions (validated at load), so a host-matched package's subscriptions
+ * are always covered — the only failure modes are revision and mode.
+ */
+function indexInto(buckets: Map<string, RegisteredSkill[]>, skill: RegisteredSkill): void {
+  const manifest = skill.manifest;
+  for (const host of new Set([...manifest.hosts, ...(manifest.subdomainHosts ?? [])])) {
+    const key = `${manifest.application}:${normalizeSkillHost(host)}`;
+    const entries = buckets.get(key) ?? [];
+    if (entries.length >= 4096) throw new Error("Host skill rule bucket exceeds limit");
+    entries.push(skill);
+    buckets.set(key, entries);
+  }
+}
+
 export class SkillsPlanner {
-  private readonly buckets = new Map<string, RegisteredSkill[]>();
-  private readonly global = new Map<SkillApplication, RegisteredSkill[]>();
+  private buckets: Map<string, RegisteredSkill[]>;
 
   constructor(skills: readonly RegisteredSkill[]) {
-    for (const skill of structuredClone(skills)) this.index(skill);
+    const buckets = new Map<string, RegisteredSkill[]>();
+    for (const skill of structuredClone(skills)) indexInto(buckets, skill);
+    this.buckets = buckets;
   }
 
-  private index(skill: RegisteredSkill): void {
-    const scope = skill.definition.scope;
-    for (const application of scope.applications) {
-      if (scope.hosts === undefined && scope.subdomainHosts === undefined) {
-        const entries = this.global.get(application) ?? [];
-        if (entries.length >= 64) throw new Error("Global skill rule bucket exceeds limit");
-        entries.push(skill);
-        this.global.set(application, entries);
-        continue;
-      }
-      for (const host of new Set([...(scope.hosts ?? []), ...(scope.subdomainHosts ?? [])])) {
-        const key = `${application}:${normalizeSkillHost(host)}`;
-        const entries = this.buckets.get(key) ?? [];
-        entries.push(skill);
-        this.buckets.set(key, entries);
-      }
-    }
+  /**
+   * Replace the index atomically from a fresh registry snapshot (catalog
+   * reload). The instance stays the same object, so per-client protocol
+   * surfaces keep compiling against the new index; already-compiled plans
+   * keep their stored rules until re-planned.
+   */
+  reload(skills: readonly RegisteredSkill[]): void {
+    const buckets = new Map<string, RegisteredSkill[]>();
+    for (const skill of structuredClone(skills)) indexInto(buckets, skill);
+    this.buckets = buckets;
   }
 
   private candidates(context: PlanContext, url: URL): RegisteredSkill[] {
     const found = new Map<string, RegisteredSkill>();
-    for (const skill of this.global.get(context.application) ?? []) found.set(skill.key, skill);
     const labels = url.hostname.toLowerCase().replace(/\.$/, "").split(".");
     for (let i = 0; i < labels.length; i++) {
       for (const skill of this.buckets.get(`${context.application}:${labels.slice(i).join(".")}`) ?? []) found.set(skill.key, skill);
     }
-    return [...found.values()].filter((skill) => matchesScope(skill.definition.scope, context, url));
+    return [...found.values()].filter((skill) => matchesPackage(skill.manifest, context, url));
   }
 
-  compile(context: PlanContext, grants: ReadonlyMap<string, SkillGrant>, adapters: readonly SkillAdapterCoverage[], version: number, now = Date.now()): PagePlan {
+  compile(context: PlanContext, grants: ReadonlyMap<string, SkillGrant>, version: number, now = Date.now()): PagePlan {
     const url = new URL(context.url);
     if (!["http:", "https:"].includes(url.protocol)) throw new Error("Unsupported document URL");
     const rules: SkillPlanRule[] = [];
     const unavailable: PagePlan["unavailable"] = [];
     for (const skill of this.candidates(context, url)) {
       const grant = grants.get(skill.key);
-      if (!grant || !eligibleGrant(skill, grant, context, url)) continue;
-      const result = compileRule(skill, grant, adapters, url.hostname.toLowerCase().replace(/\.$/, ""));
+      if (!grant || !eligibleGrant(skill, grant, context)) continue;
+      const result = compileRule(skill, grant);
       if (typeof result === "string") unavailable.push({ skillKey: skill.key, reason: result });
       else rules.push(result);
     }
@@ -103,25 +103,39 @@ export class SkillsPlanner {
   }
 }
 
-function eligibleGrant(skill: RegisteredSkill, grant: SkillGrant, context: PlanContext, url: URL): boolean {
+function eligibleGrant(skill: RegisteredSkill, grant: SkillGrant, context: PlanContext): boolean {
   if (!grant.enabled || skill.definition.type === "active") return false;
-  if (grant.scope && !matchesScope(grant.scope, context, url)) return false;
   if (grant.accounts && (!context.accountId || !grant.accounts.includes(context.accountId))) return false;
   return skill.definition.type !== "passive" || grant.learningEnabled === true;
 }
 
-function compileRule(skill: RegisteredSkill, grant: SkillGrant, adapters: readonly SkillAdapterCoverage[], host: string): SkillPlanRule | string {
+function compileRule(skill: RegisteredSkill, grant: SkillGrant): SkillPlanRule | string {
   if (grant.revision !== skill.revision) return "Package changed; review permissions";
   const definition = skill.definition;
   const capabilities = definition.capabilities.filter((capability) => grant.capabilities.includes(capability));
   if (!capabilities.includes("context.read")) return "Context access is not granted";
-  const subscriptions = definition.subscriptions ?? definition.observations ?? [];
-  const adapter = adapters.find((candidate) => candidate.hosts.includes(host) && subscriptions.every((sub) => candidate.events.includes(sub.event)));
-  if (!adapter) return "No supported adapter for these events";
+  const subscriptions: SkillSubscription[] = definition.subscriptions ?? definition.observations ?? [];
   const mode = grant.mode ?? "advisory";
-  if (mode === "review-before-submit" && !subscriptions.some((sub) => sub.event === "comment.before-submit" && adapter.gates.includes(sub.event))) {
-    return "Review before submit is unsupported by this adapter";
+  if (mode === "review-before-submit" && !subscriptions.some((sub) => skill.manifest.events[sub.event]?.kind === "gate")) {
+    return "Review before submit requires a gate event subscription";
   }
-  return { skillKey: skill.key, skillRevision: skill.revision, adapterId: adapter.id, adapterVersion: adapter.version,
+  const events: SkillPlanRule["events"] = {};
+  for (const sub of subscriptions) {
+    const event = skill.manifest.events[sub.event];
+    if (!event) return `Package event is missing: ${sub.event}`;
+    events[sub.event] = structuredClone(event);
+  }
+  // Runtime placement: JS-dialect targets must execute where string codegen
+  // is legal, and the gate consult is synchronous — so ANY js target in the
+  // rule's events moves the WHOLE rule to the main world. Manifest-derived,
+  // static, auditable.
+  const usedTargets = new Set<string>();
+  for (const event of Object.values(events)) {
+    for (const matcher of [...(event.sequence ?? []), ...(event.alternatives ?? []).flat()]) usedTargets.add(matcher.target);
+    for (const field of Object.values(event.payload ?? {})) usedTargets.add(field.from);
+  }
+  const world = [...usedTargets].some((name) => skill.manifest.targets[name]?.kind === "js") ? "main" : "isolated";
+  return { skillKey: skill.key, skillRevision: skill.revision, packageId: skill.packageId, world,
+    targets: structuredClone(skill.manifest.targets), events,
     subscriptions: structuredClone(subscriptions), mode, capabilities };
 }

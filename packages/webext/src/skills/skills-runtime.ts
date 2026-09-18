@@ -1,10 +1,12 @@
 /**
  * Skills runtime — the addon-background facade that binds the transport
- * (SkillsCoordinator) to one submission-gate session per document
- * (skills-runtime-design.md §2, §7, §8, §13 "addon-coordinator").
+ * (SkillsCoordinator) to one submission-gate session per (document, gate
+ * event) (skills-runtime-design.md §2, §7, §8, §13 "addon-coordinator").
  *
  * Responsibilities:
- * - Per-document ReviewSession lifecycle (one gate per eligible document).
+ * - Per-(document, gate event) ReviewSession lifecycle. A document may
+ *   carry several rules (several skill packages); each rule with a gate
+ *   event owns its own session, its own review chain, and its own card view.
  * - Job mapping: the gate's opaque ticket IDs (jobId/eventId) travel to the
  *   host as the transport eventId; the host's per-rule jobIds are mapped
  *   back by skillKey so skills_result deliveries reach the right ticket.
@@ -41,27 +43,30 @@ import type {
 
 interface SessionEntry {
   document: DocumentIdentity;
+  /** Qualified gate event identity `<packageId>:<local>`. */
+  event: string;
   session: ReviewSession;
 }
 
 interface JobMapping {
-  docKey: string;
+  sessionKey: string;
   gateJobId: string;
   skillKey: string;
 }
 
 export interface SkillsRuntimeOptions {
   application: "firefox" | "thunderbird";
-  mode: "advisory" | "review-before-submit";
   /** Client→host request channel (same native port as handleHostRequest). */
   request: <T = unknown>(method: string, params?: unknown, timeoutMs?: number) => Promise<T>;
-  /** Card/management sync on every gate transition, per document. */
-  onCardState?: (document: DocumentIdentity, view: GateView) => void;
+  /** Card/management sync on every gate transition, per (document, event). */
+  onCardState?: (document: DocumentIdentity, view: GateView, event: string) => void;
   log?: (message: string) => void;
 }
 
 export interface SkillsArmInput {
   document: DocumentIdentity;
+  /** Qualified gate event identity `<packageId>:<local>` this arm belongs to. */
+  event: string;
   /** Fresh bounded draft + target + reviewers read by the host just before arming. */
   identity: Omit<GateIdentity, "planVersion">;
   /** Current compiled plan for this document (from SkillsRuntime.plan). */
@@ -82,7 +87,7 @@ export class SkillsRuntime {
   readonly history: ActivationHistory;
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly jobIndex = new Map<string, JobMapping>();
-  private readonly onCardState: (document: DocumentIdentity, view: GateView) => void;
+  private readonly onCardState: (document: DocumentIdentity, view: GateView, event: string) => void;
   private readonly log: (message: string) => void;
 
   constructor(private readonly opts: SkillsRuntimeOptions) {
@@ -126,22 +131,49 @@ export class SkillsRuntime {
     return this.coordinator.plan(document);
   }
 
+  private sessionKey(docKey: string, event: string): string {
+    return `${docKey}|${event}`;
+  }
+
+  private sessionsForDoc(docKey: string): SessionEntry[] {
+    return [...this.sessions.entries()]
+      .filter(([key]) => key.startsWith(`${docKey}|`))
+      .map(([, entry]) => entry);
+  }
+
   /**
-   * Arm one document for review. The host reads a fresh bounded draft and
-   * target, compiles the plan, and passes both; exactly ONE transport event
-   * carries the snapshot (the host fans it out to every subscribing rule).
+   * Arm one (document, gate event) for review. The host reads a fresh
+   * bounded payload, compiles the plan, and passes both; exactly ONE
+   * transport event carries the snapshot, routed to the rules subscribed
+   * to THIS event (the rule owns its gate).
    */
   async arm(input: SkillsArmInput): Promise<SkillsArmResult> {
     const docKey = this.coordinator.docKey(input.document);
-    let entry = this.sessions.get(docKey);
+    // One session per (document, gate): the review result is a property of
+    // the draft, not of which event armed it (design §8 — one local
+    // coordinator per composer). A speculative arm (draft.paused) lands in
+    // the owning rule's GATE session, so the card shows the review BEFORE
+    // the first submit and the submit consults the same session. The
+    // transport keeps the armed event so the host schedules the right job
+    // kind (speculative vs gate).
+    const owner = input.plan.rules.find((rule) =>
+      rule.subscriptions.some((sub) => `${rule.packageId}:${sub.event}` === input.event));
+    let gateSub: { event: string } | undefined;
+    if (owner) {
+      const ownerRule = owner;
+      gateSub = ownerRule.subscriptions.find((sub) => ownerRule.events[sub.event]?.kind === "gate");
+    }
+    const sessionEvent = gateSub && owner ? `${owner.packageId}:${gateSub.event}` : input.event;
+    const key = this.sessionKey(docKey, sessionEvent);
+    let entry = this.sessions.get(key);
     if (!entry) {
       const session = new ReviewSession({
-        mode: this.opts.mode,
+        mode: owner?.mode ?? "review-before-submit",
         history: this.history,
-        onState: (view) => this.onCardState(entry!.document, view),
+        onState: (view) => this.onCardState(entry!.document, view, sessionEvent),
       });
-      entry = { document: input.document, session };
-      this.sessions.set(docKey, entry);
+      entry = { document: input.document, event: sessionEvent, session };
+      this.sessions.set(key, entry);
     }
     entry.document = input.document;
     const tickets = entry.session.arm({ ...input.identity, planVersion: input.plan.planVersion });
@@ -151,7 +183,7 @@ export class SkillsRuntime {
     // skills_result echoes it back onto the exact armed identity.
     const result = await this.coordinator.submitEvent({
       document: input.document,
-      event: "comment.before-submit",
+      event: input.event,
       interactionId: input.identity.interactionId,
       planVersion: input.plan.planVersion,
       contextRevision: input.identity.contextRevision,
@@ -164,7 +196,7 @@ export class SkillsRuntime {
       // No job will ever deliver: degrade the gate to a usable local bypass
       // instead of claiming protection that cannot clear (design §8).
       entry.session.failReview(`${result.status}${result.reason ? `: ${result.reason}` : ""}`);
-      this.log(`skills arm: event not accepted for ${docKey}: ${result.status}${result.reason ? ` (${result.reason})` : ""}`);
+      this.log(`skills arm: event not accepted for ${key}: ${result.status}${result.reason ? ` (${result.reason})` : ""}`);
       return { tickets, jobs: [] };
     }
     // Map host jobIds → gate ticket jobIds by skillKey (unique per plan).
@@ -176,7 +208,7 @@ export class SkillsRuntime {
         this.log(`skills arm: host job for unknown reviewer ${job.skillKey}; ignored`);
         continue;
       }
-      this.jobIndex.set(job.jobId, { docKey, gateJobId, skillKey: job.skillKey });
+      this.jobIndex.set(job.jobId, { sessionKey: key, gateJobId, skillKey: job.skillKey });
       jobs.push(job);
     }
     return { tickets, jobs };
@@ -193,37 +225,52 @@ export class SkillsRuntime {
       return;
     }
     this.jobIndex.delete(params.jobId);
-    const entry = this.sessions.get(mapping.docKey);
+    const entry = this.sessions.get(mapping.sessionKey);
     if (!entry) return;
     entry.session.ingest({ ...params, jobId: mapping.gateJobId });
   }
 
-  /** Synchronous gate consult before a submit chain (per document). */
-  gesture(document: DocumentIdentity, gesture: SubmissionGesture): "allow" | "hold" | "duplicate" {
-    const entry = this.sessions.get(this.coordinator.docKey(document));
-    return entry ? entry.session.gesture(gesture) : "hold";
+  /** Synchronous gate consult before a submit chain (per document, per event). */
+  gesture(document: DocumentIdentity, event: string, gesture: SubmissionGesture): "allow" | "hold" | "duplicate" {
+    const key = this.sessionKey(this.coordinator.docKey(document), event);
+    return this.sessions.get(key)?.session.gesture(gesture) ?? "hold";
   }
 
-  draftChanged(document: DocumentIdentity, identity: GateIdentity): void {
-    this.sessions.get(this.coordinator.docKey(document))?.session.draftChanged(identity);
+  draftChanged(document: DocumentIdentity, event: string, identity: GateIdentity): void {
+    const key = this.sessionKey(this.coordinator.docKey(document), event);
+    this.sessions.get(key)?.session.draftChanged(identity);
   }
 
-  compositionChanged(document: DocumentIdentity, composing: boolean): void {
-    this.sessions.get(this.coordinator.docKey(document))?.session.compositionChanged(composing);
+  compositionChanged(document: DocumentIdentity, event: string, composing: boolean): void {
+    const key = this.sessionKey(this.coordinator.docKey(document), event);
+    this.sessions.get(key)?.session.compositionChanged(composing);
   }
 
-  /** User bypass / keep-own-text on one document's gate. */
-  authorize(document: DocumentIdentity): boolean {
-    return this.sessions.get(this.coordinator.docKey(document))?.session.authorize() ?? false;
+  /** User bypass / keep-own-text on one (document, event) gate. */
+  authorize(document: DocumentIdentity, event?: string): boolean {
+    const docKey = this.coordinator.docKey(document);
+    const targets = event
+      ? [this.sessions.get(this.sessionKey(docKey, event))]
+      : this.sessionsForDoc(docKey);
+    return targets.some((entry) => entry?.session.authorize() ?? false);
   }
 
   /** Record a user-applied suggestion (history only; host re-arms fresh). */
-  applySuggestion(document: DocumentIdentity, params: Pick<SkillsResultParams, "jobId" | "eventId" | "skillKey" | "skillRevision">): void {
-    this.sessions.get(this.coordinator.docKey(document))?.session.applySuggestion(params);
+  applySuggestion(document: DocumentIdentity, event: string, params: Pick<SkillsResultParams, "jobId" | "eventId" | "skillKey" | "skillRevision">): void {
+    const key = this.sessionKey(this.coordinator.docKey(document), event);
+    this.sessions.get(key)?.session.applySuggestion(params);
   }
 
-  view(document: DocumentIdentity): GateView | undefined {
-    return this.sessions.get(this.coordinator.docKey(document))?.session.view();
+  view(document: DocumentIdentity, event?: string): GateView | undefined {
+    const docKey = this.coordinator.docKey(document);
+    if (event !== undefined) return this.sessions.get(this.sessionKey(docKey, event))?.session.view();
+    return this.sessionsForDoc(docKey).map((entry) => entry.session.view()).find((v) => v && v.state !== "closed");
+  }
+
+  /** All (document, event) sessions for one document (card sync payloads). */
+  sessionsForDocument(document: DocumentIdentity): { event: string; view: GateView }[] {
+    return this.sessionsForDoc(this.coordinator.docKey(document))
+      .map((entry) => ({ event: entry.event, view: entry.session.view() }));
   }
 
   /** Cancel pending skill work for one interaction (all documents). */
@@ -235,14 +282,18 @@ export class SkillsRuntime {
     return this.coordinator.status();
   }
 
-  /** Navigation / tab removal: drop the gate and its snapshots. */
+  /** Navigation / tab removal: drop the gates and their snapshots. */
   closeDocument(document: DocumentIdentity): void {
     const docKey = this.coordinator.docKey(document);
-    this.sessions.get(docKey)?.session.close();
-    this.sessions.delete(docKey);
+    for (const key of [...this.sessions.keys()]) {
+      if (key.startsWith(`${docKey}|`)) {
+        this.sessions.get(key)!.session.close();
+        this.sessions.delete(key);
+      }
+    }
     this.coordinator.forgetDocument(document);
     for (const [jobId, mapping] of this.jobIndex) {
-      if (mapping.docKey === docKey) this.jobIndex.delete(jobId);
+      if (mapping.sessionKey.startsWith(`${docKey}|`)) this.jobIndex.delete(jobId);
     }
   }
 
@@ -250,7 +301,7 @@ export class SkillsRuntime {
   state(): { documents: { key: string; view: GateView }[]; history: ReturnType<ActivationHistory["summarize"]> } {
     return {
       documents: [...this.sessions.values()].map((entry) => ({
-        key: this.coordinator.docKey(entry.document),
+        key: this.sessionKey(this.coordinator.docKey(entry.document), entry.event),
         view: entry.session.view(),
       })),
       history: this.history.summarize(),
@@ -267,7 +318,7 @@ export class SkillsRuntime {
       }
     }
     for (const [jobId, mapping] of this.jobIndex) {
-      if (mapping.docKey.startsWith(prefix)) this.jobIndex.delete(jobId);
+      if (mapping.sessionKey.startsWith(prefix)) this.jobIndex.delete(jobId);
     }
   }
 }

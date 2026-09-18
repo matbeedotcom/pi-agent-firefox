@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -213,7 +213,7 @@ test("fake-host process: full skills happy path over native framing (happy-plan-
       event: {
         version: 1,
         eventId: "evt-proc-1",
-        event: "comment.before-submit",
+        event: "fixture-skill:before-submit",
         source,
         interactionId: "int-proc-1",
         draftRevision: 1,
@@ -258,3 +258,102 @@ function exitCode(proc: ChildProcess, timeoutMs: number): Promise<number | null>
     });
   });
 }
+
+test("fake-host process: catalog reload via trigger file picks up a new package (no restart)", async () => {
+  const base = `/tmp/skills-catalog-reload-${process.pid}-${Date.now()}`;
+  const skillRoots = path.join(base, "packages");
+  const runDir = path.join(base, "run");
+  const trigger = path.join(runDir, "skills-catalog-reload");
+  const config = path.join(base, "skills-config.json");
+  mkdirSync(runDir, { recursive: true });
+  // Writable copy of the fixture package + a grant for a package that does
+  // not exist yet: the grant is inert until the catalog reload sees it.
+  cpSync(path.join(findRepoRoot(), "tests/skills-host/packages/fixture-skill"), path.join(skillRoots, "fixture-skill"), { recursive: true });
+  writeFileSync(config, JSON.stringify({
+    grants: [
+      { skillKey: "fixture-skill/fixture-reply", revision: "*", capabilities: ["context.read", "suggestion.present"] },
+      { skillKey: "reload-pkg/reload-skill", revision: "*", capabilities: ["context.read", "suggestion.present"] },
+    ],
+    job: {},
+  }));
+
+  const fakeHost = path.join(findRepoRoot(), "packages/pi-agent/test/skills-host/fake-host.mjs");
+  const proc = spawn(process.execPath, [fakeHost], {
+    env: {
+      ...process.env,
+      PI_BROWSER_FAKE_HOST_STUB: "1",
+      PI_BROWSER_SKILLS_CONFIG: config,
+      PI_BROWSER_SKILL_ROOTS: skillRoots,
+      PI_BROWSER_DATA_ROOT: path.join(base, "data"),
+      PI_BROWSER_BROKER_DIR: runDir,
+      PI_BROWSER_LOG_FILE: "off",
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const stderr: string[] = [];
+  proc.stderr!.on("data", (c: Buffer) => stderr.push(c.toString()));
+  const client = new FrameClient(proc);
+
+  const source = { application: "firefox", connectionEpoch: "epoch-r1", documentGeneration: "gen-r1", tabId: 1, frameId: 0 };
+  const plan = () => client.request(X_PI_BROWSER.skills_plan, { source, url: "http://127.0.0.1:9/fixture-basic.html" }) as Promise<{
+    status: string;
+    plan?: { planVersion: number; rules: { skillKey: string }[] };
+  }>;
+
+  try {
+    await client.request(AGENT_METHODS.initialize, hello);
+    const first = await plan();
+    assert.equal(first.status, "ok");
+    assert.deepEqual(first.plan!.rules.map((r) => r.skillKey), ["fixture-skill/fixture-reply"], `new-package grant is inert before the package exists; plan=${JSON.stringify(first)}; host stderr: ${stderr.join("")}`);
+
+    // Add the package to the root, then request a catalog reload by
+    // touching the trigger file in the broker run dir.
+    const pkg = path.join(skillRoots, "reload-pkg");
+    mkdirSync(path.join(pkg, "skill"), { recursive: true });
+    writeFileSync(path.join(pkg, "activation.json"), JSON.stringify({
+      schemaVersion: 2, packageId: "reload-pkg", application: "firefox", hosts: ["127.0.0.1"],
+      targets: { composer: "textarea[data-skill-fixture]", submit: "button[data-skill-fixture=\"submit\"]" },
+      events: {
+        "before-submit": {
+          kind: "gate", chainId: "reload-submit",
+          alternatives: [[{ dom: "click", target: "submit" }]],
+          payload: { draft: { from: "composer", field: "value" } },
+        },
+      },
+      skills: [{
+        id: "reload-skill", type: "triggered", instructions: "skill/SKILL.md",
+        subscriptions: [{ event: "before-submit" }],
+        context: { required: ["draft"], optional: [] },
+        capabilities: ["context.read", "suggestion.present"],
+        execution: { handler: "agent", timeoutMs: 5000 },
+      }],
+    }));
+    writeFileSync(path.join(pkg, "skill/SKILL.md"), "Review the draft.\n");
+    writeFileSync(trigger, "");
+
+    // Poll the plan until the reload is observable (debounce + reload).
+    const deadline = Date.now() + 5_000;
+    let reloaded: { status: string; plan?: { planVersion: number; rules: { skillKey: string }[] } } | undefined;
+    for (;;) {
+      reloaded = await plan();
+      if (reloaded.plan?.rules.some((r) => r.skillKey === "reload-pkg/reload-skill")) break;
+      if (Date.now() > deadline) throw new Error(`catalog reload not observable; host stderr: ${stderr.join("")}`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(reloaded.plan!.rules.some((r) => r.skillKey === "fixture-skill/fixture-reply"), "old package survives the reload");
+    assert.equal(existsSync(trigger), false, "the trigger file is consumed per reload");
+
+    // The JSONL event log (the agent observation channel) records the plan
+    // compiles and the successful reload in the broker run dir.
+    const eventLog = path.join(runDir, "skills-events.jsonl");
+    assert.ok(existsSync(eventLog), `event log missing at ${eventLog}`);
+    const lines = readFileSync(eventLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { type: string; status?: string; ok?: boolean });
+    assert.ok(lines.some((l) => l.type === "plan" && l.status === "ok"), `plan line recorded: ${JSON.stringify(lines)}`);
+    assert.ok(lines.some((l) => l.type === "reload" && l.ok === true), `reload line recorded: ${JSON.stringify(lines)}`);
+  } finally {
+    client.close();
+    const exited = await exitCode(proc, 15_000);
+    assert.equal(exited, 0, `host stderr: ${stderr.join("")}`);
+    rmSync(base, { recursive: true, force: true });
+  }
+});

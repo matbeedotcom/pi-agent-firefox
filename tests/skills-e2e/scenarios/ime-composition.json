@@ -38,7 +38,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { if (document.documentElement.hasAttribute('data-skills-armed')) { document.querySelector(\"button[data-skill-fixture='ime']\").click(); return setTimeout(() => resolve({ value: document.querySelector('textarea').value, attr: document.documentElement.getAttribute('data-skills-armed'), types: window.__fixture.log.map((e) => e.type) }), 800); } if (Date.now() - t0 > 5000) return resolve({ armTimeout: true, attr: document.documentElement.getAttribute('data-skills-armed') }); setTimeout(tick, 100); }; tick(); })"
+        "expression": "new Promise((resolve) => { const t0 = Date.now(); const tick = () => { if (document.documentElement.hasAttribute('data-skills-armed')) { document.querySelector(\"button[data-skill-fixture='ime']\").click(); return setTimeout(() => resolve({ value: document.querySelector('textarea').value, attr: document.documentElement.getAttribute('data-skills-armed'), types: window.__fixture.log.map((e) => e.type) }), 100); } if (Date.now() - t0 > 5000) return resolve({ armTimeout: true, attr: document.documentElement.getAttribute('data-skills-armed') }); setTimeout(tick, 100); }; tick(); })"
       }
     },
     {
@@ -78,7 +78,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 100)); })()"
       }
     }
   ],

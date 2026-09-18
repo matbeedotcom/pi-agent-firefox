@@ -20,10 +20,10 @@
  * stdout invariant: only the host/relay transport writes to stdout;
  * everything else logs to stderr.
  */
-import { readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { PI_BROWSER_ERROR, PI_BROWSER_META, PiBrowserProtocolError } from "@pi-browser/protocol";
 import { createLogger } from "../logger.js";
 import {
@@ -32,10 +32,18 @@ import {
   type BrowserToolBridge,
 } from "../tool-bridge.js";
 import { createStdioTransport, type Dispatcher } from "./transport.js";
-import { createClientSkillsProtocol, startSkillsRuntime } from "./skills-startup.js";
+import {
+  createClientSkillsProtocol,
+  createSkillsEventLog,
+  startSkillsCatalogReloader,
+  startSkillsRuntime,
+  type SkillsCatalogReloader,
+  type SkillsEventLog,
+} from "./skills-startup.js";
+import { loadSkillsGrantFile } from "../skills/grants-file.js";
 import type { SkillsHost } from "../skills/pi-integration.js";
 import type { IsolatedSessionFactory } from "../skills/isolated-runner.js";
-import type { SkillAdapterCoverage, SkillGrant } from "../skills/planner.js";
+import type { SkillGrant } from "../skills/planner.js";
 import { createScriptedSessionFactory, type ScriptedJob } from "../skills/mock-session-factory.js";
 import { AcpAgent } from "../acp/agent.js";
 import { MockBackend } from "../acp/mock-backend.js";
@@ -61,17 +69,16 @@ const require = createRequire(import.meta.url);
  * {
  *   "grants":   [{ "skillKey": "pkg/skill", "revision": "*", "capabilities": ["context.read"],
  *                  "mode": "review-before-submit" }],  // optional; defaults to advisory
- *   "adapters": [{ "id": "a", "version": "1.0.0", "hosts": ["127.0.0.1"],
- *                  "events": ["comment.before-submit"], "gates": ["comment.before-submit"] }],
  *   "job":      { "report": { "decision": "suggest", "explanation": "...", "replacementText": "..." } }
  * }
- * Grants + adapters arm the plan compiler; the scripted job factory makes
+ * Grants arm the plan compiler (packages are their own adapters — coverage
+ * derives from each package manifest); the scripted job factory makes
  * isolated job runs deterministic. The production (Pi SDK) host never reads
  * this variable.
  */
 function loadMockSkillsConfig(
   log: Logger,
-): { grants: { skillKey: string; revision: string; capabilities: SkillGrant["capabilities"]; mode?: "advisory" | "review-before-submit" }[]; adapters: SkillAdapterCoverage[]; job: ScriptedJob } | undefined {
+): { grants: { skillKey: string; revision: string; capabilities: SkillGrant["capabilities"]; mode?: "advisory" | "review-before-submit" }[]; job: ScriptedJob } | undefined {
   const raw = process.env.PI_BROWSER_SKILLS_CONFIG?.trim();
   if (!raw) return undefined;
   let parsed: unknown;
@@ -86,15 +93,15 @@ function loadMockSkillsConfig(
     return undefined;
   }
   const entry = parsed as Record<string, unknown>;
-  if (!Array.isArray(entry.grants) || !Array.isArray(entry.adapters) || (entry.job !== undefined && (typeof entry.job !== "object" || entry.job === null))) {
-    log.warn("PI_BROWSER_SKILLS_CONFIG shape invalid (needs grants[], adapters[], optional job{}); ignoring");
+  if (!Array.isArray(entry.grants) || (entry.job !== undefined && (typeof entry.job !== "object" || entry.job === null))) {
+    log.warn("PI_BROWSER_SKILLS_CONFIG shape invalid (needs grants[], optional job{}); ignoring");
     return undefined;
   }
   // Mock grants are explicit test-arm declarations: they are enabled by
   // construction (SkillGrant.enabled is required and the config has no
   // per-grant enable field).
   const grants = (entry.grants as { skillKey: string; revision: string; capabilities: SkillGrant["capabilities"]; mode?: "advisory" | "review-before-submit" }[]).map((g) => ({ enabled: true, ...g }));
-  return { grants, adapters: entry.adapters, job: (entry.job as ScriptedJob | undefined) ?? {} };
+  return { grants, job: (entry.job as ScriptedJob | undefined) ?? {} };
 }
 
 /**
@@ -112,6 +119,24 @@ function resolveLogPath(): string | undefined {
     return join(homedir(), ".pi", "browser", "logs", `host-${process.pid}.log`);
   }
   return env;
+}
+
+/**
+ * Best-effort stable log handle: host-current.log -> host-<pid>.log, so the
+ * agent (and humans) can tail the current host without resolving the pid.
+ */
+function linkCurrentHostLog(logPath: string): void {
+  try {
+    const link = join(dirname(logPath), "host-current.log");
+    try {
+      if (lstatSync(link).isSymbolicLink()) unlinkSync(link);
+    } catch {
+      /* no link yet */
+    }
+    symlinkSync(basename(logPath), link);
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** Best-effort cleanup of old per-pid host logs (broker startup only). */
@@ -147,6 +172,8 @@ function createShutdownSequence(deps: {
   skillsHost: SkillsHost | undefined;
   brokerServer: () => BrokerServerHandle | undefined;
   mcpServer: () => McpBrowserServerHandle | undefined;
+  catalogReloader: () => SkillsCatalogReloader | undefined;
+  skillsEventLog: () => SkillsEventLog | undefined;
 }): (reason: string) => Promise<void> {
   let shuttingDown = false;
   return async (reason: string) => {
@@ -191,6 +218,22 @@ function createShutdownSequence(deps: {
           deps.log.warn("mcp server close error", err);
         }
       }
+      const reloader = deps.catalogReloader();
+      if (reloader) {
+        try {
+          await reloader.close();
+        } catch (err) {
+          deps.log.warn("catalog reloader close error", err);
+        }
+      }
+      const eventLog = deps.skillsEventLog();
+      if (eventLog) {
+        try {
+          await eventLog.close();
+        } catch (err) {
+          deps.log.warn("skills event log close error", err);
+        }
+      }
       deps.backend.dispose();
     } finally {
       clearTimeout(backstop);
@@ -212,6 +255,7 @@ function piVersion(): string {
 async function main(): Promise<void> {
   const logPath = resolveLogPath();
   const log = createLogger(logPath ? { filePath: logPath } : {});
+  if (logPath) linkCurrentHostLog(logPath);
   log.info(
     `host starting pid=${process.pid} node=${process.version}${logPath ? ` log=${logPath}` : " log=off"}`,
   );
@@ -292,32 +336,39 @@ async function main(): Promise<void> {
     log, backend, toolBridge,
     ...(mockSkills ? { sessionFactory: createScriptedSessionFactory(mockSkills.job) } : {}),
   });
-  // Grants/adapters are read at plan time; "*" revisions resolve against the
-  // registry snapshot (content-hashed, stable within one run).
+  // Grants are read at plan time; "*" rebinds against the LIVE registry
+  // snapshot, so a catalog reload picks up the new package revision
+  // without a host restart (mock/dev grants only — real user grants stay
+  // revision-bound and report "Package changed" until re-granted).
   let mockGrants: (() => ReadonlyMap<string, SkillGrant>) | undefined;
-  let mockAdapters: (() => readonly SkillAdapterCoverage[]) | undefined;
   if (mockSkills && skillsRuntime) {
-    const snapshot = skillsRuntime.registry.snapshot();
-    const revision = (key: string) => snapshot.find((s) => s.key === key)?.revision ?? "";
     mockGrants = () => new Map(
       mockSkills.grants.map((g) => [
         g.skillKey,
         {
           enabled: true,
-          revision: g.revision === "*" ? revision(g.skillKey) : g.revision,
+          revision: g.revision === "*" ? skillsRuntime.registry.revisionOf(g.skillKey) : g.revision,
           capabilities: g.capabilities,
           ...(g.mode ? { mode: g.mode } : {}),
         },
       ]),
     );
-    mockAdapters = () => mockSkills.adapters;
   }
+  // Real-user grants (design §12 seam): <data root>/skills-grants.json,
+  // re-read at every plan compile (no host restart to grant), revision-bound.
+  const fileGrants = loadSkillsGrantFile(log);
 
   // Browser-tools MCP server: lets pi-subagent children (separate node
   // processes with no ACP channel) reach the browser tools over MCP on a
   // private unix socket. Unix sockets only — skipped in standalone Windows
   // mode, same as the relay socket.
   let mcpServer: McpBrowserServerHandle | undefined;
+  // Dev-loop catalog reloader: the agent touches the trigger file in the
+  // broker run dir to re-read skill packages without a host restart.
+  let catalogReloader: SkillsCatalogReloader | undefined;
+  // JSONL skills lifecycle log (agent observation channel): one line per
+  // plan/event/result/reload in the broker run dir.
+  let skillsEventLog: SkillsEventLog | undefined;
   if (isBrokerIpcSupported()) {
     try {
       mcpServer = await startMcpBrowserServer({ log, bridge: toolBridge });
@@ -348,6 +399,8 @@ async function main(): Promise<void> {
     skillsHost: skillsRuntime?.host,
     brokerServer: () => brokerServer,
     mcpServer: () => mcpServer,
+    catalogReloader: () => catalogReloader,
+    skillsEventLog: () => skillsEventLog,
   });
 
   const wireClient = (clientId: string, dispatcher: Dispatcher) => {
@@ -358,7 +411,8 @@ async function main(): Promise<void> {
     const clientSkills = skillsRuntime
       ? createClientSkillsProtocol({
           log, runtime: skillsRuntime, transport: dispatcher.transport,
-          ...(mockGrants ? { grants: mockGrants, adapters: mockAdapters } : {}),
+          ...(mockGrants ? { grants: mockGrants } : { grants: fileGrants }),
+          ...(skillsEventLog ? { record: skillsEventLog.record } : {}),
         })
       : undefined;
     const agent = new AcpAgent({
@@ -396,6 +450,25 @@ async function main(): Promise<void> {
         },
       });
       log.info(`broker: listening on ${brokerServer.socketPath}`);
+      if (skillsRuntime) {
+        try {
+          const runDir = process.env.PI_BROWSER_BROKER_DIR?.trim() || join(homedir(), ".pi", "run");
+          skillsEventLog = createSkillsEventLog(log, join(runDir, "skills-events.jsonl"));
+        } catch (err) {
+          // Non-fatal: live runs stay observable through the host log only.
+          log.warn("skills event log unavailable", err);
+        }
+        try {
+          catalogReloader = startSkillsCatalogReloader({
+            log, runtime: skillsRuntime,
+            ...(skillsEventLog ? { record: skillsEventLog.record } : {}),
+          });
+        } catch (err) {
+          // Non-fatal: the catalog stays at its startup snapshot; the
+          // dev loop falls back to a host restart.
+          log.warn("skills catalog reloader unavailable; catalog fixed for this host run", err);
+        }
+      }
     } catch (err) {
       // Lost the race: another process became broker between our probe and
       // listen. Attach as a relay instead.

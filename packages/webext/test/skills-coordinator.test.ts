@@ -41,8 +41,9 @@ function setup(options: { onResult?: (params: SkillsResultParams) => void } = {}
         status: "ok",
         plan: {
           planId: "plan-1", planVersion: 1, documentGeneration: "doc-1", expiresAt: Date.now() + 60_000,
-          rules: [{ skillKey: "p/s", skillRevision: "v1", adapterId: "a", adapterVersion: "1",
-            subscriptions: [{ event: "comment.before-submit" }], mode: "advisory", capabilities: ["context.read"] }],
+          rules: [{ skillKey: "p/s", skillRevision: "v1", packageId: "p", world: "isolated", targets: {},
+            events: { "before-submit": { kind: "gate" as const, chainId: "c1", alternatives: [[{ dom: "click" as const, target: "submit" }]] } },
+            subscriptions: [{ event: "before-submit" }], mode: "advisory", capabilities: ["context.read"] }],
           unavailable: [],
         },
       } satisfies SkillsPlanResult);
@@ -78,7 +79,7 @@ test("events are stamped, snapshots are stored, contextRef resolution is privacy
   await coordinator.plan(doc);
   const ack = await coordinator.submitEvent({
     document: doc,
-    event: "comment.before-submit",
+    event: "p:before-submit",
     interactionId: "composer-7",
     planVersion: 1,
     contextRevision: 3,
@@ -119,7 +120,7 @@ test("redelivered events dedupe without resubmitting", async () => {
   const { coordinator, recorded } = setup();
   const input = {
     document: doc,
-    event: "comment.before-submit" as const,
+    event: "p:before-submit" as const,
     interactionId: "composer-7",
     planVersion: 1,
     contextRevision: 3,
@@ -140,7 +141,7 @@ test("snapshot store is bounded per document (4 snapshots / 256 KiB)", async () 
   const { coordinator } = setup();
   const base = {
     document: doc,
-    event: "comment.before-submit" as const,
+    event: "p:before-submit" as const,
     planVersion: 1,
     contextRevision: 0,
     origin: "user" as const,
@@ -183,7 +184,7 @@ test("a new connection epoch invalidates snapshots, plans, and dedup state", asy
   const { coordinator, recorded } = setup();
   await coordinator.plan(doc);
   const ack = await coordinator.submitEvent({
-    document: doc, event: "comment.before-submit", interactionId: "composer-7",
+    document: doc, event: "p:before-submit", interactionId: "composer-7",
     planVersion: 1, contextRevision: 3, origin: "user", snapshot: { draft: "x" },
   });
   assert.equal(ack.status, "accepted");
@@ -191,7 +192,7 @@ test("a new connection epoch invalidates snapshots, plans, and dedup state", asy
 
   coordinator.noteConnection();
   const newRef = (await coordinator.submitEvent({
-    document: doc, event: "comment.before-submit", interactionId: "composer-7",
+    document: doc, event: "p:before-submit", interactionId: "composer-7",
     planVersion: 1, contextRevision: 3, origin: "user", snapshot: { draft: "x" },
   }));
   // Same logical event, fresh epoch: NOT a duplicate.
@@ -216,7 +217,7 @@ test("mail documents use account identity; forgetDocument drops a document's sta
   assert.equal(source.documentGeneration, undefined);
 
   await coordinator.submitEvent({
-    document: doc, event: "comment.before-submit", interactionId: "composer-7",
+    document: doc, event: "p:before-submit", interactionId: "composer-7",
     planVersion: 1, contextRevision: 1, origin: "user", snapshot: { draft: "x" },
   });
   coordinator.forgetDocument(doc);

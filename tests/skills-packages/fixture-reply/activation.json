@@ -1,17 +1,42 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "packageId": "fixture-reply",
+  "application": "firefox",
+  "hosts": ["127.0.0.1"],
+  "targets": {
+    "composer": "textarea[data-skill-fixture]",
+    "submit": "button[data-skill-fixture=\"submit\"]",
+    "targetEl": "[data-skill-fixture=\"target\"]"
+  },
+  "events": {
+    "draft.paused": {
+      "kind": "debounced",
+      "debounceMs": 250,
+      "suspendDuringComposition": true,
+      "sequence": [{ "dom": "input", "target": "composer" }],
+      "payload": {
+        "draft": { "from": "composer", "field": "value" },
+        "replyTarget": { "from": "targetEl", "field": "text", "resolve": "document" }
+      }
+    },
+    "before-submit": {
+      "kind": "gate",
+      "chainId": "fixture-comment-submit",
+      "alternatives": [[{ "dom": "click", "target": "submit" }]],
+      "payload": {
+        "draft": { "from": "composer", "field": "value" },
+        "replyTarget": { "from": "targetEl", "field": "text", "resolve": "document" }
+      }
+    }
+  },
   "skills": [
     {
       "id": "reply",
       "type": "triggered",
       "instructions": "reply/SKILL.md",
-      "scope": {
-        "applications": ["firefox"],
-        "hosts": ["127.0.0.1"]
-      },
       "subscriptions": [
-        { "event": "comment.before-submit" }
+        { "event": "draft.paused", "conditions": { "minCharacters": 1 } },
+        { "event": "before-submit" }
       ],
       "context": {
         "required": ["draft"],

@@ -6,7 +6,34 @@
 /** True when the expression looks like a function (used by browser_evaluate). */
 export function isFunctionExpression(expression: string): boolean {
   const trimmed = expression.trim();
-  return /^(async\s+)?(function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/.test(trimmed);
+  if (!/^(async\s+)?(function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/.test(trimmed)) return false;
+  // An IIFE (a top-level function immediately applied) evaluates to a VALUE,
+  // not a function — the tool must evaluate it, not re-apply it with `arg`.
+  // Without this guard `(() => …)()` is misread as a function and the tool
+  // builds `((() => …)())(arg)`, calling the already-returned result.
+  if (isTopLevelInvocation(trimmed)) return false;
+  return true;
+}
+
+/**
+ * True when the expression's first top-level parenthesized group is followed
+ * by `(` — i.e. the function is already being invoked (an IIFE).
+ */
+function isTopLevelInvocation(s: string): boolean {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0) {
+        let j = i + 1;
+        while (j < s.length && /\s/.test(s[j])) j++;
+        return s[j] === "(";
+      }
+    }
+  }
+  return false;
 }
 
 /**

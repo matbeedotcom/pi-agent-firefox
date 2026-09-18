@@ -4,26 +4,36 @@
   "pageUrl": "http://127.0.0.1:9/fixture-basic.html",
   "skillsConfig": {
     "grants": [
-      { "skillKey": "fixture-skill/fixture-reply", "revision": "*", "capabilities": ["context.read", "suggestion.present"] }
-    ],
-    "adapters": [
       {
-        "id": "fixture-adapter",
-        "version": "1.0.0",
-        "hosts": ["127.0.0.1"],
-        "events": ["comment.draft.paused", "comment.before-submit"],
-        "gates": ["comment.before-submit"]
+        "skillKey": "fixture-skill/fixture-reply",
+        "revision": "*",
+        "capabilities": [
+          "context.read",
+          "suggestion.present"
+        ]
       }
     ]
   },
   "steps": [
-    { "side": "client", "type": "extended", "method": "x-pi-browser/skills_status", "params": {}, "repeat": 10 },
+    {
+      "side": "client",
+      "type": "extended",
+      "method": "x-pi-browser/skills_status",
+      "params": {},
+      "repeat": 10
+    },
     {
       "side": "client",
       "type": "extended",
       "method": "x-pi-browser/skills_plan",
       "params": {
-        "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+        "source": {
+          "application": "firefox",
+          "connectionEpoch": "epoch-1",
+          "documentGeneration": "gen-1",
+          "tabId": 1,
+          "frameId": 0
+        },
         "url": "{{page_url}}"
       },
       "repeat": 5
@@ -32,12 +42,18 @@
       "side": "client",
       "type": "extended",
       "method": "x-pi-browser/skills_cancel",
-      "params": { "interactionId": "int-none" },
+      "params": {
+        "interactionId": "int-none"
+      },
       "repeat": 10
     }
   ],
   "expect": {
-    "storm": { "requests": 25, "answered": 25, "duplicateIds": 0 },
+    "storm": {
+      "requests": 25,
+      "answered": 25,
+      "duplicateIds": 0
+    },
     "note": "25 concurrent skills_* requests (status x10, plan x5, cancel x10): every request id is answered exactly once, no lost responses, no protocol wedge"
   }
 }

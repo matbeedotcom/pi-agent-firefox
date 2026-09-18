@@ -1,25 +1,97 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "packageId": "fixture-skill",
+  "application": "firefox",
+  "hosts": [
+    "127.0.0.1"
+  ],
+  "targets": {
+    "composer": "textarea[data-skill-fixture]",
+    "submit": "button[data-skill-fixture=\"submit\"]",
+    "targetEl": "[data-skill-fixture=\"target\"]"
+  },
+  "events": {
+    "draft.paused": {
+      "kind": "debounced",
+      "debounceMs": 100,
+      "suspendDuringComposition": true,
+      "sequence": [
+        {
+          "dom": "input",
+          "target": "composer"
+        }
+      ],
+      "payload": {
+        "draft": {
+          "from": "composer",
+          "field": "value"
+        },
+        "replyTarget": {
+          "from": "targetEl",
+          "field": "text",
+          "resolve": "document"
+        }
+      }
+    },
+    "before-submit": {
+      "kind": "gate",
+      "chainId": "fixture-host-submit",
+      "alternatives": [
+        [
+          {
+            "dom": "click",
+            "target": "submit"
+          }
+        ]
+      ],
+      "payload": {
+        "draft": {
+          "from": "composer",
+          "field": "value"
+        },
+        "replyTarget": {
+          "from": "targetEl",
+          "field": "text",
+          "resolve": "document"
+        }
+      }
+    }
+  },
   "skills": [
     {
       "id": "fixture-reply",
       "type": "triggered",
       "instructions": "skill/SKILL.md",
-      "scope": {
-        "applications": ["firefox"]
-      },
       "subscriptions": [
-        { "event": "comment.draft.paused" },
-        { "event": "comment.before-submit" }
+        {
+          "event": "draft.paused",
+          "conditions": {
+            "minCharacters": 1
+          }
+        },
+        {
+          "event": "before-submit"
+        }
       ],
       "context": {
-        "required": ["draft"],
-        "optional": ["replyTarget"]
+        "required": [
+          "draft"
+        ],
+        "optional": [
+          "replyTarget"
+        ]
       },
-      "capabilities": ["context.read", "suggestion.present"],
-      "review": { "defaultMode": "review-before-submit" },
-      "execution": { "handler": "agent", "timeoutMs": 5000 }
+      "capabilities": [
+        "context.read",
+        "suggestion.present"
+      ],
+      "review": {
+        "defaultMode": "review-before-submit"
+      },
+      "execution": {
+        "handler": "agent",
+        "timeoutMs": 5000
+      }
     }
   ]
 }

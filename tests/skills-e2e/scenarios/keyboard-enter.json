@@ -15,22 +15,6 @@
         ],
         "mode": "review-before-submit"
       }
-    ],
-    "adapters": [
-      {
-        "id": "fixture/keyboard-page",
-        "version": "1.0.0",
-        "hosts": [
-          "127.0.0.1"
-        ],
-        "events": [
-          "comment.draft.paused",
-          "comment.before-submit"
-        ],
-        "gates": [
-          "comment.before-submit"
-        ]
-      }
     ]
   },
   "job": {
@@ -65,7 +49,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { const t = document.querySelector(\"textarea[data-skill-fixture='composer']\"); t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), held: window.__fixture.log.filter((e) => e.type === 'held').length, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+        "expression": "(() => { const t = document.querySelector(\"textarea[data-skill-fixture='composer']\"); t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), held: window.__fixture.log.filter((e) => e.type === 'gate-hold').length, types: window.__fixture.log.map((e) => e.type) }), 100)); })()"
       }
     },
     {
@@ -83,9 +67,9 @@
       "submitted"
     ],
     "logExcludes": [
-      "held"
+      "gate-hold"
     ],
     "receiptIncludes": "Reply via keyboard",
-    "note": "V1 LIMITATION (documented, Firefox 155 verified): a content-world preventDefault on keydown is NOT observable in the page world (event.defaultPrevented stays false), so a JS-handler Enter chain cannot be hard-held even in review-before-submit mode. The gate consults + records the keyboard gesture (advisory outcome) and the user's own text posts. Click/form-default chains ARE hard-held (see basic-approve-apply); form-Enter (the default action) is holdable, JS-handler Enter is not."
+    "note": "Skill-declared advisory gesture: the fixture-keyboard package sets stopDefaultAction: false on its before-submit gate, so in review-before-submit mode the Enter/click gesture is OBSERVED (onGesture) but never blocked - the user's own text posts and no gate-hold is logged. The default (stopDefaultAction omitted/true) hard-holds: see basic-approve-apply. Which way a gate behaves is decided by the skill, not the runtime."
   }
 }

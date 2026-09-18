@@ -73,7 +73,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), held: window.__fixture.log.filter((e) => e.type === 'held').length }), 800)); })()"
+        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), held: window.__fixture.log.filter((e) => e.type === 'gate-hold').length }), 100)); })()"
       }
     },
     {
@@ -81,7 +81,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { const card = document.querySelector('.pb-review-card'); if (!card) return { noCard: true }; const b = Array.from(card.querySelectorAll('button')).find((x) => x.textContent.includes('Apply')); if (!b) return { noApply: true, hidden: card.hidden }; b.click(); return new Promise((r) => setTimeout(() => r({ accepted: true, value: document.querySelector('textarea').value }), 800)); })()"
+        "expression": "(() => { const card = document.querySelector('.pb-review-card'); if (!card) return { noCard: true }; const b = Array.from(card.querySelectorAll('button')).find((x) => x.textContent.includes('Apply')); if (!b) return { noApply: true, hidden: card.hidden }; b.click(); return new Promise((r) => setTimeout(() => r({ accepted: true, value: document.querySelector('textarea').value }), 100)); })()"
       }
     },
     {
@@ -113,14 +113,14 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 100)); })()"
       }
     }
   ],
   "expect": {
     "submitted": true,
     "logIncludes": [
-      "held",
+      "gate-hold",
       "submitted"
     ],
     "receiptIncludes": "Fixture reply: basic",

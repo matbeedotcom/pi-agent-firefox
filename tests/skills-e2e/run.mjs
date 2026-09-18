@@ -47,7 +47,12 @@ const FAKE_HOST = path.resolve(REPO, "packages/pi-agent/test/skills-host/fake-ho
 const AUTO_APPROVE_TOOLS = ["browser_navigate", "browser_type", "browser_click", "browser_evaluate", "browser_get_page", "browser_get_dom", "browser_wait_for", "browser_reload"];
 
 const HANDSHAKE_TIMEOUT_MS = 60_000;
-const SCENARIO_TIMEOUT_MS = 90_000;
+// A healthy scenario settles in ~1.5s (fixture pacing is trimmed: 50ms
+// autoDrive + 100ms post-action sleeps + 250ms debounce). 3s is a small
+// margin above that floor; a broken run now reports in ~3s, not ~90s.
+// A healthy scenario settles in a few seconds; the polling steps carry 5s
+// windows, so the total can reach ~15s on a slow box. 25s is generous.
+const SCENARIO_TIMEOUT_MS = Number(process.env.SKILLS_E2E_SCENARIO_TIMEOUT_MS ?? 25_000);
 
 async function exists(p) {
   try { await stat(p); return true; } catch { return false; }
@@ -312,11 +317,17 @@ async function runScenario(file, keepTmp, basePort) {
   const port = basePort + (parseInt(name, 36) % 97) * 3;
   const result = { name, file, passed: false, failures: [], beacons: 0, ms: 0, tmp };
   const started = Date.now();
+  // Phase timing (stderr): where does a scenario's wall-clock go?
+  const phase = (label) => {
+    const ms = Date.now() - started;
+    process.stderr.write(`[timing] ${name}: ${String(ms).padStart(5)}ms  ${label}\n`);
+  };
   let server, host, webext;
   const hostLog = path.join(tmp, "host.log");
   const webextLog = path.join(tmp, "webext.log");
   try {
     server = await createFixtureServer(FIXTURES, port);
+    phase("fixture server up");
     const fixtureUrl = `${server.url}/${scenario.fixture}?skills_test=1&skills_test_prompt=${encodeURIComponent(scenario.prompt ?? "")}`;
     // Materialize the resolved scenario (the fake host substitutes
     // {{page_url}} from pageUrl — which only the harness knows at runtime).
@@ -342,6 +353,7 @@ async function runScenario(file, keepTmp, basePort) {
     const ffBin = firefoxBinary();
     const webExt = webExtBinary();
     const seedProfile = await prepareSeedProfile();
+    phase("fake host prepared (seed profile done)");
     const logStream = await open(webextLog, "a");
     // NB: NOT detached — detached children fail to open the remote-debugger
     // port on this box (verified); kill the whole tree on exit instead.
@@ -365,11 +377,16 @@ async function runScenario(file, keepTmp, basePort) {
     // Host readiness: the real host logs "backend: mock" once the fake host
     // boots the real native-host main.js with the scripted backend. Poll the
     // PI_BROWSER_LOG_FILE the wrapper pointed at.
+    phase("web-ext spawned; waiting for host handshake");
     const hostReady = await pollUntil(
       async () => {
         try {
           const log = await readFile(hostLog, "utf8");
-          return log.includes("backend: mock") ? log : false;
+          // The page opens at Firefox start (--start-url), before the add-on
+          // reaches the host (~2.5s): require BOTH the mock backend up AND
+          // the add-on initialize (port established), so the scenario clock
+          // starts connected.
+          return log.includes("backend: mock") && log.includes("initialize: client=pi-browser-firefox") ? log : false;
         } catch { return false; }
       },
       HANDSHAKE_TIMEOUT_MS,
@@ -380,6 +397,7 @@ async function runScenario(file, keepTmp, basePort) {
       throw new Error(`fake host never became ready (host.log: ${hostLog}; webext tail:\n${tail})`);
     }
 
+    phase(`host ready (handshake took ${Date.now() - started}ms total)`);
     // Scenario completion: beaconed fixture state satisfies the expect block.
     const outcome = await pollUntil(
       async () => {
@@ -395,6 +413,7 @@ async function runScenario(file, keepTmp, basePort) {
       SCENARIO_TIMEOUT_MS,
       500,
     );
+    phase(`scenario settled after ${Date.now() - started}ms total`);
     if (!outcome) {
       const beacons = server.parsedReports();
       result.failures = checkExpect(scenario.expect ?? {}, beacons);

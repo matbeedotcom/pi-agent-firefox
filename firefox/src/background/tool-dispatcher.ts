@@ -366,13 +366,18 @@ export class ToolDispatcher {
         const frameId = await this.resolveFrameId(tab.id as number, args?.frame);
         // format "nodes" (REPL page.snapshot()) returns structured nodes;
         // the default "text" outline is unchanged.
-        const format = args?.format === "nodes" ? "nodes" : "text";
+        // "text" (default) = indented outline; "tree" = nested node objects
+        // (page.snapshot() default — requested explicitly); "nodes" = flat
+        // structured node list (page.snapshot({ format: "flat" })).
+        const format = args?.format;
+        const type =
+          format === "nodes" ? "pi:a11yNodes" : format === "tree" ? "pi:a11yTreeNodes" : "pi:a11y";
         return textResult(
           (
             await this.content(
               tab,
               {
-                type: format === "nodes" ? "pi:a11yNodes" : "pi:a11y",
+                type,
                 maxNodes: args?.maxNodes,
                 maxDepth: args?.maxDepth,
               },

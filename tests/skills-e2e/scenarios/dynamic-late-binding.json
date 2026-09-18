@@ -57,7 +57,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { const b = document.querySelector(\"button[data-skill-fixture='open']\"); b.click(); return new Promise((r) => setTimeout(() => r({ focused: document.activeElement && document.activeElement.tagName }), 400)); })()"
+        "expression": "(() => { const b = document.querySelector(\"button[data-skill-fixture='open']\"); b.click(); return new Promise((r) => setTimeout(() => r({ focused: document.activeElement && document.activeElement.tagName }), 100)); })()"
       }
     },
     {
@@ -97,7 +97,7 @@
       "type": "tool",
       "tool": "browser_evaluate",
       "args": {
-        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 800)); })()"
+        "expression": "(() => { document.querySelector(\"button[data-skill-fixture='submit']\").click(); return new Promise((r) => setTimeout(() => r({ submitted: document.body.getAttribute('data-submitted'), receipt: (document.getElementById('receipt') || {}).textContent || null, types: window.__fixture.log.map((e) => e.type) }), 100)); })()"
       }
     }
   ],

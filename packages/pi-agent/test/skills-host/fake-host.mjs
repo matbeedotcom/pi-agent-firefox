@@ -31,11 +31,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../../../");
 
 const scenarioPath = process.env.FAKE_HOST_SCENARIO?.trim();
-if (!scenarioPath) {
+// Plain stub mode (tests/skills-e2e/mock-host.mjs --stub): no scenario —
+// the mock backend starts with an empty script and an inert skills config.
+const stubMode = process.env.PI_BROWSER_FAKE_HOST_STUB === "1" && !scenarioPath;
+const scenario = scenarioPath ? JSON.parse(readFileSync(scenarioPath, "utf8")) : stubMode ? { steps: [] } : null;
+if (!scenario) {
   process.stderr.write("fake-host: FAKE_HOST_SCENARIO (scenario JSON path) is required\n");
   process.exit(2);
 }
-const scenario = JSON.parse(readFileSync(scenarioPath, "utf8"));
 
 // {{page_url}} is a scenario-level variable; agent-side tool args carry it
 // as a placeholder and are substituted here (mirrors the in-process runner).
@@ -71,18 +74,26 @@ for (const step of scenario.steps) {
 
 const tmp = mkdtempSync(path.join(tmpdir(), "fake-host-"));
 writeFileSync(path.join(tmp, "mock-script.json"), JSON.stringify(entries));
-writeFileSync(
-  path.join(tmp, "skills-config.json"),
-  JSON.stringify({
-    grants: scenario.skillsConfig?.grants ?? [],
-    adapters: scenario.skillsConfig?.adapters ?? [],
-    job: scenario.job ?? {},
-  }),
-);
+if (stubMode) {
+  // Honor an externally provided skills config; otherwise inert (no grants).
+  if (!process.env.PI_BROWSER_SKILLS_CONFIG) {
+    writeFileSync(path.join(tmp, "skills-config.json"), JSON.stringify({ grants: [], job: {} }));
+    process.env.PI_BROWSER_SKILLS_CONFIG = path.join(tmp, "skills-config.json");
+  }
+} else {
+  writeFileSync(
+    path.join(tmp, "skills-config.json"),
+    JSON.stringify({
+      grants: scenario.skillsConfig?.grants ?? [],
+      adapters: scenario.skillsConfig?.adapters ?? [],
+      job: scenario.job ?? {},
+    }),
+  );
+  process.env.PI_BROWSER_SKILLS_CONFIG = path.join(tmp, "skills-config.json");
+}
 
 process.env.PI_BROWSER_BACKEND = "mock";
 process.env.PI_BROWSER_MOCK_SCRIPT = path.join(tmp, "mock-script.json");
-process.env.PI_BROWSER_SKILLS_CONFIG = path.join(tmp, "skills-config.json");
 process.env.PI_BROWSER_SKILL_ROOTS ??= path.resolve(repoRoot, "tests/skills-host/packages");
 process.env.PI_BROWSER_DATA_ROOT ??= path.join(tmp, "data");
 // Isolate the broker/MCP IPC sockets from any real running host — the fake

@@ -41,9 +41,13 @@ test("SkillsRegistry.reload registers all skills with valid definitions", async 
     const skill = registry.get(key);
     assert.ok(skill, `missing skill ${key}`);
     assert.equal(skill.definition.type, "triggered");
-    assert.equal(skill.definition.scope.applications[0], "firefox");
-    assert.ok(skill.definition.scope.hosts.includes("127.0.0.1"), `${key} must scope to the fixture host`);
-    assert.deepEqual(skill.definition.subscriptions, [{ event: "comment.before-submit" }]);
+    // v2: scope lives on the package manifest, not the skill definition.
+    assert.equal(skill.manifest.application, "firefox");
+    assert.ok(skill.manifest.hosts.includes("127.0.0.1"), `${key} must scope to the fixture host`);
+    // CSS-dialect targets (bare selector strings normalize to { selector, kind: "css" }).
+    assert.equal(skill.manifest.targets.composer.kind, "css");
+    assert.ok(skill.definition.subscriptions.some((s) => s.event === "before-submit" && skill.manifest.events[s.event].kind === "gate"));
+    assert.ok(skill.definition.subscriptions.some((s) => s.event === "draft.paused"));
     assert.equal(skill.definition.review.defaultMode, "review-before-submit");
     assert.ok(skill.definition.capabilities.includes("suggestion.present"));
     assert.ok(skill.definition.capabilities.includes("draft.replace-on-accept"));

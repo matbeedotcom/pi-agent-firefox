@@ -1,4 +1,4 @@
-import { PageRuntime, adapterById, type GateState, type GateView } from "@pi-browser/webext";
+import { PageRuntime, type GateState, type GateView, type SkillEventLike } from "@pi-browser/webext";
 import type { PagePlan, SkillsPlanResult } from "@pi-browser/protocol";
 
 /**
@@ -582,6 +582,22 @@ const A11Y_ALWAYS = new Set([
   "group",
 ]);
 const A11Y_TEXT_ROLES = new Set(["paragraph", "listitem", "columnheader", "cell", "term", "definition", "text"]);
+// ARIA roles whose accessible name derives from their TEXT CONTENT (not an
+// associated label) — so a <div role="button"> names itself from its visible
+// text, matching the browser's native a11y tree. Text-entry roles
+// (textbox/combobox/spinbutton/listbox/searchbox/…) are deliberately excluded:
+// their name is the associated label/placeholder, not the value.
+const A11Y_NAME_FROM_CONTENTS = new Set([
+  "button",
+  "link",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "tab",
+  "option",
+  "treeitem",
+  "term",
+]);
 
 function a11yRole(el: Element): string {
   const explicit = el.getAttribute("role");
@@ -702,7 +718,7 @@ function accessibleName(el: Element): string {
     const t = visibleText(wrappingLabel);
     if (t && t !== visibleText(el)) return t.slice(0, 120);
   }
-  if (tag === "a" || tag === "button" || tag === "label") {
+  if (tag === "a" || tag === "button" || tag === "label" || A11Y_NAME_FROM_CONTENTS.has(a11yRole(el))) {
     // Icon-only controls name themselves through the child img's alt.
     const t = visibleText(el) || imgAltOf(el);
     if (t) return t.slice(0, 120);
@@ -720,7 +736,7 @@ function a11yTree(
   maxDepth?: number,
 ): { tree: string; nodeCount: number; truncated: boolean; note?: string } {
   const maxN = Math.min(Math.max(typeof maxNodes === "number" ? maxNodes : 300, 10), 2000);
-  const maxD = Math.min(Math.max(typeof maxDepth === "number" ? maxDepth : 16, 1), 40);
+  const maxD = Math.min(Math.max(typeof maxDepth === "number" ? maxDepth : 60, 1), 80);
   const budget = { left: maxN, truncated: false };
   let sawIframe = false;
 
@@ -881,6 +897,12 @@ export interface A11yNode {
   level?: number;
   /** Viewport CSS-pixel rect (interactive nodes) — for clickAt. */
   rect?: { x: number; y: number; width: number; height: number };
+  /**
+   * Children, in document pre-order, promoted (an unnamed container's children
+   * live one level up, exactly as in the text outline). Only set on tree-format
+   * nodes (page.snapshot() default); the flat node list never carries this.
+   */
+  children?: A11yNode[];
 }
 
 function nodeRect(el: Element): { x: number; y: number; width: number; height: number } | undefined {
@@ -910,7 +932,7 @@ function a11yNodes(maxNodes?: number, maxDepth?: number): {
   note?: string;
 } {
   const maxN = Math.min(Math.max(typeof maxNodes === "number" ? maxNodes : 300, 10), 2000);
-  const maxD = Math.min(Math.max(typeof maxDepth === "number" ? maxDepth : 16, 1), 40);
+  const maxD = Math.min(Math.max(typeof maxDepth === "number" ? maxDepth : 60, 1), 80);
   const budget = { left: maxN, truncated: false };
   let sawIframe = false;
   const nodes: A11yNode[] = [];
@@ -1060,6 +1082,224 @@ function a11yNodes(maxNodes?: number, maxDepth?: number): {
   return { nodes, nodeCount, truncated: budget.truncated, ...(note ? { note } : {}) };
 }
 
+/**
+ * Build the accessibility walk as nested A11yNode objects — the same walk,
+ * pruning, roles, names, ref assignment, and budget as a11yNodes / a11yTree,
+ * but each node carries its descendants under `children` (pre-order, promoted:
+ * an unnamed container's children live one level up, exactly as in the text
+ * outline). Pre-order flattening of this tree (skipping the synthetic `tree` root
+ * added by a11yTreeNodes) is byte-for-byte the legacy flat `nodes` list.
+ */
+function a11yTreeNodesBuilt(maxNodes?: number, maxDepth?: number): {
+  topNodes: A11yNode[];
+  nodeCount: number;
+  truncated: boolean;
+  note?: string;
+} {
+  const maxN = Math.min(Math.max(typeof maxNodes === "number" ? maxNodes : 300, 10), 2000);
+  const maxD = Math.min(Math.max(typeof maxDepth === "number" ? maxDepth : 60, 1), 80);
+  const budget = { left: maxN, truncated: false };
+  let sawIframe = false;
+
+  /** Consume budget for one node; returns false (and marks truncation) when out. */
+  const withinBudget = (): boolean => {
+    if (budget.left <= 0) {
+      budget.truncated = true;
+      return false;
+    }
+    budget.left--;
+    return true;
+  };
+
+  /**
+   * Walk one element and return the list of nodes it contributes at this level:
+   * its own node (with children nested inside) when the element has one,
+   * otherwise the promoted child nodes (pre-order). Leaves return their single
+   * node (or [] when the budget is exhausted). Unnamed containers with no
+   * own node promote their children — the same semantics as the text outline
+   * and the flat node list, so the flattened tree equals the legacy flat list.
+   */
+  const walk = (el: Element, depth: number): A11yNode[] => {
+    if (budget.left <= 0 || depth > maxD) {
+      budget.truncated = true;
+      return [];
+    }
+    const tag = el.tagName.toLowerCase();
+    if (tag === "head" || tag === "script" || tag === "style" || tag === "noscript" || tag === "template") return [];
+    if (el.getAttribute("aria-hidden") === "true") return [];
+    let style: CSSStyleDeclaration;
+    try {
+      style = getComputedStyle(el as HTMLElement);
+    } catch {
+      return [];
+    }
+    if (style.display === "none" || style.visibility === "hidden") return [];
+
+    const role = a11yRole(el);
+    const name = accessibleName(el);
+    const interactive = A11Y_INTERACTIVE.has(role);
+    const hasOnclick = el.getAttribute("onclick") !== null;
+
+    // Leaves (emitted without recursing). Same ordering as a11yNodes.
+    if (tag === "iframe") {
+      sawIframe = true;
+      if (withinBudget()) {
+        return [{ role: "iframe", ...(name ? { name } : {}) }];
+      }
+      budget.truncated = true;
+      return [];
+    }
+    if (role === "image") {
+      if (withinBudget()) return [{ role: "image", ...(name ? { name } : {}) }];
+      budget.truncated = true;
+      return [];
+    }
+    if (role === "heading") {
+      const headingName = name || visibleText(el);
+      if (withinBudget()) {
+        return [{
+          role: "heading",
+          level: Number(/^h([1-6])$/.exec(tag)?.[1] ?? 1),
+          ...(headingName ? { name: headingName.slice(0, 120) } : {}),
+        }];
+      }
+      budget.truncated = true;
+      return [];
+    }
+
+    let own: A11yNode | undefined;
+    if (interactive) {
+      const html = el as HTMLInputElement;
+      const node: A11yNode = { role, ...(name ? { name } : {}) };
+      if ((role === "checkbox" || role === "radio") && "checked" in html && (html as HTMLInputElement).checked) node.checked = true;
+      if (html.disabled) node.disabled = true;
+      const href = el.getAttribute("href");
+      if (role === "link" && href) node.href = href.slice(0, 160);
+      if ("type" in html && typeof (html as HTMLInputElement).type === "string" && (html as HTMLInputElement).type) {
+        node.type = (html as HTMLInputElement).type;
+      }
+      if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && (html as HTMLInputElement).value) {
+        node.value = String((html as HTMLInputElement).value).slice(0, 120);
+      }
+      const rect = nodeRect(el);
+      if (rect) node.rect = rect;
+      own = { ...node, ref: assignRef(el) };
+    } else if (A11Y_ALWAYS.has(role)) {
+      own = { role, ...(name ? { name } : {}) };
+    } else if (A11Y_TEXT_ROLES.has(role)) {
+      const t = visibleText(el);
+      if (t) own = { role, name: t.slice(0, 120) };
+    } else if (role === "generic") {
+      own = name ? { role: "generic", name } : undefined;
+    } else {
+      // section / article / figure / label / anchor / ...: only when named.
+      own = name ? { role, name } : undefined;
+    }
+    if (own === undefined && hasOnclick) {
+      const rect = nodeRect(el);
+      own = { role: "generic", ref: assignRef(el), ...(rect ? { rect } : {}) };
+    } else if (own !== undefined && hasOnclick) {
+      own = { ...own, ref: assignRef(el) };
+      if (!own.rect) {
+        const rect = nodeRect(el);
+        if (rect) own.rect = rect;
+      }
+    }
+
+    // Own node present: consume its budget slot FIRST (same order as a11yNodes:
+    // own before its children) and nest the recursively-produced children under
+    // it. The own node is emitted even when that slot is the budget overrun —
+    // `truncated` signals the cut (same as the text outline, where the own
+    // line is always emitted with its children).
+    if (own !== undefined) {
+      const nodeChildren: A11yNode[] = [];
+      const node: A11yNode = { ...own, children: nodeChildren };
+      if (budget.left > 0) {
+        budget.left--;
+      } else {
+        budget.truncated = true;
+      }
+      if (!interactive) {
+        // Light DOM first, then the element's open shadow root (web components).
+        const sources: ArrayLike<Element>[] = [el.children];
+        const sr = (el as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
+        if (sr) sources.push(sr.children);
+        outer: for (const source of sources) {
+          for (const child of Array.from(source)) {
+            if (budget.left <= 0) {
+              budget.truncated = true;
+              break outer;
+            }
+            nodeChildren.push(...walk(child, depth + 1));
+            if (budget.truncated) break outer;
+          }
+        }
+      }
+      return [node];
+    }
+
+    // No own node: promote children (same promotion as the text outline / flat
+    // list). Collect all descendant nodes in pre-order.
+    const promoted: A11yNode[] = [];
+    if (!interactive) {
+      const sources: ArrayLike<Element>[] = [el.children];
+      const sr = (el as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
+      if (sr) sources.push(sr.children);
+      outer: for (const source of sources) {
+        for (const child of Array.from(source)) {
+          if (budget.left <= 0) {
+            budget.truncated = true;
+            break outer;
+          }
+          promoted.push(...walk(child, depth + 1));
+          if (budget.truncated) break outer;
+        }
+      }
+    }
+    // Text fallback — same as the outline's `text "..."` line and the flat
+    // list's fallback: only when no own node and no child node was produced.
+    if (promoted.length === 0) {
+      const t = visibleText(el);
+      if (t && withinBudget()) promoted.push({ role: "text", name: t.slice(0, 120) });
+    }
+    return promoted;
+  };
+
+  const root = document.body ?? document.documentElement;
+  const topNodes = walk(root, 0);
+  const nodeCount = maxN - budget.left;
+  let note: string | undefined;
+  if (nodeCount < 10 && sawIframe) {
+    note =
+      "the outline is small and contains iframe leaves — the page content likely lives in a child frame; " +
+      "re-run with the frame parameter (a frameId or URL substring from the frames list in browser_get_dom)";
+  }
+  return { topNodes, nodeCount, truncated: budget.truncated, ...(note ? { note } : {}) };
+}
+
+/**
+ * Nested accessibility tree: the same walk as a11yNodes but wrapped in a single
+ * synthetic root ({ role: "generic", name: <document title>, ref: "root" }) whose
+ * `children` hold the top-level promoted nodes. `nodeCount` counts only real
+ * nodes (synthetic root excluded). Used by the javascript REPL's page.snapshot()
+ * (tree, the default format).
+ */
+function a11yTreeNodes(maxNodes?: number, maxDepth?: number): {
+  tree: A11yNode;
+  nodeCount: number;
+  truncated: boolean;
+  note?: string;
+} {
+  const { topNodes, nodeCount, truncated, note } = a11yTreeNodesBuilt(maxNodes, maxDepth);
+  const tree: A11yNode = {
+    role: "generic",
+    name: (document.title || ""),
+    ref: "root",
+    children: topNodes.length ? topNodes : [],
+  };
+  return { tree, nodeCount, truncated, ...(note ? { note } : {}) };
+}
+
 // ---------------------------------------------------------------------------
 // browser_get_console
 // ---------------------------------------------------------------------------
@@ -1186,6 +1426,8 @@ async function handle(msg: ContentMessage): Promise<unknown> {
       return a11yTree(msg.maxNodes as number | undefined, msg.maxDepth as number | undefined);
     case "pi:a11yNodes":
       return a11yNodes(msg.maxNodes as number | undefined, msg.maxDepth as number | undefined);
+    case "pi:a11yTreeNodes":
+      return a11yTreeNodes(msg.maxNodes as number | undefined, msg.maxDepth as number | undefined);
     case "pi:clickAt":
       return clickAt(msg.x, msg.y);
     case "pi:focus":
@@ -1204,18 +1446,20 @@ async function handle(msg: ContentMessage): Promise<unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Skills submission gate (skills-runtime-design.md §6, §8)
+// Skills submission gate (skills v2)
 //
 // On document load the content script PROBES the background for a compiled
-// page plan. Only when a rule names a PACKAGED page adapter does it start a
-// PageRuntime; on every other page nothing is attached (design §2: no
-// non-matching handlers, no model work until a relevant interaction).
-// The runtime makes the synchronous "hold" decision on the submit gesture;
-// the background gate re-validates every allowed gesture. Gate-view pushes
-// ("pi/skills_state") update the local mirror + the review card.
+// page plan. For every plan rule it starts one PageRuntime — a per-rule
+// interpreter for that package's targets/events (the package IS its adapter).
+// On every other page nothing is attached (design §2: no non-matching
+// handlers, no model work until a relevant interaction).
+// Each runtime makes the synchronous "hold" decision on its gate event's
+// gesture; the background gate re-validates every allowed gesture. Gate-view
+// pushes ("pi/skills_state", carrying the qualified event) update the owning
+// runtime's local mirror + the review card.
 // ---------------------------------------------------------------------------
 
-let skillsRuntime: PageRuntime | undefined;
+const skillsRuntimes = new Map<string, PageRuntime>();
 let skillsCard: HTMLElement | undefined;
 let skillsPlan: PagePlan | undefined;
 let skillsInteractionId = `int:${Date.now().toString(36)}${Math.floor(Math.random() * 1_000_000).toString(36)}`;
@@ -1230,80 +1474,144 @@ async function skillsAction(action: string, payload: Record<string, unknown> = {
   return res.result;
 }
 
+/** The runtime whose rule owns a qualified event (`packageId:local`). */
+function runtimeForEvent(event: string): PageRuntime | undefined {
+  for (const runtime of skillsRuntimes.values()) {
+    const local = event.slice(runtime.rule.packageId.length + 1);
+    if (local && runtime.rule.events[local] !== undefined) return runtime;
+  }
+  return undefined;
+}
+
+/** The primary gate view (first non-closed) for the card. */
+function primaryView(): { runtime: PageRuntime; view: import("@pi-browser/webext").GateView } | undefined {
+  for (const runtime of skillsRuntimes.values()) {
+    const view = runtime.currentView;
+    if (view && view.state !== "closed") return { runtime, view };
+  }
+  return undefined;
+}
+
 let skillsProbeRetriesLeft = 10;
 async function probeSkills(): Promise<void> {
-  if (skillsRuntime) return; // already armed; stop re-probing
+  if (skillsRuntimes.size > 0) return; // already armed; stop re-probing
   try {
     const result = (await skillsAction("skills_plan")) as SkillsPlanResult;
     if (result.status !== "ok" || !result.plan) return;
-    const rule = result.plan.rules[0];
-    const adapter = adapterById(rule.adapterId);
-    if (!adapter) return; // generic adapter: advisory observations only, no page coverage
     skillsPlan = result.plan;
     const documentGeneration = result.plan.documentGeneration;
-    skillsRuntime = new PageRuntime({
-      adapter,
-      mode: rule.mode,
-      target: {
-        // Real DOM events (Event/EventTarget) meet the runtime's narrow
-        // SkillEventLike contract at this one bridge point.
-        // CAPTURE phase: the gate's synchronous hold decision must run
-        // BEFORE the page's own gesture handlers, so a held gesture reaches
-        // the page's handler with defaultPrevented already set (design §9:
-        // the consult happens "before the event proceeds").
-        addEventListener: (type, fn) => document.addEventListener(type, fn as unknown as EventListener, true),
-        removeEventListener: (type, fn) => document.removeEventListener(type, fn as unknown as EventListener, true),
-        query: (selector) => document.querySelector(selector),
-      },
-      interactionId: skillsInteractionId,
-      arm: (input) =>
-        skillsAction("skills_arm", {
-          documentGeneration,
-          plan: skillsPlan,
-          identity: {
+    const target = {
+      // Real DOM events (Event/EventTarget) meet the runtime's narrow
+      // SkillEventLike contract at this one bridge point.
+      // CAPTURE phase: the gate's synchronous hold decision must run
+      // BEFORE the page's own gesture handlers — a held gesture is stopped
+      // with preventDefault + stopImmediatePropagation, so even
+      // non-cooperative page handlers never see it (design §9).
+      addEventListener: (type: string, fn: (event: SkillEventLike) => void) => document.addEventListener(type, fn as unknown as EventListener, true),
+      removeEventListener: (type: string, fn: (event: SkillEventLike) => void) => document.removeEventListener(type, fn as unknown as EventListener, true),
+    };
+    for (const rule of skillsPlan.rules) {
+      if (skillsRuntimes.has(rule.skillKey)) continue;
+      // World placement: CSS-dialect rules run in this isolated world.
+      // JS-dialect rules need the main-world host (its predicates must
+      // compile where string codegen is legal); until that lands they
+      // arm nowhere and are logged, not silently dropped. `?? "isolated"`
+      // keeps a stale host build (pre-world plans) arming, not dead.
+      if ((rule.world ?? "isolated") !== "isolated") {
+        console.warn(`[pi-browser skills] rule ${rule.skillKey} requires the main world; not armed here`);
+        continue;
+      }
+      // The scan closure needs the runtime's compiled predicates, and the
+      // runtime needs the scan: a one-cell ref breaks the cycle.
+      const runtimeRef: { current?: PageRuntime } = {};
+      const runtime = new PageRuntime({
+        rule,
+        target,
+        interactionId: skillsInteractionId,
+        arm: (input) =>
+          skillsAction("skills_arm", {
             documentGeneration,
-            frameId: 0,
-            interactionId: skillsInteractionId,
-            replyTarget: input.replyTarget,
-            draft: input.draft,
-            contextRevision: input.contextRevision,
-            // memoryRevision 0 = no memory revision claimed; the host owns memory state.
-            reviewers: skillsPlan!.rules.map((r) => ({ key: r.skillKey, revision: r.skillRevision, memoryRevision: 0 })),
-          },
-          // One bounded snapshot per arm: the host resolves the job context
-          // (draft/replyTarget) against it via the skills_context round-trip;
-          // without it the contextRef is "none" and the review job settles
-          // unavailable.
-          snapshot: { draft: input.draft, replyTarget: input.replyTarget },
-        }).then(() => undefined),
-      onGesture: (phase) => {
-        // Bookkeeping only: the background gate already re-validated.
-        void skillsAction("skills_gesture", { documentGeneration, chainId: adapter.chainId, phase }).catch(() => {});
-      },
-      onArm: (state) => {
-        // TEMP e2e diagnostic: record arm lifecycle into the beacon.
-        window.postMessage({ __skillsTestRecord: { type: "arm", detail: { state } } }, "*");
-      },
-      log: (message) => {
-        console.warn(`[pi-browser skills] ${message}`);
-        // TEMP e2e diagnostic: mirror runtime logs into the beacon.
-        window.postMessage({ __skillsTestRecord: { type: "runtime-log", detail: { message } } }, "*");
-      },
-    });
-    skillsRuntime.start();
-    showReviewCard();
-    // Test-bridge visibility: the e2e input step waits for this before typing,
-    // so scripted gestures never race the plan/arm round-trip (real users type
-    // slowly; the scripted agent does not).
-    if (/[?&]skills_test=1\b/.test(location.search)) {
-      document.documentElement.setAttribute("data-skills-armed", String(documentGeneration));
+            plan: skillsPlan,
+            event: input.event,
+            identity: {
+              documentGeneration,
+              frameId: 0,
+              interactionId: skillsInteractionId,
+              // Gate identity maps the package-defined payload onto the
+              // review contract: draft + the first context-like field.
+              draft: input.snapshot.draft ?? "",
+              replyTarget: input.snapshot.replyTarget ?? input.snapshot.postContext ?? "",
+              contextRevision: input.contextRevision,
+              // memoryRevision 0 = no memory revision claimed; the host owns memory state.
+              reviewers: [{ key: rule.skillKey, revision: rule.skillRevision, memoryRevision: 0 }],
+            },
+            // One bounded snapshot per arm: the host resolves the job context
+            // against it via the skills_context round-trip; without it the
+            // contextRef is "none" and the review job settles unavailable.
+            snapshot: input.snapshot,
+            draftRevision: input.draftRevision,
+          }),
+        onGesture: (event, chainId, phase) => {
+          // Bookkeeping only: the background gate already re-validated.
+          void skillsAction("skills_gesture", { documentGeneration, event, chainId, phase }).catch(() => {});
+        },
+        onHold: (event, phase) => {
+          // The runtime is the source of truth for a held gesture: a
+          // non-cooperative page handler never runs to record one itself.
+          // (Test bridge only; production builds gate this on skills_test.)
+          window.postMessage({ __skillsTestRecord: { type: "gate-hold", detail: { event, phase } } }, "*");
+        },
+        scan: (targetName: string): Element | undefined => {
+          // Bounded document scan for `resolve: "document"` payload fields:
+          // DFS from body with a node budget; the rule's COMPILED target
+          // test decides (isolated-world predicate — the page never sees it).
+          const fn = runtimeRef.current?.targetTest(targetName);
+          if (!fn) return undefined;
+          let visited = 0;
+          const stack: Element[] = [document.body];
+          while (stack.length > 0 && visited < 2_048) {
+            const el = stack.pop()!;
+            visited++;
+            const tag = el.tagName.toLowerCase();
+            if (tag === "script" || tag === "style" || tag === "template") continue;
+            try {
+              if (fn(el)) return el;
+            } catch {
+              /* keep walking */
+            }
+            for (let i = el.children.length - 1; i >= 0; i--) stack.push(el.children[i]);
+          }
+          return undefined;
+        },
+        onArm: (state) => {
+          // TEMP e2e diagnostic: record arm lifecycle into the beacon.
+          window.postMessage({ __skillsTestRecord: { type: "arm", detail: { state, event: `${rule.packageId}` } } }, "*");
+        },
+        log: (message) => {
+          console.warn(`[pi-browser skills] ${message}`);
+          // TEMP e2e diagnostic: mirror runtime logs into the beacon.
+          window.postMessage({ __skillsTestRecord: { type: "runtime-log", detail: { message } } }, "*");
+        },
+      });
+      runtimeRef.current = runtime;
+      skillsRuntimes.set(rule.skillKey, runtime);
+      runtime.start();
+    }
+    if (skillsRuntimes.size > 0) {
+      showReviewCard();
+      // Test-bridge visibility: the e2e input step waits for this before
+      // typing, so scripted gestures never race the plan/arm round-trip
+      // (real users type slowly; the scripted agent does not).
+      if (/[?&]skills_test=1\b/.test(location.search)) {
+        document.documentElement.setAttribute("data-skills-armed", String(documentGeneration));
+      }
     }
   } catch {
     // The native host can still be starting up when the document loads
     // (spawn + initialize takes longer than page load on a cold browser):
     // a failed probe must not leave the page inert forever. Definitive
-    // negatives (no rules, no matching adapter) return above and are not
-    // retried; only request failures re-probe, bounded.
+    // negatives (no rules) return above and are not retried; only request
+    // failures re-probe, bounded.
     if (skillsProbeRetriesLeft > 0) {
       skillsProbeRetriesLeft--;
       setTimeout(() => void probeSkills(), 1000);
@@ -1356,12 +1664,15 @@ function showReviewCard(): void {
 function updateReviewCard(): void {
   const card = skillsCard;
   if (!card) return;
-  const view = skillsRuntime?.currentView;
-  if (!view || view.state === "closed" || view.state === "dirty") {
+  const primary = primaryView();
+  if (!primary || primary.view.state === "dirty") {
     card.hidden = true;
     card.replaceChildren();
     return;
   }
+  const { runtime, view } = primary;
+  const localGate = runtime.gateEvent;
+  const event = localGate ? `${runtime.rule.packageId}:${localGate}` : undefined;
   card.hidden = false;
   card.replaceChildren();
   const title = document.createElement("h2");
@@ -1395,7 +1706,7 @@ function updateReviewCard(): void {
     const keep = document.createElement("button");
     keep.textContent = "Post my text";
     keep.addEventListener("click", () => {
-      void skillsAction("skills_authorize", { documentGeneration: skillsPlan?.documentGeneration }).catch(() => {});
+      void skillsAction("skills_authorize", { documentGeneration: skillsPlan?.documentGeneration, ...(event ? { event } : {}) }).catch(() => {});
     });
     actions.appendChild(keep);
   }
@@ -1410,22 +1721,27 @@ function updateReviewCard(): void {
   card.appendChild(actions);
 }
 
-/** User-applied suggestion: replace the active composer's draft (a fresh arm follows). */
+/**
+ * User-applied suggestion: replace the draft in the element the runtime last
+ * saw matching the draft's source target (a fresh arm follows via input).
+ */
 function applySuggestion(text: string): void {
-  const plan = skillsPlan;
-  const runtime = skillsRuntime;
-  if (!plan) return;
-  const rule = plan.rules[0];
-  const adapter = adapterById(rule.adapterId);
-  if (!adapter) return;
-  const composer = document.querySelector(adapter.composer.join(",")) as
-    | (HTMLTextAreaElement | HTMLInputElement | null)
-    | null;
-  if (composer && (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement)) {
+  const primary = primaryView();
+  if (!primary) return;
+  const { runtime } = primary;
+  const localGate = runtime.gateEvent;
+  const def = localGate ? runtime.rule.events[localGate] : undefined;
+  const draftField = def?.payload?.draft;
+  const composer = draftField ? runtime.lastElement(draftField.from) : undefined;
+  if (!composer) return;
+  if (composer instanceof HTMLTextAreaElement || (composer instanceof HTMLInputElement && composer.type !== "button")) {
     composer.value = text;
     composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  } else {
+    // contenteditable: set text and let the input event drive the re-arm.
+    composer.textContent = text;
+    composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
   }
-  void runtime; // the input event drives the re-arm through the runtime's listeners
 }
 
 void probeSkills();
@@ -1434,19 +1750,21 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
   if (typeof message !== "object" || message === null) return;
   const msg = message as ContentMessage;
   if (msg.type === "pi/skills_state") {
-    // Push from the background on every gate transition (no response).
+    // Push from the background on every gate transition (no response);
+    // carries the qualified event so the view routes to the owning rule.
     if (
-      skillsRuntime &&
       skillsPlan &&
       msg.documentGeneration === skillsPlan.documentGeneration &&
+      typeof msg.event === "string" &&
       typeof msg.view === "object" &&
       msg.view !== null
     ) {
-      skillsRuntime.setView(msg.view as GateView);
-      // TEMP e2e diagnostic: record gate-view transitions into the beacon.
-      const gv = msg.view as GateView;
-      window.postMessage({ __skillsTestRecord: { type: "gate-view", detail: { state: gv.state, reason: gv.reason ?? null, suggestions: gv.suggestions.length } } }, "*");
-      updateReviewCard();
+      const runtime = runtimeForEvent(msg.event);
+      if (runtime) {
+        const local = msg.event.slice(runtime.rule.packageId.length + 1);
+        runtime.setView(local, msg.view as GateView);
+        updateReviewCard();
+      }
     }
     return;
   }
@@ -1465,26 +1783,22 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
   return true; // async sendResponse
 });
 
-// ---------------------------------------------------------------------------
-// Skills test bridge (tests/skills-e2e, controlled matrix).
-//
-// Inert in normal use: exposed ONLY when the top-level URL carries
-// `skills_test=1` (the e2e harness serves the fixtures with that query).
-// The harness reads state through the host's browser_evaluate tool, which
-// can call `window.__skillsTest.state()` / `.action(...)` — the same
-// background dispatch the review UI uses, with sender-verified identity —
-// and `.accept()` applies the current suggestion exactly like the card's
-// Apply button.
-// ---------------------------------------------------------------------------
 if (window.top === window && /[?&]skills_test=1\b/.test(location.search)) {
   // Page-world bridge: the e2e harness reads state through browser_evaluate,
   // which runs in the PAGE's JS world (where window.__fixture lives) and
   // cannot see this isolated world. The fixture's _recorder.js installs a
   // page-world window.__skillsTest wrapper that round-trips through this
   // router (postMessage crosses the world boundary in both directions).
+  // The page-world driver re-posts until it gets a reply (the router can
+  // register after the first post); dedupe by id so re-posts don't spawn
+  // duplicate sessions.
+  const seenIds = new Set<number>();
   window.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { __skillsTest?: unknown; id?: unknown; name?: unknown; payload?: unknown } | null;
     if (!data || data.__skillsTest !== true || typeof data.name !== "string" || typeof data.id !== "number") return;
+    if (seenIds.has(data.id)) return;
+    seenIds.add(data.id);
+    if (seenIds.size > 256) seenIds.clear();
     window.postMessage({ __skillsTestTrace: "router-received", name: data.name }, "*");
     void skillsAction(data.name, (data.payload as Record<string, unknown>) ?? {})
       .then((result) => {

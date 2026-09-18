@@ -9,7 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   X_PI_BROWSER,
-  parseSkillManifest,
+  parseSkillPackage,
   type ReviewResult,
   type RegisteredSkill,
   type SkillEvent,
@@ -22,8 +22,8 @@ import {
   type SkillsStatusResult,
 } from "@pi-browser/protocol";
 import { createMemoryTransportPair } from "../src/native-host/transport.js";
-import { createSkillsProtocol } from "../src/skills/skills-protocol.js";
-import { SkillsPlanner, type SkillAdapterCoverage, type SkillGrant } from "../src/skills/planner.js";
+import { createSkillsProtocol, type SkillsLifecycleEvent } from "../src/skills/skills-protocol.js";
+import { SkillsPlanner, type SkillGrant } from "../src/skills/planner.js";
 import type { SkillsRegistry } from "../src/skills/registry.js";
 import type { SkillsHost, } from "../src/skills/pi-integration.js";
 import { createLogger } from "../src/logger.js";
@@ -33,29 +33,42 @@ const log = createLogger({ level: "error", stderr: { write: () => true } });
 
 function manifest(packageId = "test-package", host = "example.com") {
   return {
-    schemaVersion: 1, packageId,
+    schemaVersion: 2, packageId, application: "firefox", hosts: [host],
+    targets: { composer: "composer-x", submit: "submit-x" },
+    events: {
+      "before-submit": {
+        kind: "gate", chainId: "t-submit",
+        alternatives: [[{ dom: "click", target: "submit" }]],
+        payload: { draft: { from: "composer", field: "value" }, replyTarget: { from: "composer", field: "text" } },
+      },
+      "draft.paused": {
+        kind: "debounced", debounceMs: 100,
+        sequence: [{ dom: "input", target: "composer" }],
+        payload: { draft: { from: "composer", field: "value" } },
+      },
+    },
     skills: [
       { id: "friendliness", type: "triggered", instructions: "skills/friendliness/SKILL.md",
-        scope: { applications: ["firefox"], hosts: [host] },
-        subscriptions: [{ event: "comment.before-submit" }],
+        subscriptions: [{ event: "before-submit" }],
         context: { required: ["draft", "replyTarget"], optional: [] },
         capabilities: ["context.read", "suggestion.present"], execution: { handler: "agent", timeoutMs: 10000 } },
       { id: "constructive-reply", type: "triggered", instructions: "skills/constructive-reply/SKILL.md",
-        scope: { applications: ["firefox"], hosts: [host] },
-        subscriptions: [{ event: "comment.before-submit" }],
-        context: { required: ["draft"], optional: ["parentPost"] },
+        subscriptions: [{ event: "before-submit" }],
+        context: { required: ["draft"], optional: [] },
         capabilities: ["context.read"], execution: { handler: "agent", timeoutMs: 10000 } },
     ],
   };
 }
 
 function skills(): RegisteredSkill[] {
-  const parsed = parseSkillManifest(manifest());
+  const parsed = parseSkillPackage(manifest());
   return parsed.skills.map((definition, i) => ({
     key: `test-package/${definition.id}`,
     revision: `rev-${i}`,
+    packageId: "test-package",
     definition,
     instructions: "Be kind.",
+    manifest: parsed,
   }));
 }
 
@@ -83,12 +96,7 @@ function makeFakeHost() {
   return { host, submissions, cancellations };
 }
 
-const adapter: SkillAdapterCoverage = {
-  id: "fixture", version: "1", hosts: ["example.com"],
-  events: ["comment.before-submit"], gates: ["comment.before-submit"],
-};
-
-function setup(options: { grants?: Map<string, SkillGrant>; contextOk?: boolean } = {}) {
+function setup(options: { grants?: Map<string, SkillGrant>; contextOk?: boolean; lifecycle?: (e: SkillsLifecycleEvent) => void } = {}) {
   const skillList = skills();
   const planner = new SkillsPlanner(skillList);
   const grants = options.grants ?? new Map(skillList.map((s) => [s.key, {
@@ -133,8 +141,8 @@ function setup(options: { grants?: Map<string, SkillGrant>; contextOk?: boolean 
     registry,
     planner,
     grants: () => grants,
-    adapters: () => [adapter],
     endpoint: a.transport,
+    ...(options.lifecycle ? { onLifecycle: options.lifecycle } : {}),
   });
 
   const call = (method: string, params?: unknown): Promise<unknown> =>
@@ -151,11 +159,30 @@ function setup(options: { grants?: Map<string, SkillGrant>; contextOk?: boolean 
   return { protocol, a, b, call, fake, contextRequests, results, skillList, grants };
 }
 
+test("lifecycle sink records plan, event ack and job result lines (agent observation log)", async () => {
+  const lifecycle: SkillsLifecycleEvent[] = [];
+  const { call, skillList } = setup({ lifecycle: (e) => lifecycle.push(e) });
+  const plan = (await call(X_PI_BROWSER.skills_plan, planParams)) as SkillsPlanResult;
+  assert.equal(plan.status, "ok");
+  const ack = (await call(X_PI_BROWSER.skills_event, { event: event(1) })) as SkillsEventResult;
+  assert.equal(ack.status, "accepted");
+  await new Promise((r) => setTimeout(r, 50)); // job settlement is async
+  const types = lifecycle.map((e) => e.type);
+  assert.ok(types.includes("plan"), `plan line recorded: ${JSON.stringify(lifecycle)}`);
+  assert.ok(types.includes("event"), "event ack line recorded");
+  assert.ok(types.includes("result"), "job result line recorded");
+  const planLine = lifecycle.find((e) => e.type === "plan");
+  assert.ok(planLine && planLine.type === "plan" && planLine.rules === skillList.length, `plan line: ${JSON.stringify(planLine)}`);
+  const resultLine = lifecycle.find((e) => e.type === "result");
+  assert.ok(resultLine && resultLine.type === "result" && resultLine.status === "done" && resultLine.decision === "clear", `result line: ${JSON.stringify(resultLine)}`);
+  assert.ok(skillList.some((s) => s.key === resultLine.skillKey));
+});
+
 function event(planVersion: number, overrides: Partial<SkillEvent> = {}): SkillEvent {
   return {
     version: 1,
     eventId: "evt:1",
-    event: "comment.before-submit",
+    event: "test-package:before-submit",
     source: { application: "firefox", connectionEpoch: "epoch-1", documentGeneration: "doc-1", tabId: 7, frameId: 0 },
     interactionId: "composer-7",
     draftRevision: 0,
@@ -214,7 +241,7 @@ test("events naming a stale or unknown plan are rejected, never guessed", async 
 test("non-matching events ack no-match without model work", async () => {
   const { call, fake } = setup();
   await call(X_PI_BROWSER.skills_plan, planParams);
-  const result = (await call(X_PI_BROWSER.skills_event, { event: event(1, { event: "comment.draft.paused" }) })) as SkillsEventResult;
+  const result = (await call(X_PI_BROWSER.skills_event, { event: event(1, { event: "test-package:draft.paused" }) })) as SkillsEventResult;
   assert.equal(result.status, "no-match");
   assert.equal(fake.submissions.length, 0);
 });
@@ -238,7 +265,7 @@ test("matching event resolves context by request, submits jobs, and delivers an 
   // Both jobs submitted with the resolved snapshot, correct kind and key.
   assert.equal(fake.submissions.length, 2);
   const [first, second] = fake.submissions;
-  assert.equal(first.kind, "gate"); // comment.before-submit → held submission
+  assert.equal(first.kind, "gate"); // before-submit gate event → held submission
   assert.equal(first.key, "test-package/friendliness:composer-7:0");
   assert.equal(first.jobId, "job:evt:1:test-package/friendliness");
   assert.equal(second.key, "test-package/constructive-reply:composer-7:0");
@@ -269,7 +296,6 @@ test("a runtime failure reports unavailable, never clear", async () => {
     registry: { get: () => skillList[0] } as unknown as SkillsRegistry,
     planner: new SkillsPlanner([skillList[0]!]),
     grants: () => new Map([[skillList[0]!.key, { enabled: true, revision: skillList[0]!.revision, capabilities: ["context.read"] }]]),
-    adapters: () => [adapter],
     endpoint: a.transport,
   });
   b.transport.onRequest = (method, params, id) => {

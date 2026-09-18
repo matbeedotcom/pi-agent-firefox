@@ -37,15 +37,15 @@ import {
   type SkillsContextResult,
   type SkillsEventParams,
   type SkillsEventResult,
-  type SkillContextField,
   type SkillsPlanParams,
   type SkillsPlanResult,
   type SkillsResultParams,
   type SkillsStatusResult,
 } from "@pi-browser/protocol";
+import { skillEventName } from "@pi-browser/protocol";
 import type { SkillsHost } from "./pi-integration.js";
 import type { SkillsRegistry } from "./registry.js";
-import type { SkillAdapterCoverage, SkillGrant, SkillsPlanner } from "./planner.js";
+import type { SkillGrant, SkillsPlanner } from "./planner.js";
 import type { SkillJobOutcome } from "./skills-service.js";
 import type { Logger } from "../logger.js";
 
@@ -62,13 +62,25 @@ export interface SkillsProtocolDeps {
   planner: SkillsPlanner;
   /** User grants (settings). No grants → nothing arms; plans stay empty. */
   grants: () => ReadonlyMap<string, SkillGrant>;
-  adapters: () => readonly SkillAdapterCoverage[];
   endpoint: SkillsProtocolEndpoint;
   /** Bounded context snapshot size per review (design §9: 32 KiB). */
   maxContextBytes?: number;
   /** Host→client round-trip budget for context resolution. */
   contextTimeoutMs?: number;
+  /**
+   * Lifecycle observation sink (JSONL event log): one record per plan
+   * compile, event ack, and job result — the agent's "what just happened"
+   * channel for live skill development.
+   */
+  onLifecycle?: (event: SkillsLifecycleEvent) => void;
 }
+
+/** One line in the host skills event log (run dir `skills-events.jsonl`). */
+export type SkillsLifecycleEvent =
+  | { type: "plan"; doc: string; status: string; rules: number; unavailable: { skillKey: string; reason: string }[]; planVersion?: number; planId?: string }
+  | { type: "event"; eventId: string; event: string; status: string; jobs?: number; reason?: string }
+  | { type: "result"; jobId: string; skillKey: string; status: string; decision?: string; reason?: string }
+  | { type: "reload"; packages: number; skills: number; generation: number; ok: boolean };
 
 /** Per-client mutable state: one connection = one verified identity. */
 interface ClientState {
@@ -135,15 +147,20 @@ function handlePlan(ctx: SkillsProtocolContext, raw: unknown): SkillsPlanResult 
         ...(params.source.accountId ? { accountId: params.source.accountId } : {}),
       },
       deps.grants(),
-      deps.adapters(),
       version,
     );
   } catch (err) {
     deps.log.warn(`skills plan failed for ${key}: ${err instanceof Error ? err.message : String(err)}`);
+    deps.onLifecycle?.({ type: "plan", doc: key, status: "unavailable", rules: 0, unavailable: [] });
     return { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
   }
   if (state.plans.size >= MAX_PLANS_PER_CLIENT && !state.plans.has(key)) state.plans.delete(state.plans.keys().next().value!);
   state.plans.set(key, { planId: compiled.planId, planVersion: compiled.planVersion, expiresAt: compiled.expiresAt, rules: compiled.rules });
+  deps.onLifecycle?.({
+    type: "plan", doc: key, status: "ok",
+    rules: compiled.rules.length, unavailable: compiled.unavailable,
+    planVersion: compiled.planVersion, planId: compiled.planId,
+  });
   return { status: "ok", plan: compiled };
 }
 
@@ -159,17 +176,29 @@ async function handleEvent(ctx: SkillsProtocolContext, raw: unknown): Promise<Sk
   if (Date.now() > stored.expiresAt) {
     return { status: "stale-plan", reason: "plan expired; re-plan" };
   }
-  const rules = stored.rules.filter((rule) => rule.subscriptions.some((sub) => sub.event === evt.event));
-  if (rules.length === 0) return { status: "no-match" };
+  // Events are package-scoped: `packageId:local`. A rule matches when the
+  // event's package is the rule's package and a subscription names it.
+  const rules = stored.rules.filter((rule) =>
+    rule.subscriptions.some((sub) => evt.event === skillEventName(rule.packageId, sub.event)));
+  if (rules.length === 0) {
+    deps.onLifecycle?.({ type: "event", eventId: evt.eventId, event: evt.event, status: "no-match" });
+    return { status: "no-match" };
+  }
 
   // Resolve the context snapshot through the coordinator's capability
   // (design §7: contextRef resolves ONLY here, privacy by request).
-  // Manifest parsing already restricts context fields to SKILL_CONTEXT_FIELDS.
+  // Field names are package-defined payload fields; the snapshot store
+  // answers only the fields the matching rules requested.
   const resolved = await resolveEventContext(ctx, rules, evt);
   if (resolved.payload === undefined) return { status: "unavailable", reason: resolved.reason ?? "context unavailable" };
 
   const jobs = submitRuleJobs(ctx, evt, rules, resolved.payload);
-  return jobs.length ? { status: "accepted", jobs } : { status: "unavailable", reason: "no usable rules" };
+  const result = jobs.length ? { status: "accepted" as const, jobs } : { status: "unavailable" as const, reason: "no usable rules" };
+  deps.onLifecycle?.({
+    type: "event", eventId: evt.eventId, event: evt.event, status: result.status,
+    ...(result.status === "accepted" ? { jobs: result.jobs.length } : { reason: result.reason }),
+  });
+  return result;
 }
 
 async function resolveEventContext(
@@ -183,7 +212,7 @@ async function resolveEventContext(
       const skill = deps.registry.get(rule.skillKey);
       return skill ? [...skill.definition.context.required, ...skill.definition.context.optional] : [];
     }),
-  )] as SkillContextField[];
+  )];
   try {
     const request: SkillsContextRequestParams = {
       contextRef: evt.contextRef, interactionId: evt.interactionId,
@@ -215,7 +244,8 @@ function submitRuleJobs(
     }
     const jobId = `job:${evt.eventId}:${rule.skillKey}`;
     const dedupeKey = `${rule.skillKey}:${evt.interactionId}:${evt.draftRevision ?? 0}`;
-    const kind = evt.event === "comment.before-submit" ? "gate" : "speculative";
+    const local = evt.event.slice(rule.packageId.length + 1);
+    const kind = rule.events[local]?.kind === "gate" ? "gate" : "speculative";
     void deps.host
       .submit({
         skill,
@@ -286,6 +316,10 @@ function deliverResult(
           jobId, eventId, skillKey: rule.skillKey, skillRevision: rule.skillRevision, status: "unavailable",
           reason: outcome.reason ?? outcome.error?.message ?? outcome.status,
         };
+  ctx.deps.onLifecycle?.({
+    type: "result", jobId, skillKey: rule.skillKey, status: params.status,
+    ...(params.status === "done" ? { decision: params.decision } : { reason: params.reason }),
+  });
   // Delivery is best-effort and acked: a client that is gone (disconnect,
   // navigation) must not wedge the already-settled job.
   ctx.deps.endpoint

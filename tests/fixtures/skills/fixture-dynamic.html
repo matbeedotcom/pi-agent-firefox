@@ -55,11 +55,6 @@
   var collapseButton = document.querySelector('button[data-skill-fixture="collapse"]');
 
   function submit(event) {
-    if (event && event.defaultPrevented) {
-      // The add-on's page-runtime held this gesture: the page must not post.
-      window.__fixture.record("held", { via: "click" });
-      return;
-    }
     var draft = composer.value;
     if (draft.trim() === "") {
       window.__fixture.record("rejected-empty");

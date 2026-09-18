@@ -125,17 +125,18 @@ let theme: PiTheme | undefined;
  */
 const skills = new SkillsRuntime({
   application: "firefox",
-  mode: "review-before-submit",
   // Explicit generic return type: `skills` and `client` reference each
   // other, and the closure must not join that inference cycle.
   request: <T = unknown>(method: string, params?: unknown, timeoutMs?: number): Promise<T> =>
     client.request<T>(method, params, timeoutMs),
-  onCardState: (document, view) => {
-    // Card sync to the armed document's content script (fire-and-forget).
+  onCardState: (document, view, event) => {
+    // Card sync to the armed document's content script (fire-and-forget);
+    // the content routes the view to the rule that owns `event`.
     if (document.tabId !== undefined) {
       browser.tabs.sendMessage(document.tabId, {
         type: "pi/skills_state",
         documentGeneration: document.documentGeneration,
+        event,
         view,
       }).catch(() => {
         /* no content script on this tab */
@@ -153,7 +154,12 @@ const skills = new SkillsRuntime({
 const docGenerations = new Map<number, string>();
 let docGenerationSeq = 0;
 browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status !== "loading" && typeof changeInfo.url !== "string") return;
+  // Rotate ONLY on a real document load. Same-document URL rewrites (SPA
+  // pushState/replaceState — e.g. Facebook's post-load canonical-URL
+  // normalization) fire with changeInfo.url but no status: the document is
+  // unchanged, its armed runtime and plan are still valid, and rotating here
+  // would orphan the plan's key so every later arm is a silent stale-plan.
+  if (changeInfo.status !== "loading") return;
   // The old document is gone: close its skills session, stamp a fresh generation.
   skills.closeTab(tabId);
   docGenerations.set(tabId, `gen:${tabId}:${++docGenerationSeq}`);
@@ -615,9 +621,11 @@ async function handleSkillsAction(action: string, payload: ActionPayload, sender
     case "skills_arm": {
       const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
-      if (!payload.identity || !payload.plan) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_arm requires identity and plan");
+      const event = String(payload.event ?? "");
+      if (!payload.identity || !payload.plan || !event) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_arm requires event, identity and plan");
       return skills.arm({
         document,
+        event,
         identity: payload.identity,
         plan: payload.plan,
         ...(payload.snapshot !== undefined ? { snapshot: payload.snapshot } : {}),
@@ -628,25 +636,29 @@ async function handleSkillsAction(action: string, payload: ActionPayload, sender
       const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       const phase = payload.phase === "click" || payload.phase === "keyboard" || payload.phase === "submit" ? payload.phase : undefined;
-      if (!phase || !payload.chainId) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_gesture requires chainId and phase");
-      return { verdict: skills.gesture(document, { chainId: payload.chainId, phase }) };
+      const event = String(payload.event ?? "");
+      if (!phase || !payload.chainId || !event) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_gesture requires event, chainId and phase");
+      return { verdict: skills.gesture(document, event, { chainId: payload.chainId, phase }) };
     }
     case "skills_draft": {
       const document = skillsDocument(sender);
-      if (!document || !payload.identity) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_draft requires identity");
-      skills.draftChanged(document, payload.identity);
+      const event = String(payload.event ?? "");
+      if (!document || !payload.identity || !event) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_draft requires event and identity");
+      skills.draftChanged(document, event, payload.identity);
       return {};
     }
     case "skills_composition": {
       const document = skillsDocument(sender);
-      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
-      skills.compositionChanged(document, payload.composing === true);
+      const event = String(payload.event ?? "");
+      if (!document || !event) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      skills.compositionChanged(document, event, payload.composing === true);
       return {};
     }
     case "skills_authorize": {
       const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
-      return { authorized: skills.authorize(document) };
+      const event = payload.event !== undefined ? String(payload.event) : undefined;
+      return { authorized: skills.authorize(document, event) };
     }
     case "skills_cancel": {
       const interactionId = String(payload.interactionId ?? "");
@@ -656,8 +668,10 @@ async function handleSkillsAction(action: string, payload: ActionPayload, sender
     case "skills_state": {
       const document = skillsDocument(sender);
       if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      // Return the view DIRECTLY (consumers read `.state`); the separate
+      // "pi/skills_state" push message is the one that wraps it in { view }.
       const view = skills.view(document);
-      return { ...(view ? { view } : {}) };
+      return view ?? null;
     }
     default:
       throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `unknown skills action: ${action}`);
@@ -858,6 +872,8 @@ interface ActionPayload {
   cwd?: string;
   sessionId?: string;
   text?: string;
+  /** Qualified skills event identity (`packageId:local`) for skills actions. */
+  event?: string;
   configId?: string;
   value?: unknown;
   tool?: string;

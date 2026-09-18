@@ -95,15 +95,15 @@ const SCHEMAS: Record<string, TSchema> = {
 
   browser_get_accessibility_tree: Type.Object(
     {
-      format: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("nodes")], {
+      format: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("tree"), Type.Literal("nodes")], {
         description:
-          '\"text\" (default) = the indented outline; \"nodes\" = structured node objects with refs and rects.',
+          '"text" (default) = the indented outline; "tree" = nested node objects ({role, name, children[]}); "nodes" = flat structured node list with refs and rects.',
       })),
       maxNodes: Type.Optional(Type.Number({
         description: "Maximum outline nodes to return (default 300, hard cap 2000).",
       })),
       maxDepth: Type.Optional(Type.Number({
-        description: "Maximum outline depth (default 16, hard cap 40).",
+        description: "Maximum outline depth (default 60, hard cap 80).",
       })),
       frame: Type.Optional(frame()),
     },
@@ -260,7 +260,7 @@ const REPL_SCHEMAS: Record<string, TSchema> = {
       code: Type.String({
         description:
           "JavaScript to run as one REPL cell. Top-level await allowed. Example: " +
-          "`const s = await page.snapshot(); await page.click(s.nodes.find(n => n.name === 'Go').ref)`",
+          "`const s = await page.snapshot(); await page.click(s.tree.children.find(n => n.name === 'Go')?.ref)`",
       }),
       timeoutMs: Type.Optional(Type.Number({
         description: "Kill the cell after this many milliseconds (default 30000, max 120000).",

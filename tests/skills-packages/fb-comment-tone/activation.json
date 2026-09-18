@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 2,
+  "packageId": "fb-comment-tone",
+  "application": "firefox",
+  "hosts": [
+    "www.facebook.com",
+    "facebook.com",
+    "mbasic.facebook.com",
+    "m.facebook.com"
+  ],
+  "targets": {
+    "composer": "div[contenteditable='true'][data-lexical-editor='true']"
+  },
+  "events": {
+    "draft.paused": {
+      "kind": "debounced",
+      "debounceMs": 1000,
+      "suspendDuringComposition": true,
+      "sequence": [
+        { "dom": "input", "target": "composer" }
+      ],
+      "payload": {
+        "draft": { "from": "composer", "field": "text" },
+        "postContext": { "from": "composer", "field": "text" }
+      }
+    },
+    "before-submit": {
+      "kind": "gate",
+      "chainId": "fb-comment-tone-submit",
+      "alternatives": [
+        [
+          { "dom": "keydown", "target": "composer", "key": "Enter", "modifiers": [] }
+        ]
+      ],
+      "payload": {
+        "draft": { "from": "composer", "field": "text" },
+        "postContext": { "from": "composer", "field": "text" }
+      }
+    }
+  },
+  "skills": [
+    {
+      "id": "tone-rewrite",
+      "type": "triggered",
+      "instructions": "tone-rewrite/SKILL.md",
+      "subscriptions": [
+        { "event": "draft.paused", "conditions": { "minCharacters": 3 } },
+        { "event": "before-submit" }
+      ],
+      "context": {
+        "required": ["draft"],
+        "optional": ["postContext"]
+      },
+      "review": {
+        "defaultMode": "advisory"
+      },
+      "capabilities": ["context.read", "suggestion.present", "draft.replace-on-accept"],
+      "execution": {
+        "handler": "agent",
+        "timeoutMs": 10000
+      }
+    }
+  ]
+}

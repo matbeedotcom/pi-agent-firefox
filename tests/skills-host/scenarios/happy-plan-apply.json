@@ -4,15 +4,13 @@
   "pageUrl": "http://127.0.0.1:9/fixture-basic.html",
   "skillsConfig": {
     "grants": [
-      { "skillKey": "fixture-skill/fixture-reply", "revision": "*", "capabilities": ["context.read", "suggestion.present"] }
-    ],
-    "adapters": [
       {
-        "id": "fixture-adapter",
-        "version": "1.0.0",
-        "hosts": ["127.0.0.1"],
-        "events": ["comment.draft.paused", "comment.before-submit"],
-        "gates": ["comment.before-submit"]
+        "skillKey": "fixture-skill/fixture-reply",
+        "revision": "*",
+        "capabilities": [
+          "context.read",
+          "suggestion.present"
+        ]
       }
     ]
   },
@@ -25,17 +23,33 @@
     }
   },
   "steps": [
-    { "side": "agent", "type": "prompt", "text": "REVIEW" },
-    { "side": "agent", "type": "say", "text": "reviewing the fixture draft" },
+    {
+      "side": "agent",
+      "type": "prompt",
+      "text": "REVIEW"
+    },
+    {
+      "side": "agent",
+      "type": "say",
+      "text": "reviewing the fixture draft"
+    },
     {
       "side": "client",
       "type": "extended",
       "method": "x-pi-browser/skills_plan",
       "params": {
-        "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+        "source": {
+          "application": "firefox",
+          "connectionEpoch": "epoch-1",
+          "documentGeneration": "gen-1",
+          "tabId": 1,
+          "frameId": 0
+        },
         "url": "{{page_url}}"
       },
-      "expect": { "status": "ok" }
+      "expect": {
+        "status": "ok"
+      }
     },
     {
       "side": "client",
@@ -45,8 +59,14 @@
         "event": {
           "version": 1,
           "eventId": "evt-happy-1",
-          "event": "comment.before-submit",
-          "source": { "application": "firefox", "connectionEpoch": "epoch-1", "documentGeneration": "gen-1", "tabId": 1, "frameId": 0 },
+          "event": "fixture-skill:before-submit",
+          "source": {
+            "application": "firefox",
+            "connectionEpoch": "epoch-1",
+            "documentGeneration": "gen-1",
+            "tabId": 1,
+            "frameId": 0
+          },
           "interactionId": "int-happy-1",
           "draftRevision": 1,
           "contextRevision": 1,
@@ -55,7 +75,9 @@
           "contextRef": "ctx-happy-1"
         }
       },
-      "expect": { "status": "accepted" },
+      "expect": {
+        "status": "accepted"
+      },
       "expectResult": {
         "status": "done",
         "decision": "suggest",
@@ -67,7 +89,10 @@
       "type": "extended",
       "method": "x-pi-browser/skills_status",
       "params": {},
-      "expect": { "available": true, "plans": 1 }
+      "expect": {
+        "available": true,
+        "plans": 1
+      }
     }
   ],
   "expect": {
