@@ -17,14 +17,16 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import path from "node:path";
 import { PI_BROKER } from "@pi-browser/protocol";
 import type { CommandResult } from "./index.js";
+import { ipcEndpoint } from "../native-host/broker-ipc.js";
 
 export const MCP_SERVER_NAME = "pi-browser";
 
 export type McpSubcommand = "install" | "status" | "uninstall";
 
 /** Broker MCP socket path for this home dir (matches mcp-server.ts default). */
-export function mcpSocketPath(homeDir: string): string {
-  return path.join(homeDir, ".pi", PI_BROKER.runDir, PI_BROKER.mcpSocketFile);
+export function mcpSocketPath(homeDir: string, platform: NodeJS.Platform = process.platform): string {
+  // Windows: a named pipe (pi-mcp-adapter's socket transport accepts it).
+  return ipcEndpoint(path.join(homeDir, ".pi", PI_BROKER.runDir), PI_BROKER.mcpSocketFile, platform);
 }
 
 /** Pi's global MCP config (pi-mcp-adapter's getAgentPath("mcp.json")). */

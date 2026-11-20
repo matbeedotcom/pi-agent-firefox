@@ -10,8 +10,8 @@
  * and listens on private OS IPC (~/.pi/run/agent-broker.sock) for peers.
  * Later processes attach to it as relays (byte passthrough over the same
  * framing). Native Messaging remains the only externally visible Mozilla
- * boundary; no localhost TCP. Windows: broker IPC is not yet supported —
- * each process is standalone (single-app mode).
+ * boundary; no localhost TCP. Windows: the same broker/relay protocol over
+ * per-user named pipes (broker-ipc.ts ipcEndpoint).
  *
  * Which provider capabilities (browser / mail / ...) a tool call is routed
  * to is negotiated by each client's pi.agent.hello handshake and resolved
@@ -51,9 +51,9 @@ import { PiSdkBackend } from "../acp/sdk-backend.js";
 import { CapabilityToolProvider } from "../browser/provider.js";
 import { CapabilityRegistry } from "../capability-registry.js";
 import {
-  isBrokerIpcSupported,
   startBrokerServer,
   tryRelayAttach,
+  waitForRelayAttach,
   type BrokerServerHandle,
 } from "./broker-ipc.js";
 import { startMcpBrowserServer, type McpBrowserServerHandle } from "./mcp-server.js";
@@ -252,6 +252,9 @@ function piVersion(): string {
   }
 }
 
+/** How long a broker-race loser keeps retrying the relay attach. */
+const RELAY_ATTACH_RETRY_MS = 3_000;
+
 async function main(): Promise<void> {
   const logPath = resolveLogPath();
   const log = createLogger(logPath ? { filePath: logPath } : {});
@@ -261,16 +264,12 @@ async function main(): Promise<void> {
   );
 
   // --- Relay mode: a broker is already running (plan §26) ----------------
-  if (isBrokerIpcSupported()) {
-    const attachment = await tryRelayAttach(log);
-    if (attachment) {
-      log.info("attaching to running broker as relay");
-      await runRelay(attachment.channel, attachment.initial, process.stdin, process.stdout, log);
-      log.info("relay finished; exiting");
-      process.exit(0);
-    }
-  } else {
-    log.info("broker IPC not supported on this platform (Windows) — standalone single-app mode");
+  const attachment = await tryRelayAttach(log);
+  if (attachment) {
+    log.info("attaching to running broker as relay");
+    await runRelay(attachment.channel, attachment.initial, process.stdin, process.stdout, log);
+    log.info("relay finished; exiting");
+    process.exit(0);
   }
 
   // --- Broker mode: own the ACP agent, sessions, and provider registry ---
@@ -360,8 +359,7 @@ async function main(): Promise<void> {
 
   // Browser-tools MCP server: lets pi-subagent children (separate node
   // processes with no ACP channel) reach the browser tools over MCP on a
-  // private unix socket. Unix sockets only — skipped in standalone Windows
-  // mode, same as the relay socket.
+  // private IPC endpoint (unix socket; named pipe on Windows).
   let mcpServer: McpBrowserServerHandle | undefined;
   // Dev-loop catalog reloader: the agent touches the trigger file in the
   // broker run dir to re-read skill packages without a host restart.
@@ -369,17 +367,6 @@ async function main(): Promise<void> {
   // JSONL skills lifecycle log (agent observation channel): one line per
   // plan/event/result/reload in the broker run dir.
   let skillsEventLog: SkillsEventLog | undefined;
-  if (isBrokerIpcSupported()) {
-    try {
-      mcpServer = await startMcpBrowserServer({ log, bridge: toolBridge });
-    } catch (err) {
-      // Non-fatal: the in-process bridge (extensions/pi-browser-tools.ts)
-      // keeps working for foreground children; only subagent MCP access is
-      // unavailable until the socket is free again.
-      log.warn("could not start mcp browser server", err);
-    }
-  }
-
   const agents = new Map<string, AcpAgent>();
   // A peer app connected/disconnected: tell every client so its UI can
   // update the "capabilities:" line (display-only, plan §29).
@@ -439,49 +426,65 @@ async function main(): Promise<void> {
   };
 
   let brokerServer: BrokerServerHandle | undefined;
-  if (isBrokerIpcSupported()) {
+  try {
+    brokerServer = await startBrokerServer({
+      log,
+      onClient: (channel) => {
+        const id = `relay-${++relaySeq}`;
+        log.info(`broker: client ${id} connected`);
+        wireClient(id, createStdioTransport(channel, channel, log));
+      },
+    });
+    log.info(`broker: listening on ${brokerServer.socketPath}`);
+  } catch (err) {
+    // Lost the race: another process became broker between our probe and
+    // listen. Attach as a relay instead.
+    log.warn("could not start broker; retrying relay attach", err);
+    // The winner publishes its state file (pid + token) just AFTER listen
+    // succeeds, so a simultaneous loser can land in that window: poll
+    // briefly instead of failing the election outright.
+    const attachment = await waitForRelayAttach(log, RELAY_ATTACH_RETRY_MS);
+    if (attachment) {
+      log.info("attaching to running broker as relay (race fallback)");
+      await runRelay(attachment.channel, attachment.initial, process.stdin, process.stdout, log);
+      process.exit(0);
+    }
+    // Let the add-on reconnect after an election failure instead of keeping
+    // an isolated host alive with cross-app routing permanently disabled.
+    throw new Error("broker election failed; reconnect to retry", { cause: err });
+  }
+
+  // Browser-tools MCP server: broker-only, started AFTER winning the
+  // election — a race loser that grabbed the endpoint first would serve MCP
+  // from a relay process whose tool bridge has no clients.
+  try {
+    mcpServer = await startMcpBrowserServer({ log, bridge: toolBridge });
+  } catch (err) {
+    // Non-fatal: the in-process bridge (extensions/pi-browser-tools.ts)
+    // keeps working for foreground children; only subagent MCP access is
+    // unavailable until the socket is free again.
+    log.warn("could not start mcp browser server", err);
+  }
+
+  // Skills dev-loop observation (skills-events.jsonl) + catalog reloader:
+  // broker-only (a relay never reaches this point), one writer per run dir.
+  if (skillsRuntime && brokerServer) {
     try {
-      brokerServer = await startBrokerServer({
-        log,
-        onClient: (channel) => {
-          const id = `relay-${++relaySeq}`;
-          log.info(`broker: client ${id} connected`);
-          wireClient(id, createStdioTransport(channel, channel, log));
-        },
-      });
-      log.info(`broker: listening on ${brokerServer.socketPath}`);
-      if (skillsRuntime) {
-        try {
-          const runDir = process.env.PI_BROWSER_BROKER_DIR?.trim() || join(homedir(), ".pi", "run");
-          skillsEventLog = createSkillsEventLog(log, join(runDir, "skills-events.jsonl"));
-        } catch (err) {
-          // Non-fatal: live runs stay observable through the host log only.
-          log.warn("skills event log unavailable", err);
-        }
-        try {
-          catalogReloader = startSkillsCatalogReloader({
-            log, runtime: skillsRuntime,
-            ...(skillsEventLog ? { record: skillsEventLog.record } : {}),
-          });
-        } catch (err) {
-          // Non-fatal: the catalog stays at its startup snapshot; the
-          // dev loop falls back to a host restart.
-          log.warn("skills catalog reloader unavailable; catalog fixed for this host run", err);
-        }
-      }
+      const runDir = process.env.PI_BROWSER_BROKER_DIR?.trim() || join(homedir(), ".pi", "run");
+      skillsEventLog = createSkillsEventLog(log, join(runDir, "skills-events.jsonl"));
     } catch (err) {
-      // Lost the race: another process became broker between our probe and
-      // listen. Attach as a relay instead.
-      log.warn("could not start broker; retrying relay attach", err);
-      const attachment = await tryRelayAttach(log);
-      if (attachment) {
-        log.info("attaching to running broker as relay (race fallback)");
-        await runRelay(attachment.channel, attachment.initial, process.stdin, process.stdout, log);
-        process.exit(0);
-      }
-      // Let the add-on reconnect after an election failure instead of keeping
-      // an isolated host alive with cross-app routing permanently disabled.
-      throw new Error("broker election failed; reconnect to retry", { cause: err });
+      // Non-fatal: live runs stay observable through the host log only.
+      log.warn("skills event log unavailable", err);
+    }
+    try {
+      catalogReloader = startSkillsCatalogReloader({
+        log, runtime: skillsRuntime,
+        ...(skillsEventLog ? { record: skillsEventLog.record } : {}),
+      });
+    } catch (err) {
+      // Non-fatal: the catalog stays at its startup snapshot; the
+      // dev loop falls back to a host restart.
+      log.warn("skills catalog reloader unavailable; catalog fixed for this host run", err);
     }
   }
 

@@ -19,12 +19,19 @@
  * connect; tool calls are then routed through the provider's standard
  * routing + permission path, so per-tool approvals in the add-on UI still
  * apply.
+ *
+ * Windows: the endpoint is a named pipe (ipcEndpoint). Pipes have no file
+ * mode; their default DACL gives the creating user full access and other
+ * accounts READ only. A read-only handle cannot send a JSON-RPC request and
+ * each connection is its own pipe instance, so another account can neither
+ * call a tool nor observe this user's traffic.
  */
 import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { PI_BROWSER_META, PI_BROKER } from "@pi-browser/protocol";
+import { ipcEndpoint, isNamedPipe } from "./broker-ipc.js";
 import { BROWSER_TOOL_SCHEMAS, REPL_TOOL_SCHEMAS } from "../browser/schemas.js";
 import { MCP_PROTOCOL_VERSION } from "../browser/mcp-acp-client.js";
 import type { Logger } from "../logger.js";
@@ -147,7 +154,7 @@ export async function startMcpBrowserServer(opts: McpBrowserServerOptions): Prom
   const { log, bridge } = opts;
   const dir =
     process.env.PI_BROWSER_BROKER_DIR || path.join(os.homedir(), ".pi", PI_BROKER.runDir);
-  const socketPath = opts.socketPath ?? path.join(dir, PI_BROKER.mcpSocketFile);
+  const socketPath = opts.socketPath ?? ipcEndpoint(dir, PI_BROKER.mcpSocketFile);
 
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
@@ -171,7 +178,7 @@ export async function startMcpBrowserServer(opts: McpBrowserServerOptions): Prom
     if (!stale) {
       throw new Error(`MCP socket already in use: ${socketPath}`);
     }
-    rmSync(socketPath, { force: true });
+    if (!isNamedPipe(socketPath)) rmSync(socketPath, { force: true });
   }
 
   const connections = new Set<net.Socket>();
@@ -190,10 +197,12 @@ export async function startMcpBrowserServer(opts: McpBrowserServerOptions): Prom
       resolve();
     });
   });
-  try {
-    chmodSync(socketPath, 0o600);
-  } catch {
-    /* best-effort */
+  if (!isNamedPipe(socketPath)) {
+    try {
+      chmodSync(socketPath, 0o600);
+    } catch {
+      /* best-effort */
+    }
   }
   log.info(`mcp browser server: listening on ${socketPath}`);
 
@@ -241,7 +250,7 @@ export async function startMcpBrowserServer(opts: McpBrowserServerOptions): Prom
       for (const socket of connections) socket.destroy();
       connections.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      rmSync(socketPath, { force: true });
+      if (!isNamedPipe(socketPath)) rmSync(socketPath, { force: true });
     },
   };
 }

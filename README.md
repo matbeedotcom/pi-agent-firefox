@@ -144,7 +144,8 @@ apps usable **from each other** — no extra setup beyond loading both add-ons a
 the host installed:
 
 1. **First app to connect = broker.** It owns the Pi sessions and listens on private OS IPC
-   (`~/.pi/run/agent-broker.sock`, 0600; Windows: single-app mode for now).
+   (`~/.pi/run/agent-broker.sock`, 0600; Windows: a per-user named pipe
+   `\\.\pipe\pi-agent-<hash>-agent-broker`, gated by the broker token).
 2. **Second app = relay.** Its host process transparently forwards the app's Native
    Messaging pipe into the broker. Native Messaging stays the only visible app boundary;
    there is no localhost TCP. If the broker is gone, the roles simply re-elect on the next

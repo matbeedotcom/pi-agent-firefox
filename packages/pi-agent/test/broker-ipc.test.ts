@@ -10,11 +10,13 @@ import { createLogger } from "../src/logger.js";
 import { encodeFrame, FrameDecoder } from "../src/native-host/framing.js";
 import {
   brokerPaths,
-  isBrokerIpcSupported,
+  ipcEndpoint,
+  isNamedPipe,
   isPidAlive,
   readBrokerState,
   startBrokerServer,
   tryRelayAttach,
+  waitForRelayAttach,
   type BrokerServerHandle,
 } from "../src/native-host/broker-ipc.js";
 import { createStdioTransport } from "../src/native-host/transport.js";
@@ -36,19 +38,21 @@ after(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-test("broker: unsupported-platform gate", () => {
-  if (process.platform === "win32") {
-    assert.equal(isBrokerIpcSupported(), false);
-    assert.equal(isBrokerIpcSupported(), false);
-  } else {
-    assert.equal(isBrokerIpcSupported(), true);
-  }
+test("ipc endpoint: socket file on POSIX, per-dir named pipe on Windows", () => {
+  assert.equal(ipcEndpoint("/home/u/.pi/run", "agent-broker.sock", "linux"), path.join("/home/u/.pi/run", "agent-broker.sock"));
+  const a = ipcEndpoint(String.raw`C:\Users\u\.pi\run`, "agent-broker.sock", "win32");
+  assert.match(a, /^\\\\\.\\pipe\\pi-agent-[0-9a-f]{16}-agent-broker$/);
+  assert.ok(isNamedPipe(a));
+  assert.equal(ipcEndpoint(String.raw`c:\users\U\.PI\run`, "agent-broker.sock", "win32"), a, "case-insensitive like Windows paths");
+  assert.notEqual(ipcEndpoint(String.raw`C:\Users\other\.pi\run`, "agent-broker.sock", "win32"), a, "per-user (per run dir)");
+  assert.notEqual(ipcEndpoint(String.raw`C:\Users\u\.pi\run`, "agent-broker-mcp.sock", "win32"), a, "per endpoint file");
+  assert.equal(isNamedPipe("/tmp/x.sock"), false);
 });
 
 test("broker: paths respect env override", () => {
   const p = brokerPaths("/home/fake");
   assert.equal(p.dir, brokerDir);
-  assert.equal(p.socket, path.join(brokerDir, PI_BROKER.socketFile));
+  assert.equal(p.socket, ipcEndpoint(brokerDir, PI_BROKER.socketFile));
   assert.equal(p.state, path.join(brokerDir, PI_BROKER.stateFile));
 });
 
@@ -74,10 +78,13 @@ test("broker: start, relay attach, framed round-trip both directions", async () 
     assert.ok(state);
     assert.equal(state!.pid, process.pid);
     assert.ok(state!.token.length >= 32);
-    const stat = await import("node:fs").then((fs) => fs.promises.stat(brokerPaths().socket));
-    assert.equal(stat.mode & 0o777, 0o600);
-    const dirStat = await import("node:fs").then((fs) => fs.promises.stat(brokerPaths().dir));
-    assert.equal(dirStat.mode & 0o777, 0o700);
+    if (process.platform !== "win32") {
+      // POSIX modes (Windows: a named pipe; the token is the same-user gate).
+      const stat = await import("node:fs").then((fs) => fs.promises.stat(brokerPaths().socket));
+      assert.equal(stat.mode & 0o777, 0o600);
+      const dirStat = await import("node:fs").then((fs) => fs.promises.stat(brokerPaths().dir));
+      assert.equal(dirStat.mode & 0o777, 0o700);
+    }
 
     // Relay attaches.
     const att = await tryRelayAttach(quiet);
@@ -167,10 +174,29 @@ test("broker: rejects relay with wrong token", async () => {
   }
 });
 
+test("relay attach: waitForRelayAttach rides out the broker's state-publication window", async () => {
+  // Election loser: the winner's listen() succeeded but its state file is
+  // not published yet. The loser must keep retrying, not fail the election.
+  rmSync(brokerDir, { recursive: true, force: true });
+  const pending = waitForRelayAttach(quiet, 3_000);
+  await new Promise((r) => setTimeout(r, 200));
+  const server = await startBrokerServer({ log: quiet, onClient: () => {} });
+  try {
+    const att = await pending;
+    assert.ok(att, "attached once the broker published its state");
+    att!.channel.destroy();
+  } finally {
+    await server.close();
+  }
+  assert.equal(await waitForRelayAttach(quiet, 300), null, "gives up after the window when no broker exists");
+});
+
 test("broker: stale state (dead pid) does not block; new broker reclaims", async () => {
   // Simulate a crashed broker: state file with a dead pid + stale socket.
   writeFileSync(brokerPaths().state, JSON.stringify({ pid: 999999, token: "x", socket: "s", startedAt: 0, version: 1 }));
-  writeFileSync(brokerPaths().socket, "");
+  // POSIX: a crashed broker leaves its socket file behind. (A Windows named
+  // pipe dies with its owner — there is nothing stale to simulate.)
+  if (!isNamedPipe(brokerPaths().socket)) writeFileSync(brokerPaths().socket, "");
   assert.equal(isPidAlive(999999), false);
   assert.equal(await tryRelayAttach(quiet, 300), null, "stale broker must not accept relays");
 
@@ -193,7 +219,7 @@ test("broker: a second live broker is rejected (race guard)", async () => {
   }
 });
 
-test("broker: dir permissions enforced despite umask", async () => {
+test("broker: dir permissions enforced despite umask", { skip: process.platform === "win32" && "POSIX file modes" }, async () => {
   // chmod the parent to something unusual; startBrokerServer must 0700 the dir.
   const dir = path.join(tmp, "weird-run");
   process.env.PI_BROWSER_BROKER_DIR = dir;
@@ -214,8 +240,12 @@ test("broker: a live socket without published state cannot be reclaimed", async 
   const server = await startBrokerServer({ log: quiet, onClient: () => {} });
   try {
     rmSync(brokerPaths().state);
-    await assert.rejects(startBrokerServer({ log: quiet, onClient: () => {} }), /another broker is starting/);
-    assert.ok(existsSync(brokerPaths().socket));
+    await assert.rejects(startBrokerServer({ log: quiet, onClient: () => {} }), /another broker is starting|EADDRINUSE/);
+    // The original listener survives (probe by connecting: existsSync on a
+    // Windows pipe is false while its instance is momentarily busy).
+    const probe = net.createConnection(brokerPaths().socket);
+    await once(probe, "connect");
+    probe.destroy();
   } finally {
     await server.close();
   }

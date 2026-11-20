@@ -3,8 +3,8 @@
  *
  * One host process per app is spawned by Native Messaging. The FIRST process
  * to start becomes the broker: it owns the ACP agent + Pi sessions and
- * listens on a private OS IPC socket (~/.pi/run/agent-broker.sock — 0700
- * dir, 0600 socket; Windows: not yet supported, single-app mode). Later
+ * listens on a private OS IPC endpoint (POSIX: ~/.pi/run/agent-broker.sock —
+ * 0700 dir, 0600 socket; Windows: a per-user named pipe, see ipcEndpoint). Later
  * processes detect the running broker via its state file (pid + token),
  * connect, authenticate with the token, and run in relay mode (byte
  * passthrough: app stdin → socket, socket → app stdout).
@@ -12,8 +12,15 @@
  * Security: same-user only (socket in a 0700 dir under $HOME), per-broker
  * random token, no localhost TCP. Native Messaging remains the externally
  * visible Mozilla security boundary.
+ *
+ * Windows: Node's net API serves named pipes with the same stream semantics,
+ * so only the endpoint differs. Pipes carry no file mode; their default DACL
+ * grants other accounts READ only, which cannot send the handshake — the
+ * token (in the 0600 state file under the user's profile, ACL'd to the user)
+ * stays the same-user gate. A pipe vanishes with its owner, so there is no
+ * stale endpoint to unlink.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -23,19 +30,35 @@ import { PI_BROKER } from "@pi-browser/protocol";
 import { encodeFrame, FrameDecoder } from "./framing.js";
 import type { Logger } from "../logger.js";
 
+/**
+ * The listening endpoint for `file` in run dir `dir`.
+ *
+ * POSIX: the socket file itself. Windows: a named pipe whose name is derived
+ * from the run dir (case-folded — Windows paths are case-insensitive), so it
+ * is per-user (the run dir lives in the user's profile) and every
+ * PI_BROWSER_BROKER_DIR override gets its own pipe, exactly like a socket
+ * file in that dir would.
+ */
+export function ipcEndpoint(dir: string, file: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32") return path.join(dir, file);
+  const key = path.win32.resolve(dir).toLowerCase();
+  const hash = createHash("sha256").update(key).digest("hex").slice(0, 16);
+  return String.raw`\\.\pipe\pi-agent-` + `${hash}-${file.replace(/\.sock$/, "")}`;
+}
+
+/** True for a Windows named-pipe endpoint (no file to chmod or unlink). */
+export function isNamedPipe(endpoint: string): boolean {
+  return /^\\\\[.?]\\pipe\\/i.test(endpoint);
+}
+
 /** Paths for the broker IPC (env override for tests). */
 export function brokerPaths(homeDir: string = os.homedir()): { dir: string; socket: string; state: string } {
   const dir = process.env.PI_BROWSER_BROKER_DIR || path.join(homeDir, ".pi", PI_BROKER.runDir);
   return {
     dir,
-    socket: path.join(dir, PI_BROKER.socketFile),
+    socket: ipcEndpoint(dir, PI_BROKER.socketFile),
     state: path.join(dir, PI_BROKER.stateFile),
   };
-}
-
-/** Broker IPC needs Unix sockets; Windows (named pipes) is a follow-up. */
-export function isBrokerIpcSupported(): boolean {
-  return process.platform !== "win32";
 }
 
 /** True when the pid is alive (EPERM = alive but owned by another user). */
@@ -120,7 +143,7 @@ async function reclaimBrokerSocket(paths: ReturnType<typeof brokerPaths>): Promi
       probe.destroy();
     }
     if (listening) throw new Error("another broker is starting");
-    rmSync(paths.socket, { force: true });
+    if (!isNamedPipe(paths.socket)) rmSync(paths.socket, { force: true });
   }
 }
 
@@ -156,10 +179,12 @@ export async function startBrokerServer(opts: StartBrokerServerOptions): Promise
     });
   });
 
-  try {
-    chmodSync(paths.socket, 0o600);
-  } catch {
-    /* best-effort */
+  if (!isNamedPipe(paths.socket)) {
+    try {
+      chmodSync(paths.socket, 0o600);
+    } catch {
+      /* best-effort */
+    }
   }
   const state: BrokerState = {
     pid: process.pid,
@@ -234,7 +259,7 @@ export async function startBrokerServer(opts: StartBrokerServerOptions): Promise
   return {
     socketPath: paths.socket,
     close(): Promise<void> {
-      rmSync(paths.socket, { force: true });
+      if (!isNamedPipe(paths.socket)) rmSync(paths.socket, { force: true });
       rmSync(paths.state, { force: true });
       return new Promise((resolve) => server.close(() => resolve()));
     },
@@ -255,7 +280,6 @@ export interface RelayAttachment {
  * instead).
  */
 export async function tryRelayAttach(log: Logger, timeoutMs = 2_000): Promise<RelayAttachment | null> {
-  if (!isBrokerIpcSupported()) return null;
   const paths = brokerPaths();
   const state = readBrokerState(paths.state);
   if (!state || !isPidAlive(state.pid)) return null;
@@ -274,6 +298,20 @@ export async function tryRelayAttach(log: Logger, timeoutMs = 2_000): Promise<Re
     log.debug("relay: broker attach failed", err);
     socket.destroy();
     return null;
+  }
+}
+
+/**
+ * Retry tryRelayAttach until it succeeds or `totalMs` elapses — for the
+ * broker-election loser, whose winner may not have published its state
+ * file yet (listen succeeds first, the state write follows).
+ */
+export async function waitForRelayAttach(log: Logger, totalMs: number, stepMs = 50): Promise<RelayAttachment | null> {
+  const deadline = Date.now() + totalMs;
+  for (;;) {
+    const attachment = await tryRelayAttach(log, Math.min(1_000, Math.max(100, deadline - Date.now())));
+    if (attachment || Date.now() >= deadline) return attachment;
+    await new Promise((r) => setTimeout(r, stepMs));
   }
 }
 

@@ -7,6 +7,7 @@ import net from "node:net";
 
 import { createLogger } from "../src/logger.js";
 import { startMcpBrowserServer, type McpBrowserServerHandle } from "../src/native-host/mcp-server.js";
+import { ipcEndpoint } from "../src/native-host/broker-ipc.js";
 import type { BrowserToolBridge } from "../src/tool-bridge.js";
 import { BROWSER_TOOL_SCHEMAS, REPL_TOOL_SCHEMAS } from "../src/browser/schemas.js";
 
@@ -34,12 +35,12 @@ function makeBridge(): BrowserToolBridge {
 
 before(async () => {
   tmp = mkdtempSync(path.join(tmpdir(), "pi-mcp-server-test-"));
-  server = await startMcpBrowserServer({ log: quiet, bridge: makeBridge(), socketPath: path.join(tmp, "mcp.sock") });
+  server = await startMcpBrowserServer({ log: quiet, bridge: makeBridge(), socketPath: ipcEndpoint(tmp, "mcp.sock") });
 });
 
 after(async () => {
   await server?.close();
-  rmSync(tmp, { recursive: true, force: true });
+  if (tmp) rmSync(tmp, { recursive: true, force: true });
 });
 
 /** Minimal JSONL MCP client for the tests. */
@@ -169,8 +170,8 @@ test("mcp server: ping + notifications do not break the stream", async () => {
 });
 
 test("mcp server: close removes the socket", async () => {
-  const s2 = await startMcpBrowserServer({ log: quiet, bridge: makeBridge(), socketPath: path.join(tmp, "mcp2.sock") });
-  assert.ok(server && s2.socketPath.endsWith("mcp2.sock"));
+  const s2 = await startMcpBrowserServer({ log: quiet, bridge: makeBridge(), socketPath: ipcEndpoint(tmp, "mcp2.sock") });
+  assert.ok(server && s2.socketPath === ipcEndpoint(tmp, "mcp2.sock"));
   await s2.close();
   assert.equal(existsSync(s2.socketPath), false);
 });

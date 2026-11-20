@@ -1,3 +1,4 @@
+import { mcpSocketPath } from "../src/installer/mcp.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, mkdir, writeFile, stat } from "node:fs/promises";
@@ -107,7 +108,9 @@ test("manifest path table: shared on linux/windows, split on macOS (plan §23)",
 });
 
 for (const platform of ["linux", "macos"] as const) {
-  test(`${platform}: install (mozilla) -> status -> repair -> uninstall lifecycle`, async () => {
+  // Real file writes with POSIX semantics (sh launcher, exec bit, "/" paths):
+  // only meaningful on a POSIX host.
+  test(`${platform}: install (mozilla) -> status -> repair -> uninstall lifecycle`, { skip: process.platform === "win32" && "simulates a POSIX host" }, async () => {
     const root = await mkdtemp(path.join(tmpdir(), `pi-agent-${platform}-`));
     try {
       const pkgRoot = await makePkg(root);
@@ -391,7 +394,9 @@ test("mcp: install → status → idempotent reinstall → uninstall lifecycle",
       settings?: unknown;
     };
     let config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
-    const expectedSocket = path.join(home, ".pi", "run", "agent-broker-mcp.sock");
+    // POSIX: <home>/.pi/run/agent-broker-mcp.sock; Windows: a named pipe.
+    const expectedSocket = mcpSocketPath(home);
+    if (process.platform !== "win32") assert.equal(expectedSocket, path.join(home, ".pi", "run", "agent-broker-mcp.sock"));
     assert.deepEqual(config.mcpServers["pi-browser"], { socket: expectedSocket, directTools: true });
 
     // Status reports OK.

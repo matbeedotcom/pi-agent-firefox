@@ -69,6 +69,6 @@ tool failed: "session 01a098f7-8fa6-74be-9052-332c9b849ff2 has no bound Firefox 
 
 ## Known follow-ups (out of scope, per goal)
 
-- **Windows named pipes** — `isBrokerIpcSupported()` gates the broker off (clean standalone single-app mode; installer reports `broker: n/a (Windows — cross-app broker is a follow-up)`).
+- ~~**Windows named pipes**~~ — done (2026-11-19): broker + MCP server listen on per-user named pipes (`ipcEndpoint` in `broker-ipc.ts`); the cross-app integration suite (`tests/src/broker.test.mjs`, 10 tests) passes on Windows.
 - A session's tool surface is fixed at session creation (the union of *then*-connected providers); a provider that connects later becomes routable only for sessions created afterwards. (Re-attached providers re-route existing sessions' calls that already had the tool registered — verified in the lifecycle test.)
 - The running broker process keeps its code until the next app restart (normal: hosts are per-connection).

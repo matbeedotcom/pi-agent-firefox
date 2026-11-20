@@ -6,9 +6,10 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { PI_AGENT, PI_BROWSER_META, PI_AGENT_META } from "@pi-browser/protocol";
 import { ADDON_HEARTBEAT_FRESH_MS, readClientHeartbeat } from "../client-heartbeat.js";
-import { brokerPaths, isBrokerIpcSupported, isPidAlive, readBrokerState } from "../native-host/broker-ipc.js";
+import { brokerPaths, isPidAlive, readBrokerState } from "../native-host/broker-ipc.js";
 import { addonLoadHint, type AgentApp, type ExecFn, type InstallerEnv, type InstallAppTarget } from "./common.js";
 import { runMcpCommand, type McpSubcommand } from "./mcp.js";
 import {
@@ -65,7 +66,7 @@ export interface CommandResult {
 export function defaultPkgRoot(): string {
   // When loaded from dist, the package root is two levels up (dist/installer -> package).
   // From src (jiti), also two levels up (src/installer -> package).
-  return path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 }
 
 export function buildEnv(ctx: InstallerContext = {}): { env: InstallerEnv; targets: InstallTargets; pkgRoot: string; mainJs: string } {
@@ -120,7 +121,6 @@ export function buildEnv(ctx: InstallerContext = {}): { env: InstallerEnv; targe
 
   /** Broker (cross-app) state, for status/doctor (plan §26–27). */
   function brokerLines(): string[] {
-    if (!isBrokerIpcSupported()) return ["broker: n/a (Windows — cross-app broker is a follow-up)"];
     try {
       const paths = brokerPaths();
       const state = readBrokerState(paths.state);
@@ -242,7 +242,14 @@ export async function probeHost(
       resolve({ ok, lines });
     };
 
-    const child = spawn(launcher, [], { stdio: ["pipe", "pipe", "pipe"] });
+    // Node refuses to spawn .cmd/.bat directly (EINVAL since CVE-2024-27980);
+    // run it through cmd.exe exactly like Firefox launches a .cmd host.
+    const child = process.platform === "win32" && /\.(cmd|bat)$/i.test(launcher)
+      ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `"${launcher}"`], {
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsVerbatimArguments: true,
+        })
+      : spawn(launcher, [], { stdio: ["pipe", "pipe", "pipe"] });
     const timer = setTimeout(() => {
       lines.push("probe: timed out waiting for x-pi-browser/ping");
       finish(false);

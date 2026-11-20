@@ -5,7 +5,7 @@
  * best-effort: a missing or invalid packages root degrades to "no skills"
  * and never blocks browser integration startup.
  */
-import { statSync, watch, type FSWatcher } from "node:fs";
+import { mkdirSync, statSync, watch, type FSWatcher } from "node:fs";
 import { appendFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -129,6 +129,8 @@ export function startSkillsCatalogReloader(deps: {
 }): SkillsCatalogReloader {
   const runDir = process.env.PI_BROWSER_BROKER_DIR?.trim() || path.join(homedir(), ".pi", "run");
   const triggerPath = path.join(runDir, SKILLS_CATALOG_RELOAD_FILE);
+  // Normally the broker created it already; don't depend on that ordering.
+  mkdirSync(runDir, { recursive: true, mode: 0o700 });
   let timer: NodeJS.Timeout | undefined;
   let tail: Promise<void> = Promise.resolve();
   let closed = false;
