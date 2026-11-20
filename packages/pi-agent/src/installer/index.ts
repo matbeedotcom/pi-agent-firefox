@@ -202,7 +202,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
       return { ok: true, lines };
     }
     case "mcp": {
-      const result = runMcpCommand(sub, env.homeDir);
+      const result = runMcpCommand(sub, env.homeDir, { pkgRoot });
       for (const l of result.lines) note(l);
       return result;
     }

@@ -390,14 +390,20 @@ test("mcp: install → status → idempotent reinstall → uninstall lifecycle",
     result = await runCommand("mcp", ctx); // default sub: install
     assert.equal(result.ok, true);
     type McpConfig = {
-      mcpServers: Record<string, { socket: string; directTools: boolean }>;
+      mcpServers: Record<string, Record<string, unknown>>;
       settings?: unknown;
     };
     let config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
-    // POSIX: <home>/.pi/run/agent-broker-mcp.sock; Windows: a named pipe.
-    const expectedSocket = mcpSocketPath(home);
-    if (process.platform !== "win32") assert.equal(expectedSocket, path.join(home, ".pi", "run", "agent-broker-mcp.sock"));
-    assert.deepEqual(config.mcpServers["pi-browser"], { socket: expectedSocket, directTools: true });
+    // A stdio entry (pi's built-in MCP client speaks stdio/HTTP only) that
+    // launches the bridge to the broker's socket/pipe.
+    assert.deepEqual(config.mcpServers["pi-browser"], {
+      command: process.execPath,
+      args: [path.join(root, "dist", "native-host", "mcp-stdio-main.js")],
+      directTools: true,
+      exposure: "deferred",
+    });
+    // The bridge dials the broker's endpoint: POSIX <home>/.pi/run/agent-broker-mcp.sock, Windows a named pipe.
+    if (process.platform !== "win32") assert.equal(mcpSocketPath(home), path.join(home, ".pi", "run", "agent-broker-mcp.sock"));
 
     // Status reports OK.
     result = await runCommand("mcp", ctx, "status");
@@ -412,11 +418,27 @@ test("mcp: install → status → idempotent reinstall → uninstall lifecycle",
     config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
     assert.deepEqual(config.settings, { directTools: false }, "unrelated keys preserved");
 
-    // A stale socket path is detected.
+    // The user's own tuning (e.g. exposure changed in pi's /mcp manager) is
+    // kept by a reinstall and does not make status report a stale entry.
+    config.mcpServers["pi-browser"] = { ...config.mcpServers["pi-browser"], exposure: "direct", enabled: false };
+    await writeFile(file, `${JSON.stringify(config)}\n`);
+    result = await runCommand("mcp", ctx, "status");
+    assert.equal(result.ok, true, JSON.stringify(result.lines));
+    result = await runCommand("mcp", ctx);
+    config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
+    assert.equal(config.mcpServers["pi-browser"].exposure, "direct", "user's exposure kept");
+    assert.equal(config.mcpServers["pi-browser"].enabled, false, "user's enabled flag kept");
+
+    // A pre-0.2.5 socket entry (pi-mcp-adapter only) is reported stale…
     await writeFile(file, `${JSON.stringify({ mcpServers: { "pi-browser": { socket: "/old/path.sock", directTools: true } } })}\n`);
     result = await runCommand("mcp", ctx, "status");
     assert.equal(result.ok, false);
     assert.ok(result.lines.some((l) => l.includes("STALE")), JSON.stringify(result.lines));
+    // …and install replaces it with the stdio entry.
+    result = await runCommand("mcp", ctx);
+    config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
+    assert.equal(config.mcpServers["pi-browser"].socket, undefined);
+    assert.equal(config.mcpServers["pi-browser"].command, process.execPath);
 
     // Uninstall removes the entry and the now-empty file.
     result = await runCommand("mcp", ctx); // re-configure first

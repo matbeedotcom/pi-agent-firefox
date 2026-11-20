@@ -85,6 +85,35 @@ export const MCP_TOOL_SCHEMAS: ReadonlyArray<{ name: string; description?: strin
 ];
 const MCP_TOOL_NAMES = new Set(MCP_TOOL_SCHEMAS.map((t) => t.name));
 
+/** initialize result (shared with the stdio bridge, which answers it locally). */
+export function mcpInitializeResult(): Record<string, unknown> {
+  return {
+    protocolVersion: MCP_PROTOCOL_VERSION,
+    capabilities: { tools: { listChanged: false } },
+    serverInfo: SERVER_INFO,
+    instructions:
+      "Pi Browser tools: browser_* act on the Firefox tab bound to the active Pi session; " +
+      "mail_*, compose_*, contacts_* act on Thunderbird. Each tool runs in the app that serves it.",
+  };
+}
+
+/** tools/list result (shared with the stdio bridge). */
+export function mcpToolListResult(): { tools: Array<Record<string, unknown>> } {
+  return {
+    tools: MCP_TOOL_SCHEMAS.map((t) => ({
+      name: t.name,
+      ...(t.description ? { description: t.description } : {}),
+      inputSchema: t.parameters,
+    })),
+  };
+}
+
+/** The broker's MCP endpoint (PI_BROWSER_BROKER_DIR honored): unix socket, or a named pipe on Windows. */
+export function defaultMcpEndpoint(): string {
+  const dir = process.env.PI_BROWSER_BROKER_DIR || path.join(os.homedir(), ".pi", PI_BROKER.runDir);
+  return ipcEndpoint(dir, PI_BROKER.mcpSocketFile);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -112,14 +141,7 @@ async function dispatch(
 
   switch (method) {
     case "initialize":
-      reply(socket, id, {
-        protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: { tools: { listChanged: false } },
-        serverInfo: SERVER_INFO,
-        instructions:
-          "Pi Browser tools: browser_* act on the Firefox tab bound to the active Pi session; " +
-          "mail_*, compose_*, contacts_* act on Thunderbird. Each tool runs in the app that serves it.",
-      });
+      reply(socket, id, mcpInitializeResult());
       return;
     case "notifications/initialized":
       return; // notification: no response
@@ -127,13 +149,7 @@ async function dispatch(
       reply(socket, id, {});
       return;
     case "tools/list":
-      reply(socket, id, {
-        tools: MCP_TOOL_SCHEMAS.map((t) => ({
-          name: t.name,
-          ...(t.description ? { description: t.description } : {}),
-          inputSchema: t.parameters,
-        })),
-      });
+      reply(socket, id, mcpToolListResult());
       return;
     case "tools/call": {
       const p = isRecord(params) ? params : {};
@@ -179,7 +195,7 @@ export async function startMcpBrowserServer(opts: McpBrowserServerOptions): Prom
   const { log, bridge } = opts;
   const dir =
     process.env.PI_BROWSER_BROKER_DIR || path.join(os.homedir(), ".pi", PI_BROKER.runDir);
-  const socketPath = opts.socketPath ?? ipcEndpoint(dir, PI_BROKER.mcpSocketFile);
+  const socketPath = opts.socketPath ?? defaultMcpEndpoint();
 
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {

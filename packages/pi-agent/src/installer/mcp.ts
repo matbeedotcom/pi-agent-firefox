@@ -2,11 +2,19 @@
  * `/pi-browser mcp` — register the pi-browser MCP server in Pi's global
  * MCP config (`~/.pi/agent/mcp.json`).
  *
- * The broker process (native-host/main.js) exposes the browser tools as an
- * MCP server on a private unix socket (PI_BROKER.mcpSocketFile in the
- * 0700 run dir under $HOME). pi-mcp-adapter speaks MCP over unix sockets
- * natively, so the config entry is just { socket, directTools } — no
- * wrapper process needed.
+ * The broker process (native-host/main.js) exposes the add-on tools as an
+ * MCP server on a private unix socket / Windows named pipe
+ * (PI_BROKER.mcpSocketFile). The config entry launches the stdio bridge
+ * (native-host/mcp-stdio-main.js), which every MCP client can run: pi's
+ * built-in client (pi >= 1.5) only speaks stdio and HTTP. The entry is
+ *   { command: <node>, args: [<bridge>], directTools: true, exposure: "deferred" }
+ * — `directTools` for pi-mcp-adapter, `exposure` for pi's built-in client
+ * (each ignores the other's key). mcp.json is global, so the built-in client
+ * would put all ~50 tools into EVERY pi session's prompt with "direct";
+ * "deferred" keeps them out until the model loads them via tool_search.
+ * The user can change exposure in pi's /mcp manager: install keeps the
+ * user-owned keys (exposure, toolExposure, enabled, directTools) of an
+ * existing entry, and status checks only command + args.
  *
  * Sub-commands (mirroring the host commands):
  *   mcp [install]   write/update the pi-browser entry (idempotent)
@@ -34,8 +42,33 @@ export function mcpConfigPath(homeDir: string): string {
   return path.join(homeDir, ".pi", "agent", "mcp.json");
 }
 
-export function mcpServerEntry(homeDir: string): Record<string, unknown> {
-  return { socket: mcpSocketPath(homeDir), directTools: true };
+export interface McpEntryOptions {
+  /** Package root (holds dist/native-host/mcp-stdio-main.js). */
+  pkgRoot: string;
+  /** Node binary the client launches the bridge with (default: the installer's node). */
+  nodePath?: string;
+}
+
+/** The stdio bridge entry point inside the package. */
+export function mcpBridgePath(pkgRoot: string): string {
+  return path.join(pkgRoot, "dist", "native-host", "mcp-stdio-main.js");
+}
+
+export function mcpServerEntry(opts: McpEntryOptions): Record<string, unknown> {
+  return {
+    command: opts.nodePath ?? process.execPath,
+    args: [mcpBridgePath(opts.pkgRoot)],
+    directTools: true,
+    exposure: "deferred",
+  };
+}
+
+/** Keys of an existing entry the user may have tuned; install keeps them. */
+const USER_OWNED_KEYS = ["exposure", "toolExposure", "enabled", "directTools"] as const;
+
+/** Same bridge launch (command + args) — the parts this installer owns. */
+function sameLaunch(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  return a.command === b.command && JSON.stringify(a.args) === JSON.stringify(b.args) && a.socket === b.socket;
 }
 
 interface McpConfigFile {
@@ -59,9 +92,11 @@ function writeConfig(file: string, config: McpConfigFile): void {
   writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-export function runMcpCommand(sub: McpSubcommand, homeDir: string): CommandResult {
+export function runMcpCommand(sub: McpSubcommand, homeDir: string, entryOpts: McpEntryOptions): CommandResult {
   const file = mcpConfigPath(homeDir);
-  const entry = mcpServerEntry(homeDir);
+  const entry = mcpServerEntry(entryOpts);
+  const describe = (e: Record<string, unknown>) =>
+    typeof e.socket === "string" ? `socket ${e.socket}` : `${String(e.command)} ${(e.args as string[] | undefined)?.join(" ") ?? ""}`.trim();
 
   switch (sub) {
     case "install": {
@@ -71,18 +106,22 @@ export function runMcpCommand(sub: McpSubcommand, homeDir: string): CommandResul
           ? (config.mcpServers as Record<string, Record<string, unknown>>)
           : {};
       const existing = servers[MCP_SERVER_NAME];
-      const already =
-        existing && JSON.stringify(existing) === JSON.stringify(entry);
-      servers[MCP_SERVER_NAME] = entry;
+      const already = !!existing && sameLaunch(existing, entry);
+      const merged: Record<string, unknown> = { ...entry };
+      if (existing && already) {
+        for (const key of USER_OWNED_KEYS) if (key in existing) merged[key] = existing[key];
+      }
+      servers[MCP_SERVER_NAME] = merged;
       config.mcpServers = servers;
       writeConfig(file, config);
       const lines = [
         `mcp: ${already ? "already configured" : "configured"} in ${file}`,
-        `  server: ${MCP_SERVER_NAME} → ${entry.socket} (directTools)`,
+        `  server: ${MCP_SERVER_NAME} → stdio bridge: ${describe(entry)}`,
       ];
       if (!already) {
-        lines.push("  start the broker (the host does this on add-on connect) — new Pi sessions pick the config up at startup");
-        lines.push("  subagent agents reference the tools as `mcp:pi-browser/<tool>` in their frontmatter tools list");
+        lines.push("  new Pi sessions pick the config up at startup");
+        lines.push("  tool names: mcp__pi-browser__<tool> (pi built-in MCP; exposure \"deferred\" — the model loads them via tool_search) or mcp:pi-browser/<tool> (pi-mcp-adapter)");
+        lines.push("  works before Firefox/Thunderbird start; calls succeed once an app with the Pi add-on is running");
       }
       return { ok: true, lines };
     }
@@ -110,7 +149,7 @@ export function runMcpCommand(sub: McpSubcommand, homeDir: string): CommandResul
           ],
         };
       }
-      if (JSON.stringify(existing) !== JSON.stringify(entry)) {
+      if (!sameLaunch(existing, entry)) {
         return {
           ok: false,
           lines: [
@@ -120,7 +159,7 @@ export function runMcpCommand(sub: McpSubcommand, homeDir: string): CommandResul
           ],
         };
       }
-      return { ok: true, lines: [`mcp: OK — ${MCP_SERVER_NAME} → ${existing.socket} in ${file}`] };
+      return { ok: true, lines: [`mcp: OK — ${MCP_SERVER_NAME} → stdio bridge (${describe(existing)}) in ${file}`] };
     }
     case "uninstall": {
       const config = readConfig(file);
