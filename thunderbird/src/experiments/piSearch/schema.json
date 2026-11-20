@@ -1,12 +1,12 @@
-{
-  "piSearch": {
-    "scopes": ["addon_parent"],
-    "paths": [["piSearch"]],
+[
+  {
+    "namespace": "piSearch",
+    "description": "Full-text message search over Thunderbird's Gloda global index (the search bar's engine), for the mail_search tool.",
     "functions": [
       {
         "name": "searchMessages",
         "type": "function",
-        "description": "Full-text search over the Gloda global message index — the same engine the Thunderbird search bar uses. Terms are AND-combined by default (FTS3); quoted phrases match contiguously.",
+        "description": "Full-text search over the Gloda global message index — the same engine the Thunderbird search bar uses. Terms are AND-combined by default (FTS3); quoted phrases match contiguously. Resolves to an array of {uri, folderUri, messageKey, subject, date}.",
         "parameters": [
           {
             "name": "text",
@@ -18,36 +18,30 @@
             "type": "object",
             "optional": true,
             "properties": {
-              "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 },
-              "andTerms": { "type": "boolean", "default": true }
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "default": 100,
+                "optional": true
+              },
+              "andTerms": {
+                "type": "boolean",
+                "default": true,
+                "optional": true
+              }
             }
           }
         ],
-        "returns": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "uri": { "type": "string" },
-              "folderUri": { "type": "string" },
-              "messageKey": { "type": "integer" },
-              "subject": { "type": "string" },
-              "date": { "type": "integer" }
-            }
-          }
-        }
+        "async": true
       },
       {
         "name": "status",
         "type": "function",
-        "description": "Gloda indexer status (is the global index enabled?).",
-        "returns": {
-          "type": "object",
-          "properties": {
-            "enabled": { "type": "boolean" }
-          }
-        }
+        "description": "Gloda indexer status (is the global index enabled?). Resolves to {enabled}.",
+        "async": true,
+        "parameters": []
       }
     ]
   }
-}
+]

@@ -971,7 +971,9 @@ async function mailSearch(args: Record<string, unknown>, context: MailToolContex
   // sortComplete are both true, and the WDAPI To/Cc/Bcc header phase is
   // unnecessary (author/recipient columns are indexed too).
   // Term semantics: words are AND-combined (FTS3), quoted spans are phrases.
-  const piSearch = (browser as { piSearch?: { searchMessages?: (text: string, options?: { limit?: number; andTerms?: boolean }) => Promise<Array<Record<string, unknown>>> } }).piSearch;
+  // Hits are standard MessageHeaders (session-global `id`), converted in the
+  // experiment by the extension's messageManager.
+  const piSearch = (browser as { piSearch?: { searchMessages?: (text: string, options?: { limit?: number; andTerms?: boolean }) => Promise<browser.mailTypes.MessageHeader[]> } }).piSearch;
   if (typeof queryInfo.fullText === "string" && typeof piSearch?.searchMessages === "function") {
     const gT0 = Date.now();
     const glodaLimit = Math.min(Math.max(limit, 1), 1000);
@@ -981,14 +983,9 @@ async function mailSearch(args: Record<string, unknown>, context: MailToolContex
     const seen = new Set<number>();
     const refs: MailMessageRef[] = [];
     for (const h of hits) {
-      const key = typeof h.messageKey === "number" ? h.messageKey : NaN;
-      if (!Number.isFinite(key) || seen.has(key)) continue;
-      seen.add(key);
-      const ref: MailMessageRef = { messageId: key };
-      if (typeof h.folderUri === "string") ref.folderId = h.folderUri;
-      if (typeof h.subject === "string") ref.subject = h.subject;
-      if (typeof h.date === "number") ref.date = new Date(h.date / 1000).toISOString();
-      refs.push(ref);
+      if (typeof h?.id !== "number" || seen.has(h.id)) continue;
+      seen.add(h.id);
+      refs.push(normalizeHeader(h));
     }
     const sorted = bySort(refs, sortKey, sortOrder);
     const messages = sorted.slice(0, limit);

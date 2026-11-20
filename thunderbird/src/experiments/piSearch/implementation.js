@@ -11,13 +11,17 @@
  *
  * API surface:
  *   browser.piSearch.searchMessages(text, { limit?, andTerms? })
- *     → Promise<Array<{ uri, folderUri, messageKey, subject?, date? }>>
- *       ranked by Gloda's relevance score (subject/attachment matches weigh
- *       most), resolved when the query completes (onQueryCompleted).
+ *     → Promise<Array<MessageHeader>>
+ *       Standard WebExtension MessageHeaders (the same objects
+ *       browser.messages.* returns, with the session-global `id` every other
+ *       messages API takes), ranked by Gloda's relevance score
+ *       (subject/attachment matches weigh most), resolved when the query
+ *       completes (onQueryCompleted). Hits whose message is no longer in its
+ *       folder (stale index rows) are dropped.
  *   browser.piSearch.status() → { enabled }
  *
  * Version coupling: imports GlodaMsgSearcher/GlodaPublic by resource: URI
- * (module layout is stable across TB 115–155); pin strict_max_version if
+ * (module layout verified on TB 153 ESR and 160 release); pin strict_max_version if
  * Gloda's internals ever move.
  */
 "use strict";
@@ -37,18 +41,25 @@
         return glodaMsgSearcher;
       }
 
-      function mapItem(item) {
-        const uri = typeof item?.uri === "string" ? item.uri : "";
-        const keyMatch = /:(\d+)$/.exec(uri);
-        const staticData = item?.staticData ?? {};
-        return {
-          uri,
-          folderUri: typeof item?.folderUri === "string" ? item.folderUri : "",
-          messageKey: keyMatch ? Number(keyMatch[1]) : undefined,
-          subject: typeof staticData.subject === "string" ? staticData.subject : undefined,
-          // Gloda stores PRTime (microseconds)
-          date: typeof staticData.date === "number" ? staticData.date : undefined,
-        };
+      // GlodaMessage → WebExtension MessageHeader. A GlodaMessage has no
+      // `uri`/`staticData`; its live nsIMsgDBHdr is `folderMessage` (null when
+      // the index row is stale), and the extension's messageManager converts
+      // that into the MessageHeader — including the session-global message
+      // id that messages.get/getFull/move take. (A folder-local messageKey is
+      // NOT a WebExtension message id.)
+      function toHeader(item) {
+        let hdr = null;
+        try {
+          hdr = item?.folderMessage ?? null;
+        } catch {
+          hdr = null;
+        }
+        if (!hdr) return null;
+        try {
+          return context.extension.messageManager.convert(hdr) ?? null;
+        } catch {
+          return null;
+        }
       }
 
       function searchMessages(text, options = {}) {
@@ -63,7 +74,10 @@
           const items = [];
           const listener = {
             onItemsAdded: (added) => {
-              for (const item of added) items.push(mapItem(item));
+              for (const item of added) {
+                const header = toHeader(item);
+                if (header) items.push(header);
+              }
             },
             onItemsModified: () => {},
             onItemsRemoved: () => {},

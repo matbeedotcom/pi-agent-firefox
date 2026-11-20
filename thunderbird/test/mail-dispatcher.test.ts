@@ -411,11 +411,13 @@ test("mail_search: returns a page + an opaque continuation cursor", async () => 
 
 test("mail_search: a text query uses the Gloda index when available (complete, sorted, no WDAPI scan)", async () => {
   store.glodaEnabled = true;
+  // The experiment returns standard MessageHeaders (session-global `id`),
+  // never folder-local message keys.
   store.glodaHits = [
-    { uri: "imap://u@h/INBOX:42", folderUri: "imap://u@h/INBOX", messageKey: 42, subject: "Pi Coding Agent Browser", date: 1700000000000000 },
-    { uri: "imap://u@h/Archive:7", folderUri: "imap://u@h/Archive", messageKey: 7, subject: "pi and browser again" },
-    // Duplicate key — must be deduped.
-    { uri: "imap://u@h/INBOX:42", folderUri: "imap://u@h/INBOX", messageKey: 42, subject: "Pi Coding Agent Browser", date: 1700000000000000 },
+    { id: 42, headerMessageId: "a@x", subject: "Pi Coding Agent Browser", author: "Alice <a@x>", date: new Date(1700000000000).toISOString(), folder: { id: "account1://INBOX", name: "Inbox" } },
+    { id: 7, headerMessageId: "b@x", subject: "pi and browser again", folder: { id: "account1://Archive", name: "Archive" } },
+    // Duplicate id — must be deduped.
+    { id: 42, headerMessageId: "a@x", subject: "Pi Coding Agent Browser", date: new Date(1700000000000).toISOString(), folder: { id: "account1://INBOX", name: "Inbox" } },
   ];
   // The WDAPI path would have found these — it must NOT be used.
   store.search = [{ id: 99, subject: "should not appear" }];
@@ -426,15 +428,18 @@ test("mail_search: a text query uses the Gloda index when available (complete, s
   assert.equal(store.lastQuery, undefined, "WDAPI messages.query must not be called");
   assert.equal(res.complete, true);
   assert.equal(res.sortComplete, true);
-  assert.equal(res.scanned, 2, "duplicate messageKey deduped");
+  assert.equal(res.scanned, 2, "duplicate message id deduped");
   assert.equal(res.messages.length, 2);
   assert.match(String(res.note), /Gloda/);
   const first = res.messages[0] as { messageId: number; subject?: string; date?: string; folderId?: string };
   assert.ok([42, 7].includes(first.messageId));
   const hit42 = (res.messages as Array<Record<string, unknown>>).find((m) => m.messageId === 42);
   assert.equal(hit42?.subject, "Pi Coding Agent Browser");
-  assert.equal(hit42?.date, new Date(1700000000000).toISOString(), "PRTime µs → ISO ms");
-  assert.equal(hit42?.folderId, "imap://u@h/INBOX");
+  assert.equal(hit42?.author, "Alice <a@x>");
+  assert.equal(hit42?.headerMessageId, "a@x");
+  assert.equal(hit42?.date, new Date(1700000000000).toISOString());
+  assert.equal(hit42?.folderId, "account1://INBOX");
+  assert.equal(hit42?.folder, "Inbox");
 
   // The remainder pages through a carry cursor.
   const cont = await call("mail_search", { cursor: res.nextCursor as string });
