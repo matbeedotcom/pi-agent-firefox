@@ -1,6 +1,6 @@
 {
   "name": "@pi-browser/webext",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "Shared WebExtension-side ACP client + session store for the Mozilla add-ons (Firefox, Thunderbird)",
@@ -18,7 +18,7 @@
     "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
   },
   "dependencies": {
-    "@pi-browser/protocol": "0.2.2",
+    "@pi-browser/protocol": "0.2.3",
     "streaming-markdown": "^0.2.15"
   },
   "devDependencies": {
