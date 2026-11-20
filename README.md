@@ -43,7 +43,7 @@ The plugin (`@pi-browser/agent`) installs from this repository as a pi package
 the plugin automatically on install):
 
 ```sh
-pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.1.1
+pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.2.0
 ```
 
 1. In any Pi session: `/pi-browser install` — registers the Firefox Native Messaging host.

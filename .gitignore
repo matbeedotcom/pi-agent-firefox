@@ -12,3 +12,4 @@ VERIFICATION-evidence/
 .ripwire_quality_baseline
 
 .repl/
+.env

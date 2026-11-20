@@ -1,6 +1,6 @@
 {
   "name": "@pi-browser/firefox",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Pi Browser Firefox add-on (build workspace)",
@@ -12,8 +12,8 @@
     "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
   },
   "dependencies": {
-    "@pi-browser/protocol": "0.1.1",
-    "@pi-browser/webext": "^0.1.1"
+    "@pi-browser/protocol": "0.2.0",
+    "@pi-browser/webext": "^0.2.0"
   },
   "devDependencies": {
     "@types/firefox-webext-browser": "^143.0.0",
