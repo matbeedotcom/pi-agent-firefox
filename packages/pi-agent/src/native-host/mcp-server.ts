@@ -1,12 +1,21 @@
 /**
- * Browser-tools MCP server (MCP over unix socket).
+ * Pi Browser tools MCP server (MCP over unix socket / Windows named pipe).
  *
  * Pi subagent children run as separate node processes: they have no ACP
  * channel to the connected app and no in-process tool bridge (the bridge
  * module state lives only in this broker process). This server gives them
- * browser access the standard way — the broker, which owns both the ACP
- * pipe and the tool bridge, exposes the browser tools + the host-side
- * `javascript` REPL as a plain MCP server on a private unix socket.
+ * browser and mail access the standard way — the broker, which owns both
+ * the ACP pipe and the tool bridge, exposes the add-on tools as a plain MCP
+ * server on a private unix socket: Firefox's browser tools, the host-side
+ * `javascript` REPL, and Thunderbird's mail / compose / mail-organization /
+ * contacts tools. Calls route to whichever connected app serves the tool
+ * (the broker's cross-app routing), so a subagent reaches Thunderbird even
+ * when its parent session lives in Firefox, and vice versa.
+ *
+ * The list is static (every tool family, whether or not its app is
+ * connected right now): MCP clients cache tools/list and this server
+ * announces listChanged:false. A call for an app that is not connected
+ * fails with "no connected client provides tool: <name>".
  *
  * Wire format: MCP JSON-RPC 2.0, newline-delimited (the same JSONL framing
  * as the MCP stdio transport; pi-mcp-adapter's UnixSocketClientTransport
@@ -33,6 +42,10 @@ import path from "node:path";
 import { PI_BROWSER_META, PI_BROKER } from "@pi-browser/protocol";
 import { ipcEndpoint, isNamedPipe } from "./broker-ipc.js";
 import { BROWSER_TOOL_SCHEMAS, REPL_TOOL_SCHEMAS } from "../browser/schemas.js";
+import { MAIL_TOOL_SCHEMAS } from "../mail/schemas.js";
+import { COMPOSE_TOOL_SCHEMAS } from "../compose/schemas.js";
+import { MAIL_MUTATION_TOOL_SCHEMAS } from "../mutation/schemas.js";
+import { CONTACTS_TOOL_SCHEMAS } from "../contacts/schemas.js";
 import { MCP_PROTOCOL_VERSION } from "../browser/mcp-acp-client.js";
 import type { Logger } from "../logger.js";
 import type { BrowserToolBridge } from "../tool-bridge.js";
@@ -58,6 +71,19 @@ interface JsonRpcMessage {
 }
 
 const SERVER_INFO = { name: "pi-browser", version: PI_BROWSER_META.version };
+
+/** Every tool this server lists and accepts (see the header for why static). */
+export const MCP_TOOL_SCHEMAS: ReadonlyArray<{ name: string; description?: string; parameters: unknown }> = [
+  // Firefox (add-on-routed) + the host-side `javascript` REPL.
+  ...BROWSER_TOOL_SCHEMAS,
+  ...REPL_TOOL_SCHEMAS,
+  // Thunderbird (add-on-routed).
+  ...MAIL_TOOL_SCHEMAS,
+  ...COMPOSE_TOOL_SCHEMAS,
+  ...MAIL_MUTATION_TOOL_SCHEMAS,
+  ...CONTACTS_TOOL_SCHEMAS,
+];
+const MCP_TOOL_NAMES = new Set(MCP_TOOL_SCHEMAS.map((t) => t.name));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -91,7 +117,8 @@ async function dispatch(
         capabilities: { tools: { listChanged: false } },
         serverInfo: SERVER_INFO,
         instructions:
-          "Browser tools for the Firefox tab bound to the active Pi Browser session.",
+          "Pi Browser tools: browser_* act on the Firefox tab bound to the active Pi session; " +
+          "mail_*, compose_*, contacts_* act on Thunderbird. Each tool runs in the app that serves it.",
       });
       return;
     case "notifications/initialized":
@@ -101,8 +128,7 @@ async function dispatch(
       return;
     case "tools/list":
       reply(socket, id, {
-        // Browser tools (add-on-routed) + the host-side `javascript` REPL.
-        tools: [...BROWSER_TOOL_SCHEMAS, ...REPL_TOOL_SCHEMAS].map((t) => ({
+        tools: MCP_TOOL_SCHEMAS.map((t) => ({
           name: t.name,
           ...(t.description ? { description: t.description } : {}),
           inputSchema: t.parameters,
@@ -113,8 +139,7 @@ async function dispatch(
       const p = isRecord(params) ? params : {};
       const tool = typeof p.name === "string" ? p.name : "";
       const args = isRecord(p.arguments) ? p.arguments : {};
-      const known = [...BROWSER_TOOL_SCHEMAS, ...REPL_TOOL_SCHEMAS].some((t) => t.name === tool);
-      if (!known) {
+      if (!MCP_TOOL_NAMES.has(tool)) {
         if (isNotification) return;
         replyError(socket, id, -32602, `unknown tool: ${tool}`);
         return;
@@ -132,7 +157,7 @@ async function dispatch(
         const text = err instanceof Error ? err.message : String(err);
         log.warn(`mcp browser: ${tool} failed: ${text}`);
         reply(socket, id, {
-          content: [{ type: "text", text: `browser tool failed: ${text}` }],
+          content: [{ type: "text", text: `${tool} failed: ${text}` }],
           isError: true,
         });
       }

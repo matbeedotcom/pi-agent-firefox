@@ -136,6 +136,7 @@ The steering for that (tool description + first-call preamble + the
 | `/pi-browser status` | host state + add-on detection (heartbeat) |
 | `/pi-browser doctor` | status + live framed host probe + add-on detection |
 | `/pi-browser uninstall` | remove the registration |
+| `/pi-browser mcp [install\|status\|uninstall]` | register the broker's MCP server in `~/.pi/agent/mcp.json` so Pi subagents can use the add-on tools: `browser_*` + `javascript` (Firefox) and `mail_*`, `compose_*`, `contacts_*` (Thunderbird). Each call runs in the app that serves the tool; reference them as `mcp:pi-browser/<tool>`. |
 
 ## Using Firefox and Thunderbird together (cross-app broker)
 

@@ -10,6 +10,10 @@ import { startMcpBrowserServer, type McpBrowserServerHandle } from "../src/nativ
 import { ipcEndpoint } from "../src/native-host/broker-ipc.js";
 import type { BrowserToolBridge } from "../src/tool-bridge.js";
 import { BROWSER_TOOL_SCHEMAS, REPL_TOOL_SCHEMAS } from "../src/browser/schemas.js";
+import { MAIL_TOOL_SCHEMAS } from "../src/mail/schemas.js";
+import { COMPOSE_TOOL_SCHEMAS } from "../src/compose/schemas.js";
+import { MAIL_MUTATION_TOOL_SCHEMAS } from "../src/mutation/schemas.js";
+import { CONTACTS_TOOL_SCHEMAS } from "../src/contacts/schemas.js";
 
 const quiet = createLogger({ level: "error", stderr: { write: () => true } });
 
@@ -109,11 +113,36 @@ test("mcp server: initialize handshake + tools/list surface", async () => {
 
   const list = (await client.request("tools/list")) as { tools: Array<{ name: string }> };
   const names = list.tools.map((t) => t.name).sort();
-  // Browser tools (add-on-routed) + the host-side `javascript` REPL.
-  const expected = [...BROWSER_TOOL_SCHEMAS, ...REPL_TOOL_SCHEMAS].map((t) => t.name).sort();
+  // Firefox browser tools + the host-side `javascript` REPL + every
+  // Thunderbird tool family (mail, compose, mail organization, contacts).
+  const expected = [
+    ...BROWSER_TOOL_SCHEMAS,
+    ...REPL_TOOL_SCHEMAS,
+    ...MAIL_TOOL_SCHEMAS,
+    ...COMPOSE_TOOL_SCHEMAS,
+    ...MAIL_MUTATION_TOOL_SCHEMAS,
+    ...CONTACTS_TOOL_SCHEMAS,
+  ].map((t) => t.name).sort();
   assert.deepEqual(names, expected);
-  assert.ok(names.includes("javascript"));
-  assert.equal(names.length, 25);
+  assert.equal(new Set(names).size, names.length, "tool names must be unique");
+  for (const name of ["javascript", "browser_get_page", "mail_search", "compose_prepare_new", "mail_move", "contacts_search"]) {
+    assert.ok(names.includes(name), `tools/list is missing ${name}`);
+  }
+  client.close();
+});
+
+test("mcp server: Thunderbird tools route through the bridge like browser tools", async () => {
+  calls = [];
+  const client = new MiniMcpClient(server!.socketPath);
+  await client.ready();
+  await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+  const res = (await client.request("tools/call", {
+    name: "mail_search",
+    arguments: { subject: "invoice" },
+  })) as { content: Array<{ type: string; text: string }>; isError?: boolean };
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(res.content, [{ type: "text", text: "ok:mail_search" }]);
+  assert.deepEqual(calls, [{ tool: "mail_search", args: { subject: "invoice" } }]);
   client.close();
 });
 
