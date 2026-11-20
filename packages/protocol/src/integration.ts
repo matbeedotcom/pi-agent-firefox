@@ -13,7 +13,7 @@ export const PI_BROWSER = {
   /** Package name. */
   name: "pi-browser",
   /** Package release version (npm version of @pi-browser/agent). */
-  version: "0.2.4",
+  version: "0.2.5",
   /**
    * Pi Browser integration protocol version (bump on breaking changes to
    * x-pi-browser/* semantics or integration metadata). v2 = 2026-09-11
