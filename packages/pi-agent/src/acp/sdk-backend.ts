@@ -14,7 +14,7 @@
  * `createAgentSession()` skips that layer and leaves providers unregistered.
  */
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
@@ -44,7 +44,9 @@ async function loadBuiltinExtensionFactories(log: Logger): Promise<BuiltinExtens
   try {
     const mainUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
     const distDir = path.dirname(fileURLToPath(mainUrl));
-    const mod = (await import(path.join(distDir, "extensions", "index.js"))) as {
+    // A file:// URL, not a bare path: on Windows `import("C:\...")` is rejected
+    // ("Received protocol 'c:'"), which silently dropped every built-in provider.
+    const mod = (await import(pathToFileURL(path.join(distDir, "extensions", "index.js")).href)) as {
       builtInExtensions?: BuiltinExtensionFactory[];
     };
     return mod.builtInExtensions ?? [];
