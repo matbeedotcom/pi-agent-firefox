@@ -90,6 +90,17 @@ export class PiSdkBackend implements PiBackend {
   private servicesByCwd = new Map<string, AgentSessionServices>();
   /** Serializes resource reloads per services bundle (concurrent spawns, same cwd). */
   private reloadChains = new Map<AgentSessionServices, Promise<void>>();
+  /**
+   * Bundles whose resources were loaded by servicesFor() and not yet used by
+   * a session. The first spawn skips the pre-spawn resource refresh: the
+   * resources are as fresh as a refresh would make them, and a refresh is a
+   * second full load (~8 s with a real package set, all of it blocking the
+   * event loop).
+   */
+  private unusedBundles = new WeakSet<AgentSessionServices>();
+  /** Pre-built fresh workspace (prewarmWorkspace), ready to be claimed. */
+  private prewarmed: { cwd: string; ready: boolean } | undefined;
+  private prewarmStarted = false;
   private builtinFactories: BuiltinExtensionFactory[] | undefined;
   private builtinFactoriesPromise: Promise<BuiltinExtensionFactory[]> | undefined;
   private sessions = new Set<BackendSession>();
@@ -149,6 +160,7 @@ export class PiSdkBackend implements PiBackend {
     // every host-spawned session loads it; isolated skill-job sessions never
     // do (noExtensions in the job's resource loader). In a session without a
     // skills host installed the extension registers nothing.
+    const t0 = Date.now();
     const extensionFactories = [
       ...(await this.builtinFactoriesOnce()),
       { name: "pi-browser-skills", factory: createSkillsExtensionFactory() },
@@ -163,6 +175,7 @@ export class PiSdkBackend implements PiBackend {
     // creation, but their model lists populate via an async refresh phase.
     // Settle the runtime before any session is spawned against it, so model
     // resolution (default model, session restore) sees the full catalog.
+    const t1 = Date.now();
     try {
       await Promise.race([
         modelRuntime.getAvailable(),
@@ -172,8 +185,45 @@ export class PiSdkBackend implements PiBackend {
       this.opts.log.warn("model availability refresh failed", err);
     }
     this.servicesByCwd.set(cwd, services);
-    this.opts.log.info(`session services ready for cwd=${cwd}`);
+    this.unusedBundles.add(services);
+    this.opts.log.info(
+      `session services ready for cwd=${cwd} in ${Date.now() - t0}ms (resources ${t1 - t0}ms, model refresh ${Date.now() - t1}ms)`,
+    );
     return services;
+  }
+
+  /**
+   * Build one fresh workspace's services in the background so the next
+   * "new workspace" session starts without the resource load. Runs once per
+   * host. NOTE: the load blocks the event loop for its whole duration (pi
+   * transpiles extensions synchronously), so this must run when nothing is
+   * waiting on the host — the caller schedules it right after the first
+   * client has initialized. Disable with PI_BROWSER_PREWARM=0.
+   */
+  prewarmWorkspace(createDir: () => Promise<string>): void {
+    if (this.prewarmStarted || process.env.PI_BROWSER_PREWARM === "0") return;
+    this.prewarmStarted = true;
+    void (async () => {
+      try {
+        const cwd = await createDir();
+        this.prewarmed = { cwd, ready: false };
+        const t0 = Date.now();
+        await this.servicesFor(cwd);
+        if (this.prewarmed?.cwd === cwd) this.prewarmed.ready = true;
+        this.opts.log.info(`prewarmed workspace ${cwd} in ${Date.now() - t0}ms`);
+      } catch (err) {
+        this.prewarmed = undefined;
+        this.opts.log.warn("workspace prewarm failed (sessions start normally)", err);
+      }
+    })();
+  }
+
+  /** Claim the prewarmed workspace if its services are ready. */
+  takePrewarmedWorkspace(): string | undefined {
+    if (!this.prewarmed?.ready) return undefined;
+    const { cwd } = this.prewarmed;
+    this.prewarmed = undefined;
+    return cwd;
   }
 
   async createSession(opts: CreateSessionOptions): Promise<BackendSession> {
@@ -223,8 +273,14 @@ export class PiSdkBackend implements PiBackend {
     refresh?: boolean;
   }): Promise<BackendSession> {
     const { cwd, sessionManager, customTools, modelValueId, thinkingLevel, refresh } = args;
+    const tStart = Date.now();
     const services = await this.servicesFor(cwd);
-    if (refresh) await this.refreshResources(services);
+    const tServices = Date.now();
+    // Just-loaded bundle (fresh build or prewarm): already current — skip the
+    // refresh, which would load every extension a second time.
+    const unused = this.unusedBundles.delete(services);
+    if (refresh && !unused) await this.refreshResources(services);
+    const tRefresh = Date.now();
     const options: Record<string, unknown> = { services, sessionManager };
     if (modelValueId) {
       const model = this.resolveModel(modelValueId);
@@ -252,7 +308,10 @@ export class PiSdkBackend implements PiBackend {
           "(provider not configured?) — prompts will fail until a model is selected",
       );
     }
-    this.opts.log.info(`session ${agentSession.sessionId}: model=${m?.provider}/${m?.id}`);
+    this.opts.log.info(
+      `session ${agentSession.sessionId}: model=${m?.provider}/${m?.id} — ready in ${Date.now() - tStart}ms ` +
+        `(services ${tServices - tStart}ms, resource refresh ${tRefresh - tServices}ms, session ${Date.now() - tRefresh}ms)`,
+    );
     return this.wrapSession(agentSession, cwd);
   }
 

@@ -115,5 +115,13 @@ export interface PiBackend {
   openSession(opts: OpenSessionOptions): Promise<BackendSession>;
   listSessions(cwd?: string): Promise<ListedSession[]>;
   listModels(): Promise<ModelOption[]>;
+  /**
+   * Optional: build the session services for a fresh workspace ahead of time,
+   * so the next "new workspace" session starts without the resource load.
+   * Called once per host, shortly after the first client initializes.
+   */
+  prewarmWorkspace?(createDir: () => Promise<string>): void;
+  /** Optional: claim a pre-built workspace (undefined when none is ready). */
+  takePrewarmedWorkspace?(): string | undefined;
   dispose(): void;
 }

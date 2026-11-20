@@ -133,6 +133,9 @@ function toToolCallContent(result: unknown): Array<{ type: "content"; content: C
   return blocks.length ? blocks : [{ type: "content", content: { type: "text", text: result === undefined ? "" : JSON.stringify(result) } }];
 }
 
+/** Delay between the first initialize reply and the workspace prewarm (lets the add-on's startup traffic finish first). */
+const PREWARM_DELAY_MS = 2_000;
+
 export class AcpAgent {
   private readonly sessions = new Map<string, SessionState>();
   /** Name of the connected client (set on initialize) — for the add-on heartbeat. */
@@ -336,6 +339,13 @@ export class AcpAgent {
     // Record add-on presence (no-op for non-add-on clients like test harnesses).
     this.clientIdentityName = req.clientInfo?.name;
     touchClientHeartbeat(req.clientInfo?.name, req.clientInfo?.version, this.clientApplication);
+    // Prewarm one fresh workspace shortly AFTER this reply goes out: the
+    // build blocks the event loop for several seconds, so it must not sit
+    // between the add-on and its initialize answer. Once per host (the
+    // backend ignores repeats); only the real pi backend implements it.
+    if (this.opts.backend.prewarmWorkspace) {
+      setTimeout(() => this.opts.backend.prewarmWorkspace?.(() => this.workspaces.create()), PREWARM_DELAY_MS).unref?.();
+    }
     const piAgentMeta: PiAgentMeta = {
       ...PI_AGENT_META,
       application: this.clientApplication,
@@ -365,7 +375,10 @@ export class AcpAgent {
     // A session with no meaningful requested cwd (the add-on's empty-field
     // fallback is "/") gets a fresh per-task workspace as its cwd, so the
     // model's file tools and the REPL share one task-scoped scratch.
-    const cwd = isNeutralCwd(req.cwd) ? await this.workspaces.create() : req.cwd;
+    // A prewarmed workspace (services already built) starts near-instantly.
+    const cwd = isNeutralCwd(req.cwd)
+      ? (this.opts.backend.takePrewarmedWorkspace?.() ?? (await this.workspaces.create()))
+      : req.cwd;
     const { state } = await this.openBackendSession(
       (tools) => this.opts.backend.createSession({ cwd, customTools: tools }),
       req.mcpServers,
