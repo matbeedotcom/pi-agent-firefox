@@ -36,7 +36,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@pi-browser/protocol";
-import { AcpClient, fetchPiTheme, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
+import { AcpClient, SESSION_OPEN_TIMEOUT_MS, fetchPiTheme, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
 import { dispatchMailTool, type MailToolContext } from "./mail-dispatcher.js";
 import { dispatchComposeTool } from "./compose-dispatcher.js";
 import { dispatchMutationTool } from "./mutation-dispatcher.js";
@@ -362,6 +362,7 @@ async function createSession(cwd: string): Promise<string> {
     // legacy transport; the mail tools are still registered because the client
     // advertises the "mail"/"attachments" capabilities in its hello.
     { cwd },
+    SESSION_OPEN_TIMEOUT_MS,
   );
   const sessionId = res.sessionId;
   // The agent may provision a per-task workspace as the session cwd (when the
@@ -380,7 +381,7 @@ async function openExistingSession(sessionId: string, cwd: string, load: boolean
   const res = await client.request<{ configOptions?: unknown }>(method, {
     sessionId,
     cwd,
-  });
+  }, SESSION_OPEN_TIMEOUT_MS);
   const view = store.get(sessionId);
   if (view) view.configOptions = res.configOptions as never;
   if (load) store.markLoaded(sessionId);

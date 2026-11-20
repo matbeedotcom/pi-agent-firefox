@@ -109,6 +109,14 @@ interface Pending {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+/**
+ * session/new, session/load, session/resume: the host builds a full Pi
+ * session (loads the user's pi packages/extensions, MCP adapter config, the
+ * model registry) — 10-15 s on a real setup's first session, far past the
+ * default. On timeout the host kept building an orphan session the UI never
+ * saw.
+ */
+export const SESSION_OPEN_TIMEOUT_MS = 120_000;
 const INITIALIZE_TIMEOUT_MS = 20_000;
 const RECONNECT_DELAY_MS = 3_000;
 

@@ -23,7 +23,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@pi-browser/protocol";
-import { AcpClient, bindingRefId, fetchPiTheme, notifyHost, SessionStore, SkillsRuntime, type DocumentIdentity, type GateIdentity, type HostStatus, type PiTheme } from "@pi-browser/webext";
+import { AcpClient, SESSION_OPEN_TIMEOUT_MS, bindingRefId, fetchPiTheme, notifyHost, SessionStore, SkillsRuntime, type DocumentIdentity, type GateIdentity, type HostStatus, type PiTheme } from "@pi-browser/webext";
 import type { PagePlan } from "@pi-browser/protocol";
 import { PromptRecovery } from "./prompt-recovery.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
@@ -340,7 +340,7 @@ async function createSession(cwd: string): Promise<string> {
       sessionId: string;
       configOptions?: unknown;
       _meta?: { piBrowser?: { workspace?: string } };
-    }>(AGENT_METHODS.session_new, { cwd, mcpServers });
+    }>(AGENT_METHODS.session_new, { cwd, mcpServers }, SESSION_OPEN_TIMEOUT_MS);
     sessionId = res.sessionId;
     configOptions = res.configOptions;
     // The agent may provision a per-task workspace as the session cwd (when
@@ -368,7 +368,7 @@ async function openExistingSession(sessionId: string, cwd: string, load: boolean
       sessionId,
       cwd,
       mcpServers,
-    });
+    }, SESSION_OPEN_TIMEOUT_MS);
     decl.resolve(sessionId);
     const view = store.get(sessionId);
     if (view) view.configOptions = res.configOptions as never;
