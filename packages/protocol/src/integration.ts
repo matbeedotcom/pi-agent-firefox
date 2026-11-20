@@ -223,6 +223,13 @@ export interface PiBrowserMeta {
   version: string;
   protocolVersion: number;
   browserToolVersion: number;
+  /**
+   * Where the host provisions per-task workspaces (initialize only; e.g.
+   * ~/.pi/workspaces). A session created with an empty cwd gets a fresh
+   * directory under it — the add-on UIs show this as the default working
+   * directory. Optional: older hosts omit it.
+   */
+  workspaceRoot?: string;
 }
 
 export const PI_BROWSER_META: PiBrowserMeta = {

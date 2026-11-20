@@ -357,7 +357,7 @@ export class AcpAgent {
         mcpCapabilities: { acp: true },
       },
       agentInfo: this.opts.agentInfo,
-      _meta: { piBrowser: PI_BROWSER_META, piAgent: piAgentMeta },
+      _meta: { piBrowser: { ...PI_BROWSER_META, workspaceRoot: this.workspaces.root }, piAgent: piAgentMeta },
     };
   }
 
