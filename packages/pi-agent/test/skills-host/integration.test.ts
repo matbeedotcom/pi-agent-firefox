@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { FrameDecoder, encodeFrame } from "../../src/native-host/framing.js";
@@ -119,7 +120,10 @@ function spawnFakeHost(scenarioFile: string): { proc: ChildProcess; stderr: stri
       ...process.env,
       FAKE_HOST_SCENARIO: path.join(scenariosDir, scenarioFile),
       PI_BROWSER_LOG_FILE: "off",
-      PI_BROWSER_DATA_ROOT: path.join("/tmp", `fake-host-data-${process.pid}-${scenarioFile}`),
+      PI_BROWSER_DATA_ROOT: path.join(tmpdir(), `fake-host-data-${process.pid}-${scenarioFile}`),
+      // Hermetic: never read the developer's ~/.pi/browser/permissions.json
+      // (an "always allow" there silently skipped the approval prompt).
+      PI_BROWSER_PERMISSIONS_FILE: path.join(tmpdir(), `fake-host-perms-${process.pid}-${scenarioFile}.json`),
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -149,6 +153,8 @@ test("fake-host process: browser tool round-trip with a delayed bridge (bridge-d
       return;
     }
     if (method === CLIENT_METHODS_XPI.permission_prompted) client.respond(id, { ok: true });
+    // browser_navigate is approval-gated: answer like the sidebar's "Allow once".
+    if (method === "session/request_permission") client.respond(id, { outcome: { outcome: "selected", optionId: "allow_once" } });
   };
 
   try {

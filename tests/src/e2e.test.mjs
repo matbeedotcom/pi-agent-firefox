@@ -1934,7 +1934,7 @@ test("javascript REPL (primitives): snapshot/goto/interact/tabs/checkpoint throu
     assert.ok(ws, "session_new reports the provisioned task workspace");
     const cp = path.join(ws, "state-1");
     const fs = await import("node:fs");
-    assert.equal(fs.statSync(cp).mode & 0o777, 0o600, "checkpoint file is 0600");
+    if (process.platform !== "win32") assert.equal(fs.statSync(cp).mode & 0o777, 0o600, "checkpoint file is 0600"); // POSIX modes only
     assert.equal(fs.readFileSync(cp, "utf8"), JSON.stringify({ n: 1 }), "checkpoint content round-trips");
 
     await host.request(AGENT_METHODS.session_close, { sessionId: s.sessionId });

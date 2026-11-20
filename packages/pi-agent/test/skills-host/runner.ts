@@ -34,6 +34,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 
 import { createLogger, type Logger } from "../../src/logger.js";
@@ -183,7 +184,7 @@ function substitute(value: unknown, vars: Record<string, string>, prev: unknown)
 }
 
 /** Walk up from this file to the repo root (works from test/ and dist-tests/). */
-export function findRepoRoot(start: string = path.dirname(new URL(import.meta.url).pathname)): string {
+export function findRepoRoot(start: string = path.dirname(fileURLToPath(import.meta.url))): string {
   let dir = start;
   for (let i = 0; i < 8; i++) {
     if (existsSync(path.join(dir, "skills-runtime-design.md"))) return dir;

@@ -24,7 +24,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // packages/pi-agent/test/skills-host -> repo root is four levels up.
@@ -102,4 +102,4 @@ process.env.PI_BROWSER_BROKER_DIR ??= path.join(tmp, "run");
 process.env.PI_BROWSER_LOG_FILE ??= "off";
 
 // The real host entry point (runs its main() on import; logs to stderr only).
-await import(path.join(here, "../../dist/native-host/main.js"));
+await import(pathToFileURL(path.join(here, "../../dist/native-host/main.js")).href);

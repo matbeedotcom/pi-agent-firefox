@@ -278,7 +278,7 @@ test("artifact + checkpoint: files land in the workspace, names validated", asyn
     const out = await readFile(path.join(workspace, "out.txt"), "utf8");
     assert.equal(out, "hello repl");
     const st = await stat(path.join(workspace, "out.txt"));
-    assert.equal(st.mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal(st.mode & 0o777, 0o600); // POSIX modes only
     const state = JSON.parse(await readFile(path.join(workspace, "state.json"), "utf8"));
     assert.deepEqual(state, { n: 1 });
     const bad = await runtime.call(`try { await artifact('../evil.txt', 'x'); 'nope' } catch (e) { String(e) }`);
@@ -492,7 +492,8 @@ test("fs: workspace-scoped filesystem in the realm (write/read/list/escape)", as
     assert.match(list.text, /notes/);
 
     const cwd = await runtime.call("await fs.cwd()");
-    assert.ok(cwd.text.includes(workspace), `cwd reports the workspace: ${cwd.text}`);
+    // Cell output JSON-escapes strings (Windows backslashes double up).
+    assert.ok(cwd.text.includes(workspace) || cwd.text.includes(JSON.stringify(workspace).slice(1, -1)), `cwd reports the workspace: ${cwd.text}`);
 
     // Escape attempts surface as cell errors (not silent success).
     const escape = await runtime.call("await fs.read('../outside.txt')");

@@ -8,11 +8,11 @@ test("default: <data root>/packages only", () => {
 });
 
 test("PI_BROWSER_DATA_ROOT relocates the packages root", () => {
-  assert.deepEqual(resolveSkillPackageRoots({ PI_BROWSER_DATA_ROOT: "/tmp/data" }), ["/tmp/data/packages"]);
+  assert.deepEqual(resolveSkillPackageRoots({ PI_BROWSER_DATA_ROOT: "/tmp/data" }), [path.join("/tmp/data", "packages")]);
 });
 
 test("PI_BROWSER_SKILL_ROOTS adds external roots, deduplicated and resolved", () => {
   const extra = ["/tmp/a", "/tmp/a", " "].join(path.delimiter);
   const roots = resolveSkillPackageRoots({ PI_BROWSER_DATA_ROOT: "/tmp/data", PI_BROWSER_SKILL_ROOTS: extra });
-  assert.deepEqual(roots, ["/tmp/data/packages", "/tmp/a"]);
+  assert.deepEqual(roots, [path.join("/tmp/data", "packages"), path.resolve("/tmp/a")]);
 });

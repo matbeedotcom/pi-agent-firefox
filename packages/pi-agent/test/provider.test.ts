@@ -966,6 +966,7 @@ test("javascript: no bound tab surfaces BROWSER_NOT_BOUND as a cell error (not a
     assert.ok(!("message" in (result as object)), "cell outcome is content, not a thrown error");
     await fake.provider.disposeSession("s-nb");
   } finally {
+    await fake.provider.disposeSession("s-nb").catch(() => {});
     delete process.env.PI_BROWSER_REPL_DIR;
     await rm(ws, { recursive: true, force: true });
   }
@@ -985,7 +986,7 @@ test("javascript: lazy runtime, state persists, workspace 0700", async () => {
     const text = second.content.map((c) => (c.type === "text" ? c.text : "")).join("");
     assert.match(text, /42/);
     const st = await stat(path.join(ws, "s-lazy"));
-    assert.equal(st.mode & 0o777, 0o700, "per-session workspace is 0700");
+    if (process.platform !== "win32") assert.equal(st.mode & 0o777, 0o700, "per-session workspace is 0700"); // POSIX modes only
     await fake.provider.disposeSession("s-lazy");
     assert.equal(fake.provider.childPidFor("s-lazy"), undefined, "dispose reaps the child");
   } finally {
@@ -1015,6 +1016,7 @@ test("javascript: page.info() round-trips; screenshot in a cell attaches an imag
     assert.ok(shot.content.some((c) => c.type === "image" && c.mimeType === "image/jpeg"), "image content attached");
     await fake.provider.disposeSession("s-rt");
   } finally {
+    await fake.provider.disposeSession("s-rt").catch(() => {});
     delete process.env.PI_BROWSER_REPL_DIR;
     await rm(ws, { recursive: true, force: true });
   }
@@ -1036,6 +1038,7 @@ test("javascript: binding_changed notifies the next cell with an inspect-first n
     assert.doesNotMatch(text2, /\[repl\] The session's tab binding changed/);
     await fake.provider.disposeSession("s-ntf");
   } finally {
+    await fake.provider.disposeSession("s-ntf").catch(() => {});
     delete process.env.PI_BROWSER_REPL_DIR;
     await rm(ws, { recursive: true, force: true });
   }
@@ -1058,6 +1061,7 @@ test("javascript: cell timeout kills the child; the tool reports a reset, host s
     assert.match(text2, /fresh/);
     await fake.provider.disposeSession("s-to");
   } finally {
+    await fake.provider.disposeSession("s-to").catch(() => {});
     delete process.env.PI_BROWSER_REPL_DIR;
     await rm(ws, { recursive: true, force: true });
   }

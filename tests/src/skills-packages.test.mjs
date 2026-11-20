@@ -23,20 +23,22 @@ const EXPECTED = [
   "fixture-contenteditable/reply",
 ];
 
-test("discoverSkillPackages finds the three test packages", async () => {
-  const found = await discoverSkillPackages(PACKAGES_ROOT);
-  assert.equal(found.length, 3);
-  assert.deepEqual(
-    found.map((p) => path.basename(p)).sort(),
-    ["fixture-contenteditable", "fixture-keyboard", "fixture-reply"],
-  );
+test("discoverSkillPackages finds the three fixture packages", async () => {
+  // The root also holds non-fixture packages (fb-comment-tone, tone-rewrite);
+  // the matrix contract is that the three fixture packages are present.
+  const found = (await discoverSkillPackages(PACKAGES_ROOT)).map((p) => path.basename(p));
+  for (const name of ["fixture-contenteditable", "fixture-keyboard", "fixture-reply"]) {
+    assert.ok(found.includes(name), `missing package ${name} (found: ${found.join(", ")})`);
+  }
 });
 
 test("SkillsRegistry.reload registers all skills with valid definitions", async () => {
   const registry = new SkillsRegistry();
-  await registry.reload(await discoverSkillPackages(PACKAGES_ROOT));
+  const discovered = await discoverSkillPackages(PACKAGES_ROOT);
+  await registry.reload(discovered);
   const snapshot = registry.snapshot();
-  assert.equal(snapshot.length, 3);
+  // Every discovered package registers (one skill each) — none is rejected.
+  assert.equal(snapshot.length, discovered.length);
   for (const key of EXPECTED) {
     const skill = registry.get(key);
     assert.ok(skill, `missing skill ${key}`);

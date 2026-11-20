@@ -306,6 +306,8 @@ test("permission helpers: request shape + outcome classification", () => {
   assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_REJECT } }), false);
   assert.equal(permissionAllowed({ outcome: { outcome: "cancelled" } }), false);
   assert.equal(permissionAllowed(undefined), false);
+  // A malformed client response (no outcome object) fails closed, never throws.
+  assert.equal(permissionAllowed({ ok: true } as unknown as Parameters<typeof permissionAllowed>[0]), false);
 });
 
 test("toolRequiresApproval: every add-on tool is gated in every application", () => {

@@ -164,14 +164,20 @@ test("verified report completes the job with transcript", async () => {
   assert.equal(result.transcript, "final verdict text");
 });
 
-test("report identity cross-check rejects forged results", async () => {
+test("report identity is bound from the job spec — forged identity fields are overwritten", async () => {
+  // The runner ALWAYS binds jobId/eventId/skillKey/skillRevision from the
+  // spec (isolated-runner.ts skill_report tool), so a model-echoed foreign
+  // identity can never name another job: it is replaced, not trusted.
   const { factory } = makeSessionFactory(async (session) => {
-    await session.callReport(validReport({ skillRevision: "rev-999" }));
+    await session.callReport(validReport({ jobId: "other-job", skillKey: "evil/skill", skillRevision: "rev-999" }));
   });
   const runner = new IsolatedSkillRunner({ log: QUIET, sessionFactory: factory });
-  const result = await runner.run(spec(), new AbortController().signal);
-  assert.equal(result.ok, false);
-  assert.match(result.error ?? "", /skillRevision does not match/);
+  const s = spec();
+  const result = await runner.run(s, new AbortController().signal);
+  assert.equal(result.ok, true);
+  assert.equal(result.report?.jobId, s.jobId);
+  assert.equal(result.report?.skillKey, s.skill.key);
+  assert.equal(result.report?.skillRevision, s.skill.revision);
 });
 
 test("malformed report fails validation", async () => {

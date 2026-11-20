@@ -93,8 +93,10 @@ export function buildPermissionRequest(params: {
 /** True when the user allowed the tool (any allow_* option). */
 export function permissionAllowed(response: RequestPermissionResponse | undefined): boolean {
   if (!response) return false;
-  const o = response.outcome;
-  if (o.outcome !== "selected") return false;
+  // Fail closed on a malformed client response (no outcome object): deny,
+  // never throw — a throw here left the gated tool call hanging forever.
+  const o = (response as { outcome?: RequestPermissionResponse["outcome"] }).outcome;
+  if (!o || o.outcome !== "selected") return false;
   return (
     o.optionId === PERMISSION_ALLOW_ONCE ||
     o.optionId === PERMISSION_ALLOW_SESSION ||

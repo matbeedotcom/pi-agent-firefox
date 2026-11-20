@@ -6,6 +6,8 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { tmpdir } from "node:os";
+import { PI_BROWSER } from "@pi-browser/protocol";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const host = path.resolve(here, "../packages/pi-agent/dist/native-host/main.js");
@@ -65,7 +67,7 @@ try {
   const ping = await request("x-pi-browser/ping", {});
   console.log("PING:", JSON.stringify(ping.result));
   if (ping.result?.pong !== true) throw new Error("pong missing");
-  if (ping.result.meta?.protocolVersion !== 1) throw new Error("protocolVersion mismatch");
+  if (ping.result.meta?.protocolVersion !== PI_BROWSER.protocolVersion) throw new Error(`protocolVersion mismatch (host ${ping.result.meta?.protocolVersion}, expected ${PI_BROWSER.protocolVersion})`);
 
   const init = await request("initialize", {
     protocolVersion: 1,
@@ -82,7 +84,7 @@ try {
   if (bad?.error?.data?.piBrowserError !== "PROTOCOL_VERSION_MISMATCH") throw new Error("expected PROTOCOL_VERSION_MISMATCH");
 
   // session/new with the REAL Pi SDK backend (no LLM prompt; just session creation).
-  const tmpCwd = "/tmp/pi-browser-smoke-cwd";
+  const tmpCwd = path.join(tmpdir(), "pi-browser-smoke-cwd");
   await import("node:fs").then((fs) => fs.mkdirSync(tmpCwd, { recursive: true }));
   const news = await request("session/new", { cwd: tmpCwd, mcpServers: [] }, 30000);
   if (news.error) throw new Error("session/new failed: " + JSON.stringify(news.error));
