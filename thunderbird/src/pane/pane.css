@@ -154,14 +154,7 @@ button:disabled {
   border-bottom: 1px solid var(--border);
 }
 
-#new-panel label {
-  display: block;
-  color: var(--muted);
-  font-size: 11px;
-  margin-bottom: 4px;
-}
-
-#cwd-input {
+#new-panel .nsp-input {
   width: 100%;
   background: var(--field);
   color: var(--field-text);

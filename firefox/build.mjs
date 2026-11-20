@@ -80,3 +80,4 @@ console.log("firefox add-on built to", dist);
 
 await cp(path.join(root, "..", "packages", "webext", "src", "activity", "activity.css"), path.join(dist, "sidebar", "activity.css"));
 await cp(path.join(root, "..", "packages", "webext", "src", "permissions.css"), path.join(dist, "sidebar", "permissions.css"));
+await cp(path.join(root, "..", "packages", "webext", "src", "new-session-panel.css"), path.join(dist, "sidebar", "new-session-panel.css"));

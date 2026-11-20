@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="activity.css" />
     <link rel="stylesheet" href="permissions.css" />
+    <link rel="stylesheet" href="new-session-panel.css" />
 </head>
   <body>
     <div id="app">
@@ -18,14 +19,8 @@
           <button id="new-session" title="New session">+ New</button>
         </div>
 
-        <div id="new-panel" class="hidden">
-          <label for="cwd-input">Working directory</label>
-          <input id="cwd-input" type="text" placeholder="/path/to/project" autocomplete="off" spellcheck="false" />
-          <div class="row">
-            <button id="cwd-create">Create</button>
-            <button id="cwd-cancel" class="secondary">Cancel</button>
-          </div>
-        </div>
+        <!-- filled by mountNewSessionPanel (@pi-browser/webext) -->
+        <div id="new-panel" class="hidden"></div>
 
         <ul id="sessions"></ul>
         <div id="caps" class="muted" title="Capabilities this Thunderbird exposes to Pi"></div>

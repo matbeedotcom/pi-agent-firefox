@@ -16,6 +16,7 @@ import { grantEvaluationPermission } from "../page-evaluation-permission.js";
 import {
   applyPiTheme,
   MarkdownView,
+  mountNewSessionPanel,
   mountPermissionSettings,
   renderMarkdownInto,
   type PiTheme,
@@ -37,7 +38,7 @@ interface StatusInfo {
   state: string;
   detail?: string;
   agentInfo?: { name?: string; version?: string };
-  piBrowserMeta?: { version: string; protocolVersion: number; browserToolVersion: number };
+  piBrowserMeta?: { version: string; protocolVersion: number; browserToolVersion: number; workspaceRoot?: string };
   /** Union of capabilities across ALL connected apps (live, plan §29). */
   capabilities?: AgentCapability[];
 }
@@ -784,34 +785,23 @@ function hidePermissionPrompt(): void {
   if (overlay) overlay.classList.add("hidden");
 }
 
+// New-session panel (shared component): defaults to a fresh ~/.pi workspace,
+// click the directory to type a project path; shows progress while the host
+// builds the session.
+const newPanelEl = $<HTMLDivElement>("new-panel");
+const newSessionPanel = mountNewSessionPanel(newPanelEl, {
+  workspaceRoot: () => uiState.status.piBrowserMeta?.workspaceRoot,
+  suggestedCwd: () => (activeSessionId ? uiState.sessions.find((s) => s.sessionId === activeSessionId)?.cwd : undefined),
+  create: async (cwd) => {
+    await action<{ sessionId: string }>("new_session", { cwd });
+  },
+  close: () => newPanelEl.classList.add("hidden"),
+});
+
 $<HTMLButtonElement>("new-session").addEventListener("click", () => {
-  $<HTMLDivElement>("new-panel").classList.toggle("hidden");
-  if (!$<HTMLDivElement>("new-panel").classList.contains("hidden")) {
-    const input = $<HTMLInputElement>("cwd-input");
-    input.value = activeSessionId ? uiState.sessions.find((s) => s.sessionId === activeSessionId)?.cwd ?? "" : "";
-    input.focus();
-  }
-});
-
-$<HTMLButtonElement>("cwd-cancel").addEventListener("click", () => {
-  $<HTMLDivElement>("new-panel").classList.add("hidden");
-});
-
-$<HTMLButtonElement>("cwd-create").addEventListener("click", () => {
-  const cwd = $<HTMLInputElement>("cwd-input").value.trim();
-  void action<{ sessionId: string }>("new_session", { cwd })
-    .then(() => {
-      $<HTMLDivElement>("new-panel").classList.add("hidden");
-    })
-    .catch((err) => flash(`create failed: ${err.message}`));
-});
-
-$<HTMLButtonElement>("cwd-create").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $<HTMLButtonElement>("cwd-create").click();
-});
-$<HTMLInputElement>("cwd-input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $<HTMLButtonElement>("cwd-create").click();
-  if (e.key === "Escape") $<HTMLButtonElement>("cwd-cancel").click();
+  const opening = newPanelEl.classList.contains("hidden");
+  newPanelEl.classList.toggle("hidden", !opening);
+  if (opening) newSessionPanel.open();
 });
 
 $<HTMLButtonElement>("refresh").addEventListener("click", () => {
