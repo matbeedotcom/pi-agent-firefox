@@ -3,6 +3,10 @@
   "name": "Pi Browser",
   "version": "0.2.2",
   "description": "Pi Coding Agent sidebar: multi-session ACP client with browser tools over Firefox Native Messaging",
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
   "permissions": [
     "nativeMessaging",
     "activeTab",
@@ -21,7 +25,8 @@
   },
   "sidebar_action": {
     "default_title": "Pi",
-    "default_panel": "sidebar/index.html"
+    "default_panel": "sidebar/index.html",
+    "default_icon": "icons/icon.svg"
   },
   "content_scripts": [
     {
@@ -39,7 +44,8 @@
     }
   ],
   "action": {
-    "default_title": "Pi Screenshot"
+    "default_title": "Pi Screenshot",
+    "default_icon": "icons/icon.svg"
   },
   "browser_specific_settings": {
     "gecko": {

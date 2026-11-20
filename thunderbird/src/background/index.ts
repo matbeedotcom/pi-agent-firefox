@@ -153,7 +153,7 @@ async function ensurePiSpace(): Promise<number | undefined> {
     const space = await browser.spaces.create(
       SPACE_NAME,
       { url: SPACE_URL(), linkHandler: "balanced" },
-      { title: "Pi Agent" },
+      { title: "Pi Agent", defaultIcon: "icons/icon.svg" },
     );
     spaceId = space.id;
     await browser.piPane.registerSpaceButton(SPACE_NAME);

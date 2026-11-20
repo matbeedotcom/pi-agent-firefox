@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9384f7"/>
+      <stop offset="0.55" stop-color="#7c6cf0"/>
+      <stop offset="1" stop-color="#4f44c4"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#tile)"/>
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#sheen)"/>
+
+  <!-- π, drawn as strokes (no font dependency) -->
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" stroke-width="13">
+    <!-- top bar, with the classic slight rise to the right -->
+    <path d="M24 50 C 37 44, 66 45, 90 41"/>
+    <!-- left leg, sweeping out to the left -->
+    <path d="M47 48 C 47 69, 44 85, 33 98"/>
+    <!-- right leg, with a foot curling to the right -->
+    <path d="M74 46 C 72 65, 72 83, 77 93 C 80 99, 87 100, 92 94"/>
+  </g>
+
+  <!-- agent spark -->
+  <path d="M102 19 L104.8 27.2 L113 30 L104.8 32.8 L102 41 L99.2 32.8 L91 30 L99.2 27.2 Z" fill="#ffffff" opacity="0.95"/>
+</svg>

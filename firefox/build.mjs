@@ -71,6 +71,8 @@ await esbuild.build({
 });
 
 await cp(path.join(root, "manifest.json"), path.join(dist, "manifest.json"));
+// Project icon (single source: repo-root assets/icon.svg).
+await cp(path.join(root, "..", "assets", "icon.svg"), path.join(dist, "icons", "icon.svg"));
 await cp(path.join(root, "src", "sidebar", "index.html"), path.join(dist, "sidebar", "index.html"));
 await cp(path.join(root, "src", "sidebar", "style.css"), path.join(dist, "sidebar", "style.css"));
 

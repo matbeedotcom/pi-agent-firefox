@@ -8,6 +8,11 @@
 
   "description": "Pi Agent for Thunderbird: multi-session ACP chat with mail tools over Native Messaging",
 
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+
   "permissions": [
     "nativeMessaging",
     "storage",

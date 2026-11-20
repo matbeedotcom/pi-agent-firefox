@@ -1,3 +1,5 @@
+<img src="assets/icon.svg" alt="Pi Browser Agent icon" width="96" align="right">
+
 # Pi Browser Agent
 
 A Firefox MV3 add-on that is a **full ACP (Agent Client Protocol) client for [Pi](https://pi.dev)**,
