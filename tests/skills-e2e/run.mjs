@@ -35,6 +35,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createFixtureServer } from "./serve.mjs";
 import { prepareFakeHost, ADDON_ID } from "./profile.mjs";
+import { grantOptionalPermission } from "./rdp-grant.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -53,6 +54,23 @@ const HANDSHAKE_TIMEOUT_MS = 60_000;
 // A healthy scenario settles in a few seconds; the polling steps carry 5s
 // windows, so the total can reach ~15s on a slow box. 25s is generous.
 const SCENARIO_TIMEOUT_MS = Number(process.env.SKILLS_E2E_SCENARIO_TIMEOUT_MS ?? 25_000);
+
+const IS_WIN = process.platform === "win32";
+
+/** Windows refuses to spawn .cmd/.bat directly (EINVAL since Node's
+ *  CVE-2024-27980 fix): route non-.exe tools through cmd.exe. */
+function platformCommand(cmd, args) {
+  if (!IS_WIN || /\.exe$/i.test(cmd)) return { cmd, args, opts: {} };
+  const quote = (a) => (/[\s"&|<>^]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
+  const line = [cmd, ...args].map(quote).join(" ");
+  return { cmd: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], opts: { windowsVerbatimArguments: true } };
+}
+
+/** `which` (POSIX) / `where` (Windows): first match or "". */
+function whichFirst(name) {
+  const res = spawnSync(IS_WIN ? "where" : "which", [name], { encoding: "utf8" });
+  return (res.stdout || "").trim().split(/\r?\n/)[0] ?? "";
+}
 
 async function exists(p) {
   try { await stat(p); return true; } catch { return false; }
@@ -98,7 +116,8 @@ async function ensureBuilt() {
   if (!needed.length) return;
   for (const workspace of needed) {
     process.stderr.write(`[run] building ${workspace}\n`);
-    const res = spawnSync("npm", ["run", "build", "-w", workspace], { cwd: REPO, stdio: "inherit" });
+    const npm = platformCommand("npm", ["run", "build", "-w", workspace]);
+    const res = spawnSync(npm.cmd, npm.args, { cwd: REPO, stdio: "inherit", ...npm.opts });
     if (res.status !== 0) throw new Error(`build failed for ${workspace}`);
   }
 }
@@ -117,9 +136,16 @@ function firefoxBinary() {
   const candidates = [];
   if (process.env.SKILLS_E2E_FIREFOX) candidates.push(process.env.SKILLS_E2E_FIREFOX);
   for (const name of ["firefox", "firefox-esr"]) {
-    const which = spawnSync("which", [name], { encoding: "utf8" });
-    const found = (which.stdout || "").trim().split("\n")[0];
+    const found = whichFirst(name);
     if (found) candidates.push(found);
+  }
+  if (IS_WIN) {
+    for (const base of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter(Boolean)) {
+      for (const dir of ["Mozilla Firefox", "Firefox Developer Edition", "Firefox Nightly"]) {
+        const bin = path.join(base, dir, "firefox.exe");
+        if (existsSync(bin)) candidates.push(bin);
+      }
+    }
   }
   // Untarred release builds (the box's Firefox lives in Downloads, not on
   // PATH — /usr/bin/firefox is a dead snap shim).
@@ -141,26 +167,38 @@ function readdirSyncSafe(dir) {
   try { return readdirSync(dir); } catch { return []; }
 }
 
-function webExtBinary() {
+/** web-ext launcher as a spawnable command prefix: { cmd, args, opts }. */
+function webExtCommand() {
   const candidates = [];
   if (process.env.SKILLS_E2E_WEBEXT) candidates.push(process.env.SKILLS_E2E_WEBEXT);
-  const which = spawnSync("which", ["web-ext"], { encoding: "utf8" });
-  const found = (which.stdout || "").trim().split("\n")[0];
+  const found = whichFirst("web-ext");
   if (found) candidates.push(found);
-  for (const bin of candidates) {
-    try {
-      const res = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 30_000 });
-      if (res.status === 0 && /web-ext/i.test(res.stdout ?? "")) return bin;
-    } catch { /* try next */ }
-  }
   const nvm = path.join(homedir(), ".nvm", "versions", "node");
   try {
     for (const v of readdirSync(nvm).sort().reverse()) {
       const bin = path.join(nvm, v, "bin", "web-ext");
-      if (existsSync(bin)) return bin;
+      if (existsSync(bin)) candidates.push(bin);
     }
   } catch { /* no nvm */ }
-  throw new Error("web-ext not found (set SKILLS_E2E_WEBEXT)");
+  for (const bin of candidates) {
+    const probe = platformCommand(bin, ["--version"]);
+    try {
+      const res = spawnSync(probe.cmd, probe.args, { encoding: "utf8", timeout: 30_000, ...probe.opts });
+      if (res.status === 0 && /\d+\.\d+/.test(res.stdout ?? "")) return { bin, prefix: [] };
+    } catch { /* try next */ }
+  }
+  // Last resort: a pinned web-ext installed once into a harness cache dir,
+  // run as `node web-ext.js` — no shell in the path, so the start URL's
+  // `&`/`%` survive intact (cmd.exe mangles both on Windows).
+  const prefix = path.join(homedir(), ".cache", "skills-e2e", "web-ext");
+  const entry = path.join(prefix, "node_modules", "web-ext", "bin", "web-ext.js");
+  if (!existsSync(entry)) {
+    process.stderr.write(`[run] installing web-ext@8 into ${prefix}\n`);
+    const npm = platformCommand("npm", ["install", "--no-save", "--no-audit", "--no-fund", "--prefix", prefix, "web-ext@8"]);
+    spawnSync(npm.cmd, npm.args, { stdio: ["ignore", 2, 2], timeout: 300_000, ...npm.opts }); // keep stdout = JSON report
+  }
+  if (existsSync(entry)) return { bin: process.execPath, prefix: [entry] };
+  throw new Error("web-ext not found (set SKILLS_E2E_WEBEXT, or install web-ext)");
 }
 
 /**
@@ -178,14 +216,10 @@ function webExtBinary() {
  *
  * The page-evaluation path (browser.userScripts.execute, Firefox 153+)
  * requires the add-on's OPTIONAL "userScripts" permission, which normally
- * needs a user-clicked browser prompt (firefox/src/page-evaluation-permission.ts:
- * "A sidebar response alone cannot grant a browser permission"). Firefox 155
- * gives temp add-ons no other grant path (extension-preferences.json grants
- * are ignored for them, verified), so the harness pre-grants the permission
- * the only way that works: a PROFILE-SCOPE enterprise policy
- * (policies/policies.json, ExtensionSettings.permissions — verified in
- * /tmp/probe-addon against the real 155.0.1 build: permissions.contains
- * flips to true and userScripts.execute works).
+ * needs a user-clicked browser prompt. The harness grants it per scenario
+ * over web-ext's debugger server instead (rdp-grant.mjs): the profile-scope
+ * policies.json pre-grant it used to write relied on an
+ * ExtensionSettings.permissions key that Firefox 160 does not have.
  */
 async function prepareSeedProfile() {
   const seed = process.env.SKILLS_E2E_SEED_PROFILE ?? path.join(homedir(), ".cache", "skills-e2e", "seed-profile");
@@ -225,28 +259,18 @@ async function prepareSeedProfile() {
     throw new Error(`Firefox is already using the e2e seed profile ${seed} (pids ${holders.join(", ")}); close it and re-run`);
   }
   await rm(path.join(seed, ".parentlock"), { force: true }); // stale lock from a crash
+  // Windows lock file; rm fails (EBUSY) while a live Firefox holds it.
+  if (IS_WIN) {
+    try {
+      await rm(path.join(seed, "parent.lock"), { force: true });
+    } catch {
+      throw new Error(`Firefox is already using the e2e seed profile ${seed}; close it and re-run`);
+    }
+  }
 
-  // Pre-grant the optional "userScripts" permission (see above).
-  const policyDir = path.join(seed, "policies");
-  await mkdir(policyDir, { recursive: true });
-  await writeFile(
-    path.join(policyDir, "policies.json"),
-    JSON.stringify(
-      {
-        policies: {
-          ExtensionSettings: {
-            [ADDON_ID]: {
-              installation_state: "allowed",
-              active: true,
-              permissions: ["userScripts"],
-            },
-          },
-        },
-      },
-      null,
-      2,
-    ),
-  );
+  // Drop the policies.json older harness versions wrote (now ignored by
+  // Firefox; see rdp-grant.mjs).
+  await rm(path.join(seed, "policies"), { recursive: true, force: true });
   return seed;
 }
 
@@ -268,7 +292,22 @@ function collectTree(pid, depth = 0, out = []) {
   return out;
 }
 
-async function killTree(pid) {
+async function killTree(pid, profileDir) {
+  if (IS_WIN) {
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+    // Backstop: Firefox's Windows launcher process can re-parent the real
+    // browser out of web-ext's tree (-wait-for-browser normally prevents
+    // that). Any firefox.exe still running on the e2e profile is ours.
+    if (profileDir) {
+      const needle = profileDir.replace(/'/g, "''");
+      spawnSync("powershell.exe", [
+        "-NoProfile", "-NonInteractive", "-Command",
+        `Get-CimInstance Win32_Process -Filter "Name='firefox.exe'" | Where-Object { $_.CommandLine -like '*${needle}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+      ], { stdio: "ignore", timeout: 30_000 });
+    }
+    await new Promise((r) => setTimeout(r, 1500)); // let Firefox release the profile lock
+    return;
+  }
   const tree = collectTree(pid);
   for (const p of [...tree].reverse()) {
     try { process.kill(p, "SIGTERM"); } catch { /* already gone */ }
@@ -322,7 +361,7 @@ async function runScenario(file, keepTmp, basePort) {
     const ms = Date.now() - started;
     process.stderr.write(`[timing] ${name}: ${String(ms).padStart(5)}ms  ${label}\n`);
   };
-  let server, host, webext;
+  let server, host, webext, seedProfile, logStream;
   const hostLog = path.join(tmp, "host.log");
   const webextLog = path.join(tmp, "webext.log");
   try {
@@ -351,15 +390,14 @@ async function runScenario(file, keepTmp, basePort) {
     // browser down. The profile is the persistent seed (see
     // prepareSeedProfile) so the one-time automation consent sticks.
     const ffBin = firefoxBinary();
-    const webExt = webExtBinary();
-    const seedProfile = await prepareSeedProfile();
+    const webExt = webExtCommand();
+    seedProfile = await prepareSeedProfile();
     phase("fake host prepared (seed profile done)");
-    const logStream = await open(webextLog, "a");
+    logStream = await open(webextLog, "a");
     // NB: NOT detached — detached children fail to open the remote-debugger
     // port on this box (verified); kill the whole tree on exit instead.
-    webext = spawn(
-      webExt,
-      [
+    const webExtSpawn = platformCommand(webExt.bin, [
+        ...webExt.prefix,
         "run",
         "--source-dir", ADDON_DIST,
         "--firefox", ffBin,
@@ -370,14 +408,37 @@ async function runScenario(file, keepTmp, basePort) {
         "--keep-profile-changes",
         "--args=--width=1400",
         "--args=--height=900",
-      ],
-      { cwd: tmp, stdio: ["ignore", logStream.fd, logStream.fd] },
+        // Windows: keep the launcher process alive until the browser exits,
+        // so the browser stays inside web-ext's process tree (killTree).
+        ...(IS_WIN ? ["--args=-wait-for-browser"] : []),
+    ]);
+    webext = spawn(webExtSpawn.cmd, webExtSpawn.args, { cwd: tmp, stdio: ["ignore", logStream.fd, logStream.fd], ...webExtSpawn.opts });
+
+    // Grant the optional "userScripts" permission (page evaluation) the way
+    // a user's click on Firefox's prompt would — over web-ext's debugger
+    // server, as soon as the temporary add-on is installed (rdp-grant.mjs
+    // explains why the policies.json pre-grant no longer works).
+    phase("web-ext spawned; waiting for add-on install");
+    const installed = await pollUntil(
+      async () => {
+        const log = await readFile(webextLog, "utf8").catch(() => "");
+        const port = /-start-debugger-server (\d+)/.exec(log)?.[1];
+        return port && /Installed .* as a temporary add-on/.test(log) ? Number(port) : false;
+      },
+      HANDSHAKE_TIMEOUT_MS,
+      250,
     );
+    if (!installed) {
+      const tail = (await readFile(webextLog, "utf8").catch(() => "")).slice(-800);
+      throw new Error(`web-ext never installed the add-on (webext tail:
+${tail})`);
+    }
+    await grantOptionalPermission({ port: installed, addonId: ADDON_ID, permission: "userScripts" });
+    phase("userScripts granted; waiting for host handshake");
 
     // Host readiness: the real host logs "backend: mock" once the fake host
     // boots the real native-host main.js with the scripted backend. Poll the
     // PI_BROWSER_LOG_FILE the wrapper pointed at.
-    phase("web-ext spawned; waiting for host handshake");
     const hostReady = await pollUntil(
       async () => {
         try {
@@ -429,7 +490,9 @@ async function runScenario(file, keepTmp, basePort) {
     result.failures = [String(err?.message ?? err)];
   } finally {
     result.ms = Date.now() - started;
-    if (webext) await killTree(webext.pid); // web-ext has no SIGTERM handler
+    if (webext) await killTree(webext.pid, seedProfile); // web-ext has no SIGTERM handler
+    // Node 26 makes a GC-closed FileHandle a fatal ERR_INVALID_STATE.
+    await logStream?.close().catch(() => {});
     await host?.cleanup().catch(() => {}); // restore the user's manifest
     server?.close().catch(() => {});
     if (!keepTmp) await rm(tmp, { recursive: true, force: true });

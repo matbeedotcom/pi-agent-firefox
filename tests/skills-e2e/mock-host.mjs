@@ -31,33 +31,105 @@
 import { chmod, copyFile, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const HOST_NAME = "com.matbee.agent";
 export const ADDON_ID = "pi-agent-firefox@matbee.com";
 /** Description field that identifies a mock manifest (never a real one). */
 export const MOCK_MARKER = "Skills e2e fake host (scripted Pi backend)";
 
-export function globalHostsDir() {
-  return path.join(homedir(), ".mozilla", "native-messaging-hosts");
+const IS_WIN = process.platform === "win32";
+
+/**
+ * Windows: Firefox resolves native hosts through the registry
+ * (HKCU\SOFTWARE\Mozilla\NativeMessagingHosts\<name> -> manifest path),
+ * not a well-known directory. The swap there is a REGISTRY swap: the mock
+ * manifest lives in a harness-owned dir, the key is pointed at it, and the
+ * backup records the previous key value (the real manifest file itself is
+ * never touched).
+ */
+export const WIN_REGISTRY_KEY = `HKCU\\SOFTWARE\\Mozilla\\NativeMessagingHosts\\${HOST_NAME}`;
+
+function winHarnessDir() {
+  return path.join(homedir(), ".cache", "skills-e2e", "native-host");
 }
 
+/** Current registry value (manifest path) or null when the key is absent. */
+export function readRegistryManifestPath() {
+  try {
+    const out = execFileSync("reg", ["query", WIN_REGISTRY_KEY, "/ve"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const line = out.split(/\r?\n/).find((l) => /REG_SZ/i.test(l));
+    const value = line?.split(/REG_SZ/i)[1]?.trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRegistryManifestPath(value) {
+  execFileSync("reg", ["add", WIN_REGISTRY_KEY, "/ve", "/t", "REG_SZ", "/d", value, "/f"], { stdio: "ignore" });
+}
+
+function deleteRegistryKey() {
+  try {
+    execFileSync("reg", ["delete", WIN_REGISTRY_KEY, "/f"], { stdio: "ignore" });
+  } catch { /* already absent */ }
+}
+
+export function globalHostsDir() {
+  return IS_WIN ? winHarnessDir() : path.join(homedir(), ".mozilla", "native-messaging-hosts");
+}
+
+/** Where the MOCK manifest is written (Windows: harness dir + registry). */
 export function mockManifestPath() {
   return path.join(globalHostsDir(), `${HOST_NAME}.json`);
 }
 
+/** Linux/macOS: copy of the real manifest. Windows: {registryValue} JSON. */
 export function mockBackupPath() {
-  return `${mockManifestPath()}.real`;
+  return IS_WIN ? path.join(winHarnessDir(), "registry.real.json") : `${mockManifestPath()}.real`;
+}
+
+/** The manifest Firefox would load right now (Windows: via the registry). */
+function activeManifestPath() {
+  return IS_WIN ? readRegistryManifestPath() : mockManifestPath();
 }
 
 export async function readMockManifest() {
+  const file = activeManifestPath();
+  if (!file) return null;
   try {
-    return JSON.parse(await readFile(mockManifestPath(), "utf8"));
+    return JSON.parse(await readFile(file, "utf8"));
   } catch {
     return null;
   }
+}
+
+/** Native-messaging manifests carry no env field: a launcher script sets it. */
+async function writeWrapper(wrapperDir, env, fakeHostScript) {
+  if (IS_WIN) {
+    const wrapper = path.join(wrapperDir, "fake-host-wrapper.cmd");
+    const lines = ["@echo off", "rem e2e fake-host wrapper: native manifests carry no env field."];
+    for (const [k, v] of Object.entries(env)) lines.push(`set "${k}=${v}"`);
+    lines.push(`"${process.execPath}" "${fakeHostScript}" %*`, "");
+    await writeFile(wrapper, lines.join("\r\n"));
+    return wrapper;
+  }
+  const wrapper = path.join(wrapperDir, "fake-host-wrapper.sh");
+  await writeFile(
+    wrapper,
+    [
+      "#!/bin/sh",
+      "# e2e fake-host wrapper: native manifests carry no env field.",
+      ...Object.entries(env).map(([k, v]) => `export ${k}=${JSON.stringify(v)}`),
+      `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeHostScript)} "$@"`,
+      "",
+    ].join("\n"),
+  );
+  await chmod(wrapper, 0o755);
+  return wrapper;
 }
 
 export function isMockManifest(manifest) {
@@ -82,30 +154,22 @@ export async function installMockHost({
   stub = false,
 } = {}) {
   if (!wrapperDir || !fakeHostScript) throw new Error("wrapperDir and fakeHostScript are required");
-  const wrapper = path.join(wrapperDir, "fake-host-wrapper.sh");
-  await writeFile(
-    wrapper,
-    [
-      "#!/bin/sh",
-      "# e2e fake-host wrapper: native manifests carry no env field.",
-      ...(scenarioPath ? [`export FAKE_HOST_SCENARIO=${JSON.stringify(scenarioPath)}`] : []),
-      ...(skillRoots ? [`export PI_BROWSER_SKILL_ROOTS=${JSON.stringify(skillRoots)}`] : []),
-      ...(dataRoot ? [`export PI_BROWSER_DATA_ROOT=${JSON.stringify(dataRoot)}`] : []),
-      ...(brokerDir ? [`export PI_BROWSER_BROKER_DIR=${JSON.stringify(brokerDir)}`] : []),
-      ...(hostLog ? [`export PI_BROWSER_LOG_FILE=${JSON.stringify(hostLog)}`] : []),
-      // Test-only approval seam (host browser/provider.ts): the e2e runs
-      // have no sidebar UI to click, so gated browser tools are
-      // auto-approved by the host instead of prompting a user.
-      ...(autoApproveTools ? [`export PI_BROWSER_AUTO_APPROVE=${JSON.stringify(autoApproveTools)}`] : []),
-      // Log the full request/response of every scripted browser tool call to
-      // host.log (test seam; see host browser/provider.ts logToolIo).
-      ...(hostLog ? [`export PI_BROWSER_LOG_TOOL_IO=${JSON.stringify("1")}`] : []),
-      ...(stub ? ["export PI_BROWSER_FAKE_HOST_STUB=1"] : []),
-      `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeHostScript)} "$@"`,
-      "",
-    ].join("\n"),
-  );
-  await chmod(wrapper, 0o755);
+  const env = {
+    ...(scenarioPath ? { FAKE_HOST_SCENARIO: scenarioPath } : {}),
+    ...(skillRoots ? { PI_BROWSER_SKILL_ROOTS: skillRoots } : {}),
+    ...(dataRoot ? { PI_BROWSER_DATA_ROOT: dataRoot } : {}),
+    ...(brokerDir ? { PI_BROWSER_BROKER_DIR: brokerDir } : {}),
+    ...(hostLog ? { PI_BROWSER_LOG_FILE: hostLog } : {}),
+    // Test-only approval seam (host browser/provider.ts): the e2e runs
+    // have no sidebar UI to click, so gated browser tools are
+    // auto-approved by the host instead of prompting a user.
+    ...(autoApproveTools ? { PI_BROWSER_AUTO_APPROVE: autoApproveTools } : {}),
+    // Log the full request/response of every scripted browser tool call to
+    // host.log (test seam; see host browser/provider.ts logToolIo).
+    ...(hostLog ? { PI_BROWSER_LOG_TOOL_IO: "1" } : {}),
+    ...(stub ? { PI_BROWSER_FAKE_HOST_STUB: "1" } : {}),
+  };
+  const wrapper = await writeWrapper(wrapperDir, env, fakeHostScript);
 
   const hostsDir = globalHostsDir();
   await mkdir(hostsDir, { recursive: true });
@@ -115,10 +179,16 @@ export async function installMockHost({
 
   let backedUp = false;
   if (!isMockManifest(current) && !existsSync(backupPath)) {
-    // Persist the REAL manifest before the swap (crash-safety).
-    if (current) await writeFile(backupPath, JSON.stringify(current, null, 2) + "\n");
-    else await rm(backupPath, { force: true });
-    backedUp = Boolean(current);
+    // Persist the REAL registration before the swap (crash-safety).
+    if (IS_WIN) {
+      const registryValue = readRegistryManifestPath();
+      if (registryValue) await writeFile(backupPath, JSON.stringify({ registryValue }, null, 2) + "\n");
+      backedUp = Boolean(registryValue);
+    } else {
+      if (current) await writeFile(backupPath, JSON.stringify(current, null, 2) + "\n");
+      else await rm(backupPath, { force: true });
+      backedUp = Boolean(current);
+    }
   }
   await writeFile(
     manifestPath,
@@ -134,6 +204,7 @@ export async function installMockHost({
       2,
     ),
   );
+  if (IS_WIN) writeRegistryManifestPath(manifestPath);
   return { wrapper, manifestPath, backupPath, backedUp, hadReal: Boolean(current) };
 }
 
@@ -157,12 +228,20 @@ export async function restoreRealHost({ fallback = "installer" } = {}) {
   if (!isMockManifest(current)) return { state: "already-real" };
 
   if (existsSync(backupPath)) {
+    if (IS_WIN) {
+      const { registryValue } = JSON.parse(await readFile(backupPath, "utf8"));
+      writeRegistryManifestPath(registryValue);
+      await rm(backupPath);
+      await rm(manifestPath, { force: true });
+      return { state: "restored-from-backup", registry: registryValue };
+    }
     await copyFile(backupPath, manifestPath);
     await rm(backupPath);
     return { state: "restored-from-backup", manifestPath };
   }
 
   if (fallback === "remove") {
+    if (IS_WIN) deleteRegistryKey();
     await rm(manifestPath, { force: true });
     return { state: "removed-no-real-backup", manifestPath };
   }
@@ -172,6 +251,7 @@ export async function restoreRealHost({ fallback = "installer" } = {}) {
     execFileSync(process.execPath, [cli, "install"], { stdio: "pipe" });
     return { state: "reinstalled-via-installer", manifestPath };
   }
+  if (IS_WIN) deleteRegistryKey();
   await rm(manifestPath, { force: true });
   return { state: "removed-no-real-backup", hint: `run: node packages/pi-agent/dist/installer/cli.js install` };
 }
@@ -180,7 +260,8 @@ export async function restoreRealHost({ fallback = "installer" } = {}) {
 export async function mockHostStatus() {
   const manifest = await readMockManifest();
   return {
-    manifestPath: mockManifestPath(),
+    manifestPath: activeManifestPath() ?? mockManifestPath(),
+    ...(IS_WIN ? { registryKey: WIN_REGISTRY_KEY } : {}),
     state: manifest === null ? "absent" : isMockManifest(manifest) ? "mock" : "real",
     ...(manifest?.path ? { path: manifest.path } : {}),
     backup: existsSync(mockBackupPath()) ? mockBackupPath() : null,
@@ -190,7 +271,7 @@ export async function mockHostStatus() {
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const [, , cmd, ...rest] = process.argv;
   const flag = (name, fallback = undefined) => {
     const i = rest.indexOf(name);
@@ -204,10 +285,10 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   if (cmd === "status") {
     console.log(JSON.stringify(await mockHostStatus(), null, 2));
   } else if (cmd === "install") {
-    const tmpdir = path.join("/tmp", `skills-mock-${Date.now()}`);
-    await mkdir(tmpdir, { recursive: true });
+    const wrapperDir = path.join(tmpdir(), `skills-mock-${Date.now()}`);
+    await mkdir(wrapperDir, { recursive: true });
     const result = await installMockHost({
-      wrapperDir: tmpdir,
+      wrapperDir,
       fakeHostScript: DEFAULT_FAKE_HOST,
       scenarioPath: flag("--scenario"),
       skillRoots: flag("--skill-roots"),
@@ -218,7 +299,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       stub: has("--stub"),
     });
     console.log(JSON.stringify(result, null, 2));
-    console.log("restore with: npm run skills:mock:restore");
+    console.log("restore with: node tests/skills-e2e/mock-host.mjs restore");
   } else if (cmd === "restore") {
     console.log(JSON.stringify(await restoreRealHost(), null, 2));
   } else {
