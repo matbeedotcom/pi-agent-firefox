@@ -10,6 +10,10 @@ import { manifestPathsForApps, distinctManifestLocations, legacyManifestPath, WI
 import { SKILL_INSTALL_PATH, SKILL_SOURCE_PATH } from "../src/installer/platforms.js";
 import type { ExecResult } from "../src/installer/common.js";
 
+// Test packages live under the OS temp dir; the installer refuses those
+// roots for real users (npx cache / temp), so opt out for this suite.
+process.env.PI_BROWSER_ALLOW_TEMPORARY_ROOT = "1";
+
 /**
  * Cross-platform installer tests for the application-neutral com.matbee.agent
  * host (plan §2, §23). Linux and macOS run against real temp directories;
@@ -33,7 +37,7 @@ async function makePkg(root: string): Promise<string> {
   const pkgRoot = path.join(root, "pkg");
   await mkdir(path.join(pkgRoot, "dist", "native-host"), { recursive: true });
   await writeFile(path.join(pkgRoot, "dist", "native-host", "main.js"), "console.log('host');\n");
-  await writeFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "@pi-browser/agent", version: "0.1.1" }));
+  await writeFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "trusted-user-agent", version: "0.1.1" }));
   // Skill shipped with the package (WS1/T1.3): the installer copies it to
   // ~/.agents/skills/browser-walk/SKILL.md.
   await mkdir(path.join(pkgRoot, "skills", "browser-walk"), { recursive: true });

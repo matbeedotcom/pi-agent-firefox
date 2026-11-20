@@ -11,7 +11,8 @@ import { PI_AGENT, PI_BROWSER_META, PI_AGENT_META } from "@pi-browser/protocol";
 import { ADDON_HEARTBEAT_FRESH_MS, readClientHeartbeat } from "../client-heartbeat.js";
 import { brokerPaths, isPidAlive, readBrokerState } from "../native-host/broker-ipc.js";
 import { addonLoadHint, type AgentApp, type ExecFn, type InstallerEnv, type InstallAppTarget } from "./common.js";
-import { runMcpCommand, type McpSubcommand } from "./mcp.js";
+import { type McpSubcommand } from "./mcp.js";
+import { runMcpClients, type McpClientTarget } from "./mcp-clients.js";
 import {
   detectTargets,
   defaultExec,
@@ -42,7 +43,7 @@ export function normalizePlatform(p: PlatformName): "linux" | "darwin" | "win32"
 }
 
 export interface InstallerContext {
-  /** Root of the installed @pi-browser/agent package (defaults to this package's root). */
+  /** Root of the installed trusted-user-agent package (defaults to this package's root). */
   pkgRoot?: string;
   /** Override the native platform (tests). */
   platform?: PlatformName;
@@ -56,6 +57,39 @@ export interface InstallerContext {
   mainJs?: string;
   /** Applications to target: firefox | thunderbird | mozilla (both, default). */
   apps?: InstallAppTarget;
+  /** `mcp`: which MCP client(s) to configure (default pi). */
+  mcpClient?: McpClientTarget;
+  /** Environment for client config locations and CLI lookup (default process.env). */
+  processEnv?: NodeJS.ProcessEnv;
+  /** Allow registering from a temporary package root (npx cache, tmpdir) — tests only. */
+  allowTemporary?: boolean;
+}
+
+/**
+ * Why `pkgRoot` is a temporary location (npx cache or the OS temp dir), or
+ * undefined when it is stable. The native-host manifest and MCP entries point
+ * into the package, so registering from a cache that npm may delete would
+ * leave both apps and every MCP client pointing at nothing.
+ */
+export function temporaryRootReason(pkgRoot: string, tmpDir: string = os.tmpdir()): string | undefined {
+  const parts = path.resolve(pkgRoot).split(/[\\/]+/);
+  if (parts.includes("_npx")) return "it runs from the npx cache (_npx)";
+  const rel = path.relative(path.resolve(tmpDir), path.resolve(pkgRoot));
+  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) return `it is under the temporary directory ${tmpDir}`;
+  return undefined;
+}
+
+/** The refusal shown for a temporary package root. */
+export function temporaryRootRefusal(pkgRoot: string, reason: string): CommandResult {
+  return {
+    ok: false,
+    lines: [
+      `refusing to register ${pkgRoot}: ${reason}, which can be deleted at any time.`,
+      "install the package globally first, then run it from there:",
+      "  npm i -g trusted-user-agent",
+      "  trusted-ua install",
+    ],
+  };
 }
 
 export interface CommandResult {
@@ -147,6 +181,17 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
   const apps = expandAppTarget(ctx.apps);
   note(`apps: ${apps.join(", ")}`);
 
+  // Registering writes absolute paths into the package: refuse a root that
+  // npm or the OS may delete (npx cache, temp dir).
+  const registers = command === "install" || (command === "mcp" && sub === "install");
+  const allowTemporary = ctx.allowTemporary || process.env.PI_BROWSER_ALLOW_TEMPORARY_ROOT === "1";
+  const tempReason = registers && !allowTemporary ? temporaryRootReason(pkgRoot) : undefined;
+  if (tempReason) {
+    const refusal = temporaryRootRefusal(pkgRoot, tempReason);
+    for (const l of refusal.lines) note(l);
+    return { ok: false, lines };
+  }
+
   switch (command) {
     case "install": {
       if (!existsSync(mainJs)) {
@@ -202,7 +247,13 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
       return { ok: true, lines };
     }
     case "mcp": {
-      const result = runMcpCommand(sub, env.homeDir, { pkgRoot });
+      const result = await runMcpClients(sub, ctx.mcpClient ?? "pi", {
+        homeDir: env.homeDir,
+        platform: env.platform === "darwin" || env.platform === "win32" ? env.platform : "linux",
+        exec: env.exec,
+        env: ctx.processEnv ?? process.env,
+        pkgRoot,
+      });
       for (const l of result.lines) note(l);
       return result;
     }

@@ -320,7 +320,7 @@ The external ACP boundary must remain identical so the backend can later move fr
 Suggested package:
 
 ```text
-@pi-browser/agent
+trusted-user-agent
 ```
 
 Example structure:
@@ -402,7 +402,7 @@ expose diagnostics
 User installs:
 
 ```bash
-pi install npm:@pi-browser/agent
+pi install npm:trusted-user-agent
 ```
 
 Then:

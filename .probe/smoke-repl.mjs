@@ -8,7 +8,7 @@
  * structured tool errors, screenshot image attachment, artifacts, and the
  * sync-infinite-loop timeout kill (child dies, host + next cell survive).
  *
- * Run:  npm run build -w @pi-browser/agent && node .probe/smoke-repl.mjs
+ * Run:  npm run build -w trusted-user-agent && node .probe/smoke-repl.mjs
  */
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

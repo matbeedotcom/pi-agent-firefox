@@ -14,6 +14,7 @@ import {
   PERMISSION_ALLOW_ONCE,
   PERMISSION_REJECT,
   X_PI_BROWSER,
+  isCallerSessionId,
   type PermissionClearResult,
   type PermissionConfigResult,
   type PermissionSetResult,
@@ -23,6 +24,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@pi-browser/protocol";
+import { ApprovalWindowController, isCallerPermissionRequest } from "@pi-browser/webext";
 import { AcpClient, SESSION_OPEN_TIMEOUT_MS, bindingRefId, fetchPiTheme, notifyHost, SessionStore, SkillsRuntime, type DocumentIdentity, type GateIdentity, type HostStatus, type PiTheme } from "@pi-browser/webext";
 import type { PagePlan } from "@pi-browser/protocol";
 import { PromptRecovery } from "./prompt-recovery.js";
@@ -217,7 +219,55 @@ const pendingPermissions = new Map<string, PendingPermission>();
 /** Match the host's PERMISSION_TIMEOUT_MS with a small buffer. */
 const PERMISSION_PROMPT_TIMEOUT_MS = 125_000;
 
+/**
+ * Prompts from external MCP callers (Claude Code, Codex, ...) never go to
+ * the sidebar: the user is usually in that other program, so they open a
+ * popup approval window (one at a time, queued) plus a toolbar badge.
+ * Closing the window denies what is waiting (openspec external-mcp-callers D6).
+ */
+const approvals = new ApprovalWindowController({
+  url: browser.runtime.getURL("approval/approval.html"),
+  api: {
+    open: async (url) => {
+      // No `focused` in createData: Thunderbird rejects it ("unsupported").
+      // Ask for focus, and flash the taskbar button: Windows keeps another
+      // program in front (foreground lock), so the flash + badge are what
+      // the user sees there (checked live, openspec task 1.3).
+      const win = await browser.windows.create({ type: "popup", url, width: 460, height: 360 });
+      if (win.id !== undefined) {
+        await browser.windows.update(win.id, { focused: true }).catch(() => {});
+        await browser.windows.update(win.id, { drawAttention: true }).catch(() => {});
+      }
+      return win.id;
+    },
+    focus: async (windowId) => {
+      await browser.windows.update(windowId, { focused: true, drawAttention: true });
+    },
+    close: async (windowId) => {
+      await browser.windows.remove(windowId);
+    },
+  },
+  setBadge: (text) => {
+    void browser.action.setBadgeText({ text }).catch(() => {});
+    if (text) void browser.action.setBadgeBackgroundColor({ color: "#d93025" }).catch(() => {});
+  },
+  notifyPage: (requests) => {
+    void browser.runtime.sendMessage({ type: "pi/approval_state", requests }).catch(() => {});
+  },
+  cancel: (permId) => resolvePermission(permId, "cancelled"),
+});
+browser.windows.onRemoved.addListener((windowId) => approvals.onWindowRemoved(windowId));
+// The toolbar button: bring a waiting approval window to the front; otherwise
+// open the Pi sidebar (a click is the user gesture sidebarAction.open needs).
+browser.action.onClicked.addListener(() => {
+  if (!approvals.focus()) void browser.sidebarAction.open().catch(() => {});
+});
+
 function pushPermissionRequest(request: RequestPermissionRequest): void {
+  if (isCallerPermissionRequest(request)) {
+    approvals.add(request);
+    return;
+  }
   browser.runtime
     .sendMessage({ type: "pi/permission_request", request })
     .catch(() => {
@@ -238,6 +288,7 @@ function resolvePermission(permId: string, optionId: string | "cancelled"): void
   clearTimeout(pending.timer);
   pendingPermissions.delete(permId);
   pending.resolve(optionId);
+  approvals.remove(permId);
   // Re-sync the sidebar: its modal is stale now (a click hides it locally,
   // but a timeout/cancel/late reply must close it too, and a NEW pending
   // prompt, if any, should be shown next).
@@ -287,7 +338,8 @@ interface UiState {
 }
 
 function pendingPermissionRequests(): RequestPermissionRequest[] {
-  return [...pendingPermissions.values()].map((p) => p.request);
+  // Caller prompts live in the approval window, never in the sidebar.
+  return [...pendingPermissions.values()].map((p) => p.request).filter((r) => !isCallerPermissionRequest(r));
 }
 
 function pushState(): void {
@@ -436,6 +488,14 @@ const client = new AcpClient(
         /* sidebar not open */
       });
   },
+  // The host gave up on a prompt (timeout, or its MCP caller disconnected).
+  onPermissionWithdrawn: (params) => {
+    if (pendingPermissions.has(params.toolCallId)) resolvePermission(params.toolCallId, "cancelled");
+  },
+  // An external MCP caller disconnected: release its tab and REPL tabs.
+  onSessionEnded: (params) => {
+    if (isCallerSessionId(params.sessionId)) void dispatcher.unbindSession(params.sessionId);
+  },
   // A peer app (Thunderbird) connected/disconnected: refresh the union in
   // our status copy and re-push state so the sidebar can update its
   // "capabilities:" line.
@@ -455,7 +515,11 @@ const client = new AcpClient(
     // status to "connected" on success) and sync session state. Deferred to
     // a later task so connect() has fully finished (port assigned, listeners
     // attached) before any request goes out.
-    if (status.state === "connected") skills.setConnected(true);
+    if (status.state === "connected") {
+      skills.setConnected(true);
+      // Caller sessions never outlive a host connection: drop their bindings.
+      for (const id of store.boundSessionIds()) if (isCallerSessionId(id)) void dispatcher.unbindSession(id);
+    }
     if (status.state === "connecting" && !initialized && !bootstrapInFlight) {
       // A (re)connect is a fresh native epoch: every skills identity, plan,
       // and job mapping from the previous connection is invalid.
@@ -576,6 +640,10 @@ browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =
     const optionId = String((msg as { optionId?: unknown }).optionId ?? "cancelled");
     resolvePermission(permId, optionId);
     sendResponse({ ok: true });
+    return;
+  }
+  if (msg.type === "pi/approval_get") {
+    sendResponse({ requests: approvals.pending() });
     return;
   }
   if (msg.type === "pi/ensure_connected") {
@@ -850,7 +918,7 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
       const state = payload.state === "allow" || payload.state === "deny" || payload.state === "ask" ? payload.state : "ask";
       const res = await client.request<PermissionSetResult>(
         X_PI_BROWSER.permission_set,
-        { tool: String(payload.tool ?? ""), state },
+        permissionSetParams(payload as unknown as Record<string, unknown>, state),
         10_000,
       );
       return res;
@@ -858,7 +926,7 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     case "permission_clear": {
       const res = await client.request<PermissionClearResult>(
         X_PI_BROWSER.permission_clear,
-        payload.tool ? { tool: String(payload.tool) } : {},
+        permissionClearParams(payload as unknown as Record<string, unknown>),
         10_000,
       );
       return res;
@@ -941,3 +1009,18 @@ setInterval(() => {
     client.ensureConnected();
   }
 }, 10_000);
+
+/** x-pi-browser/permission_set params from a settings action (tool, caller or externalAccess). */
+function permissionSetParams(payload: Record<string, unknown>, state: "allow" | "deny" | "ask"): Record<string, unknown> {
+  if (typeof payload.externalAccess === "boolean") return { externalAccess: payload.externalAccess };
+  const caller = payload.caller as { application?: unknown; name?: unknown } | undefined;
+  if (caller && typeof caller.name === "string") return { caller: { application: caller.application, name: caller.name }, state };
+  return { tool: String(payload.tool ?? ""), state };
+}
+
+/** x-pi-browser/permission_clear params from a settings action (tool, caller, or all tools). */
+function permissionClearParams(payload: Record<string, unknown>): Record<string, unknown> {
+  const caller = payload.caller as { application?: unknown; name?: unknown } | undefined;
+  if (caller && typeof caller.name === "string") return { caller: { application: caller.application, name: caller.name } };
+  return payload.tool ? { tool: String(payload.tool) } : {};
+}

@@ -70,6 +70,16 @@ await esbuild.build({
   outfile: path.join(dist, "sidebar", "sidebar.js"),
 });
 
+// Approval window for external MCP callers (shared page from @pi-browser/webext).
+const approvalSrc = path.join(root, "..", "packages", "webext", "src", "approval");
+await esbuild.build({
+  ...common,
+  entryPoints: [path.join(approvalSrc, "page.ts")],
+  outfile: path.join(dist, "approval", "approval.js"),
+});
+await cp(path.join(approvalSrc, "approval.html"), path.join(dist, "approval", "approval.html"));
+await cp(path.join(approvalSrc, "approval.css"), path.join(dist, "approval", "approval.css"));
+
 await cp(path.join(root, "manifest.json"), path.join(dist, "manifest.json"));
 // Project icon (single source: repo-root assets/icon.svg).
 await cp(path.join(root, "..", "assets", "icon.svg"), path.join(dist, "icons", "icon.svg"));

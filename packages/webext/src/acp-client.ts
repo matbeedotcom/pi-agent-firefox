@@ -36,11 +36,18 @@ import {
   type PiAgentMeta,
   type PiBrowserMeta,
   type PermissionPromptedParams,
+  type PermissionWithdrawnParams,
+  type SessionEndedParams,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@pi-browser/protocol";
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import {
+  PERMISSION_WITHDRAWN_METHOD,
+  PI_BROWSER_ERROR,
+  PiBrowserProtocolError,
+  SESSION_ENDED_METHOD,
+} from "@pi-browser/protocol";
 
 export type HostStatus =
   | { state: "connecting" }
@@ -88,6 +95,13 @@ export interface AcpClientHandlers {
    * this client does not answer the prompt.
    */
   onPermissionPrompted?(params: PermissionPromptedParams): void;
+  /**
+   * Host → client: a permission request no longer needs an answer (timed
+   * out, or its caller session ended). Drop it from any UI showing it.
+   */
+  onPermissionWithdrawn?(params: PermissionWithdrawnParams): void;
+  /** Host → client: an external MCP caller session ended. */
+  onSessionEnded?(params: SessionEndedParams): void;
 }
 
 /** Application identity used for the clientInfo + pi.agent.hello handshake. */
@@ -270,6 +284,15 @@ export class AcpClient {
         this.handlers.onCapabilitiesChanged?.(params as CapabilitiesChangedParams);
       } catch (err) {
         console.error(`[pi-agent] capabilities_changed handler failed`, err);
+      }
+      return;
+    }
+    if (method === PERMISSION_WITHDRAWN_METHOD || method === SESSION_ENDED_METHOD) {
+      try {
+        if (method === PERMISSION_WITHDRAWN_METHOD) this.handlers.onPermissionWithdrawn?.(params as PermissionWithdrawnParams);
+        else this.handlers.onSessionEnded?.(params as SessionEndedParams);
+      } catch (err) {
+        console.error(`[pi-agent] ${method} handler failed`, err);
       }
       return;
     }

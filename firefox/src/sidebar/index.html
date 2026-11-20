@@ -89,14 +89,14 @@
           on its own the moment it's installed — no reload needed.
         </p>
         <ol id="onboard-steps">
-          <li>Install the Pi package:
-            <div class="step-code"><code>npm install -g @pi-browser/agent</code><span class="muted">from this repo: <code>npm i -g packages/pi-agent</code></span></div>
+          <li>Install the host package:
+            <div class="step-code"><code>npm install -g trusted-user-agent</code><span class="muted">or, with pi: <code>pi install git:github.com/matbeedotcom/pi-agent-firefox</code></span></div>
           </li>
-          <li>In any Pi session, run:
-            <div class="step-code"><code>/pi-browser install</code></div>
+          <li>Register the host (or run <code>/pi-browser install</code> in a pi session):
+            <div class="step-code"><code>trusted-ua install</code></div>
           </li>
           <li>Return here — the connection completes itself within ~10s.
-            <div class="step-code"><code>/pi-browser doctor</code><span class="muted">shows “OK (host + add-on connected)” when done</span></div>
+            <div class="step-code"><code>trusted-ua doctor</code><span class="muted">shows “OK (host + add-on connected)” when done</span></div>
           </li>
         </ol>
         <div id="onboard-options" class="row">

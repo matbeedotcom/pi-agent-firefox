@@ -24,7 +24,16 @@ import { lstatSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { PI_BROWSER_ERROR, PI_BROWSER_META, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { randomUUID } from "node:crypto";
+import {
+  HOST_CHILD_ENV,
+  PI_BROWSER_ERROR,
+  PI_BROWSER_META,
+  PiBrowserProtocolError,
+  SESSION_ENDED_METHOD,
+  isCallerSessionId,
+  type SessionEndedParams,
+} from "@pi-browser/protocol";
 import { createLogger } from "../logger.js";
 import {
   setBrowserToolBridge,
@@ -273,6 +282,12 @@ async function main(): Promise<void> {
   }
 
   // --- Broker mode: own the ACP agent, sessions, and provider registry ---
+  // Every process this broker spawns (pi subagents, the MCP servers their
+  // clients start) inherits this marker; the MCP server compares it with the
+  // value the stdio bridge reports to tell host children from external
+  // callers (openspec external-mcp-callers D3). A stale id never matches.
+  const instanceId = randomUUID();
+  process.env[HOST_CHILD_ENV] = instanceId;
   const backendKind = process.env.PI_BROWSER_BACKEND ?? "pi";
   const backend =
     backendKind === "mock" ? new MockBackend(process.env.PI_BROWSER_MOCK_SCRIPT) : new PiSdkBackend({
@@ -294,6 +309,9 @@ async function main(): Promise<void> {
   // the session the user is driving in the add-on UI.
   const bridgeSessions = new Map<string, BridgeSessionContext>();
   let lastActiveBridgeSession: string | undefined;
+  // Caller sessions (external MCP clients, one per MCP connection): no ACP
+  // session, no owner app; routed through the registry and the caller gate.
+  const callerSessions = new Set<string>();
   const toolBridge: BrowserToolBridge = {
     registerSession: (id, ctx) => {
       bridgeSessions.set(id, ctx);
@@ -302,12 +320,43 @@ async function main(): Promise<void> {
       lastActiveBridgeSession = id;
     },
     closeSession: (id) => {
+      if (callerSessions.delete(id)) {
+        // Grants, pending prompts and the REPL worker go with the session;
+        // the apps drop its tab binding and REPL tabs.
+        void provider.disposeSession(id).catch((err) => log.warn(`dispose caller session ${id} failed`, err));
+        const params: SessionEndedParams = { sessionId: id };
+        for (const client of registry.list()) {
+          try {
+            client.transport.notify(SESSION_ENDED_METHOD, params);
+          } catch {
+            /* client going away */
+          }
+        }
+        log.info(`caller session ${id} ended`);
+        return;
+      }
       bridgeSessions.delete(id);
       if (lastActiveBridgeSession === id) {
         lastActiveBridgeSession = [...bridgeSessions.keys()].pop();
       }
     },
     call: (o) => {
+      if (o.caller) {
+        if (!o.sessionId || !isCallerSessionId(o.sessionId)) {
+          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "caller calls need a caller session id (mcp:<uuid>)");
+        }
+        if (!callerSessions.has(o.sessionId)) {
+          callerSessions.add(o.sessionId);
+          log.info(`caller session ${o.sessionId} started for "${o.caller.name}"`);
+        }
+        return provider.bridgeCall({
+          tool: o.tool,
+          args: o.args,
+          sessionId: o.sessionId,
+          ...(o.toolCallId ? { toolCallId: o.toolCallId } : {}),
+          ctx: { ownerApplication: "firefox", mode: "legacy", caller: o.caller },
+        });
+      }
       const sid = o.sessionId ?? lastActiveBridgeSession;
       const ctx = sid ? bridgeSessions.get(sid) : undefined;
       if (!sid || !ctx) {
@@ -458,7 +507,7 @@ async function main(): Promise<void> {
   // election — a race loser that grabbed the endpoint first would serve MCP
   // from a relay process whose tool bridge has no clients.
   try {
-    mcpServer = await startMcpBrowserServer({ log, bridge: toolBridge });
+    mcpServer = await startMcpBrowserServer({ log, bridge: toolBridge, instanceId });
   } catch (err) {
     // Non-fatal: the in-process bridge (extensions/pi-browser-tools.ts)
     // keeps working for foreground children; only subagent MCP access is

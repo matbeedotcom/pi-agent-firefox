@@ -52,8 +52,11 @@ class StdioClient {
   private waiters = new Map<number, (msg: Record<string, unknown>) => void>();
   readonly child: ChildProcess;
 
-  constructor() {
-    this.child = spawn(process.execPath, [BRIDGE], { stdio: ["pipe", "pipe", "pipe"], env: process.env });
+  constructor(extraEnv: Record<string, string> = {}) {
+    const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+    // The test runner itself may run under a host (PI_BROWSER_HOST_CHILD set).
+    if (!("PI_BROWSER_HOST_CHILD" in extraEnv)) delete env.PI_BROWSER_HOST_CHILD;
+    this.child = spawn(process.execPath, [BRIDGE], { stdio: ["pipe", "pipe", "pipe"], env });
     this.child.stdout!.setEncoding("utf8");
     this.child.stdout!.on("data", (chunk: string) => {
       this.buf += chunk;
@@ -149,5 +152,105 @@ test("bridge: tools/call is forwarded to the broker, and reconnects after a brok
     await client.close().catch(() => undefined);
     client.child.kill();
     await server?.close();
+  }
+});
+
+test("bridge: names the caller to the broker on every connect, including reconnects", async () => {
+  const seen: Array<{ sessionId?: string; caller?: { name: string; version?: string; pid?: number; hostChild?: string } }> = [];
+  const recording = (): BrowserToolBridge => ({
+    ...fakeBridge(),
+    call: async (o) => {
+      seen.push({
+        ...(o.sessionId ? { sessionId: o.sessionId } : {}),
+        ...(o.caller ? { caller: o.caller } : {}),
+      });
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  });
+  let server: McpBrowserServerHandle | undefined = await startMcpBrowserServer({ log: quiet, bridge: recording(), instanceId: "broker-A", brokerPid: -1 });
+  // A client that is NOT a host child: a stale marker from another broker.
+  const client = new StdioClient({ PI_BROWSER_HOST_CHILD: "broker-OLD" });
+  try {
+    await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "2.1.0" } });
+    await client.request("tools/call", { name: "browser_get_page", arguments: {} });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].caller?.name, "claude-code", "the broker sees the MCP client's name");
+    assert.equal(seen[0].caller?.version, "2.1.0");
+    assert.equal(seen[0].caller?.pid, client.child.pid, "the bridge reports its own pid");
+    assert.match(String(seen[0].sessionId), /^mcp:/, "runs as a caller session");
+
+    // Broker restart: the reconnect announces the caller again.
+    await server.close();
+    server = await startMcpBrowserServer({ log: quiet, bridge: recording(), instanceId: "broker-B", brokerPid: -1 });
+    await client.request("tools/call", { name: "browser_get_page", arguments: {} });
+    assert.equal(seen.length, 2);
+    assert.equal(seen[1].caller?.name, "claude-code");
+    assert.notEqual(seen[1].sessionId, seen[0].sessionId, "a new connection is a new caller session");
+  } finally {
+    await client.close().catch(() => undefined);
+    client.child.kill();
+    await server?.close();
+  }
+});
+
+test("bridge: a host child (marker matches the broker) keeps the old session routing", async () => {
+  const seen: Array<{ sessionId?: string; caller?: unknown }> = [];
+  const server = await startMcpBrowserServer({
+    log: quiet,
+    instanceId: "broker-C",
+    bridge: {
+      ...fakeBridge(),
+      call: async (o) => {
+        seen.push({ sessionId: o.sessionId, caller: o.caller });
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    },
+  });
+  const client = new StdioClient({ PI_BROWSER_HOST_CHILD: "broker-C" });
+  try {
+    await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "pi", version: "1.5.2" } });
+    await client.request("tools/call", { name: "mail_search", arguments: {} });
+    assert.deepEqual(seen, [{ sessionId: undefined, caller: undefined }], "no caller session: last-active routing");
+  } finally {
+    await client.close().catch(() => undefined);
+    client.child.kill();
+    await server.close();
+  }
+});
+
+test("bridge: an older broker that ignores pi-browser/caller still serves calls", async () => {
+  // v0.2.5's dispatch: unknown notifications are dropped, tools/call answered.
+  const { defaultMcpEndpoint } = await import("../src/native-host/mcp-server.js");
+  const { mkdirSync } = await import("node:fs");
+  const net = await import("node:net");
+  mkdirSync(path.join(tmp, "run"), { recursive: true });
+  const lines: string[] = [];
+  const old = net.createServer((s) => {
+    let buf = "";
+    s.setEncoding("utf8");
+    s.on("data", (chunk: string) => {
+      buf += chunk;
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        lines.push(line);
+        const msg = JSON.parse(line) as { id?: unknown; method?: string };
+        if (msg.id === undefined) continue; // notification: dropped
+        s.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "old-ok" }] } })}\n`);
+      }
+    });
+  });
+  await new Promise<void>((resolve) => old.listen(defaultMcpEndpoint(), resolve));
+  const client = new StdioClient();
+  try {
+    await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "gemini-cli" } });
+    const res = await client.request("tools/call", { name: "browser_get_page", arguments: {} });
+    assert.equal(callText(res), "old-ok");
+    assert.match(lines[0], /"method":"pi-browser\/caller"/, "the caller notification goes first");
+  } finally {
+    await client.close().catch(() => undefined);
+    client.child.kill();
+    await new Promise<void>((resolve) => old.close(() => resolve()));
   }
 });

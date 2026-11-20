@@ -687,3 +687,35 @@ test("session/new: meaningful cwd is used as-is (no workspace provisioned)", asy
   const sess = h.backend.sessions.get(res.sessionId) as MockSession;
   assert.equal(sess.cwd, "/proj/real");
 });
+
+test("permissions: the settings page reads and sets external access and remembered callers", async () => {
+  const h = setup();
+  let config = (await h.request(X_PI_BROWSER.permissions, {})) as {
+    externalAccess?: boolean;
+    callers?: Array<{ application: string; name: string; state: string }>;
+  };
+  assert.equal(config.externalAccess, true, "on by default");
+  assert.deepEqual(config.callers, []);
+
+  assert.deepEqual(await h.request(X_PI_BROWSER.permission_set, { externalAccess: false }), { externalAccess: false });
+  await h.request(X_PI_BROWSER.permission_set, { caller: { application: "firefox", name: "codex" }, state: "allow" });
+  await h.request(X_PI_BROWSER.permission_set, { caller: { application: "thunderbird", name: "codex" }, state: "deny" });
+  config = (await h.request(X_PI_BROWSER.permissions, {})) as typeof config;
+  assert.equal(config.externalAccess, false);
+  assert.deepEqual(config.callers, [
+    { application: "firefox", name: "codex", state: "allow" },
+    { application: "thunderbird", name: "codex", state: "deny" },
+  ]);
+
+  // Revoke one app's decision; the other stays. Clear-all leaves callers alone.
+  await h.request(X_PI_BROWSER.permission_clear, { caller: { application: "firefox", name: "codex" } });
+  await h.request(X_PI_BROWSER.permission_clear, {});
+  config = (await h.request(X_PI_BROWSER.permissions, {})) as typeof config;
+  assert.deepEqual(config.callers, [{ application: "thunderbird", name: "codex", state: "deny" }]);
+
+  // Tool rows still work as before.
+  assert.deepEqual(await h.request(X_PI_BROWSER.permission_set, { tool: "mail_search", state: "allow" }), {
+    tool: "mail_search",
+    state: "allow",
+  });
+});

@@ -186,3 +186,38 @@
   opacity: 0.5;
   cursor: default;
 }
+
+/* Other apps (MCP): external access switch + remembered callers. */
+.perm-settings .ps-external {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.perm-settings .ps-external.hidden {
+  display: none;
+}
+
+.perm-settings .ps-external-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.perm-settings .ps-callers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.perm-settings .ps-caller {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perm-settings .ps-revoke {
+  font-size: 11px;
+  padding: 2px 8px;
+}

@@ -32,13 +32,23 @@ import {
   PiBrowserProtocolError,
   X_PI_BROWSER,
   buildPermissionRequest,
+  buildCallerApprovalRequest,
+  applicationForTool,
+  applicationShortName,
   getGatedTool,
   listGatedTools,
   permissionAllowed,
   toolRequiresApproval,
+  CALLER_ALLOW_ALWAYS,
+  CALLER_ALLOW_ONCE,
+  CALLER_DENY,
+  PERMISSION_WITHDRAWN_METHOD,
   REQUEST_PERMISSION_METHOD,
   type AcpTransportLike,
   type AgentApplication,
+  type CallerInfo,
+  type CallerRef,
+  type PermissionWithdrawnParams,
   type BrowserNotifyParams,
   type BrowserToolUpdateParams,
   type PermissionClearResult,
@@ -311,6 +321,24 @@ interface PermissionGroup {
   target: AcpTransportLike;
   settled: boolean;
   flushTimer?: ReturnType<typeof setTimeout>;
+  /** Set for caller sessions (external MCP clients): attributed in the prompt. */
+  caller?: CallerInfo;
+}
+
+/** A permission request the host sent and is still waiting on. */
+interface OpenPrompt {
+  toolCallId: string;
+  target: AcpTransportLike;
+}
+
+/** Message for calls refused because external MCP access is off. */
+export const EXTERNAL_ACCESS_OFF_MESSAGE =
+  "External MCP access is disabled in the Pi add-on settings. Ask the user to turn on " +
+  "\"Allow other apps (MCP) to use these tools\" in the Pi permissions page.";
+
+/** The caller attribution sent to the add-on (name + version only). */
+function callerMeta(caller: CallerInfo): { name: string; version?: string } {
+  return { name: caller.name, ...(caller.version ? { version: caller.version } : {}) };
 }
 
 /** Compact, bounded JSON summary of tool args for permission log lines. */
@@ -344,6 +372,8 @@ export interface CapabilityToolProviderOptions {
    * ~/.pi/browser/permissions.json file store).
    */
   permissionStore?: PermissionStore;
+  /** Test seam: permission prompt timeout (default 120 s). */
+  permissionTimeoutMs?: number;
 }
 
 export class CapabilityToolProvider {
@@ -392,7 +422,9 @@ export class CapabilityToolProvider {
   ) {
     this.timeoutForTool = options.timeoutMsFor ?? timeoutFor;
     this.permissions = options.permissionStore ?? new PermissionStore();
+    this.permissionTimeoutMs = options.permissionTimeoutMs ?? PERMISSION_TIMEOUT_MS;
   }
+  private readonly permissionTimeoutMs: number;
   private readonly timeoutForTool: (tool: string) => number;
 
   /** The ACP transport a tool call / permission prompt goes to (legacy mode). */
@@ -528,9 +560,10 @@ export class CapabilityToolProvider {
     mcpServerId: string | undefined,
     ownerClientId: string | undefined,
     ownerApplication: AgentApplication,
+    caller?: CallerInfo,
   ): ReplToolExecutor {
     return (sessionId, tool, args) =>
-      this.routeTool(sessionId, `repl:${tool}:${crypto.randomUUID()}`, tool, args, mode, mcpServerId, ownerClientId, ownerApplication);
+      this.routeTool(sessionId, `repl:${tool}:${crypto.randomUUID()}`, tool, args, mode, mcpServerId, ownerClientId, ownerApplication, caller);
   }
 
   /**
@@ -547,14 +580,23 @@ export class CapabilityToolProvider {
     toolCallId?: string;
     ctx?: import("../tool-bridge.js").BridgeSessionContext;
   }): Promise<NormalizedToolResult> {
+    const caller = opts.ctx?.caller;
     // The `javascript` REPL is host-executed (it owns a V8 worker child +
     // per-session cell state) — it must run in THIS process, not be routed
     // to the connected app like a browser tool. Runs for REPL tools only.
     if (isReplTool(opts.tool)) {
+      // The cell itself has no executing app, so no caller approval: its
+      // page.*/tabs.* primitives go through routeTool (and the caller gate).
+      // The external-access switch still refuses the whole call.
+      if (caller && !this.permissions.getExternalAccess()) {
+        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, EXTERNAL_ACCESS_OFF_MESSAGE, {
+          tool: opts.tool,
+        });
+      }
       const mode = opts.ctx?.mode ?? "legacy";
       const spec = this.repl.toolSpec(
         { id: opts.sessionId },
-        this.replExecutor(mode, opts.ctx?.mcpServerId, opts.ctx?.ownerClientId, opts.ctx?.ownerApplication ?? "firefox"),
+        this.replExecutor(mode, opts.ctx?.mcpServerId, opts.ctx?.ownerClientId, opts.ctx?.ownerApplication ?? "firefox", caller),
       );
       const res = await spec.execute(opts.toolCallId ?? `bridge:${opts.tool}:${crypto.randomUUID()}`, opts.args, undefined);
       return { content: res.content };
@@ -568,6 +610,7 @@ export class CapabilityToolProvider {
       opts.ctx?.mcpServerId,
       opts.ctx?.ownerClientId,
       opts.ctx?.ownerApplication ?? "firefox",
+      caller,
     );
   }
 
@@ -585,9 +628,11 @@ export class CapabilityToolProvider {
     mcpServerId: string | undefined,
     ownerClientId: string | undefined,
     ownerApplication: AgentApplication,
+    /** Set for caller sessions (external MCP clients, no owner). */
+    caller?: CallerInfo,
   ): Promise<NormalizedToolResult> {
     // In legacy (no registry) mode there is a single client — always the target.
-    const target = this.registry ? this.registry.resolveTarget(ownerClientId, toolName) : undefined;
+    const target = this.registry ? this.resolveTargetFor(ownerClientId, toolName, caller) : undefined;
     const targetTransport = target ? target.transport : this.legacyTransport();
     const isOwnerPath = !target || target.clientId === ownerClientId;
     // Tools the policy marks as approval-gated (browser_screenshot on
@@ -596,6 +641,9 @@ export class CapabilityToolProvider {
     // of the client that EXECUTES the tool — the routed target in broker
     // mode, the owner otherwise.
     const executingApp = target ? target.application : ownerApplication;
+    // External callers: the external-access switch, then a one-time approval
+    // of the caller for the executing app — before the per-tool policy.
+    if (caller) await this.approveCaller(sessionId, caller, executingApp, targetTransport, toolName);
     if (toolRequiresApproval(executingApp, toolName) && !this.autoApproves(toolName)) {
       // Persistent "Deny" (PRODUCT.md §55): the user configured this tool to
       // be refused WITHOUT asking — no prompt, structured denial.
@@ -627,7 +675,7 @@ export class CapabilityToolProvider {
           toolName,
         });
       }
-      await this.requestPermission(sessionId, toolCallId, toolName, targetTransport, args);
+      await this.requestPermission(sessionId, toolCallId, toolName, targetTransport, args, caller);
     }
     if (toolRequiresApproval(executingApp, toolName) && this.autoApproves(toolName)) {
       this.log.info(`${toolName}: approval auto-granted via PI_BROWSER_AUTO_APPROVE (test seam)`);
@@ -717,7 +765,33 @@ export class CapabilityToolProvider {
         ...(t.managedBy ? { managedBy: t.managedBy } : {}),
         ...(t.note ? { note: t.note } : {}),
       })),
+      externalAccess: this.permissions.getExternalAccess(),
+      callers: this.permissions.listCallers(),
     };
+  }
+
+  /** Turn external MCP access on or off (Configuration page). */
+  setExternalAccess(on: boolean): PermissionSetResult {
+    this.permissions.setExternalAccess(on);
+    this.log.info(`external MCP access turned ${on ? "on" : "off"} from Configuration page`);
+    return { externalAccess: on };
+  }
+
+  /** Remember or forget ("ask") a caller's decision for one app. */
+  setCallerPermission(caller: CallerRef, state: PermissionToolState): PermissionSetResult {
+    if (caller.application !== "firefox" && caller.application !== "thunderbird") {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `unknown application: ${String(caller.application)}`);
+    }
+    if (typeof caller.name !== "string" || caller.name === "") {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "caller name required");
+    }
+    this.permissions.setCallerState(caller.application, caller.name, state);
+    // Running caller sessions re-check the store on their next call.
+    for (const entry of this.callerApprovals.values()) {
+      if (entry.name === caller.name) entry.apps.delete(caller.application);
+    }
+    this.log.info(`caller ${caller.name}: ${caller.application} decision set to "${state}" from Configuration page`);
+    return { caller: { application: caller.application, name: caller.name }, state };
   }
 
   /**
@@ -918,6 +992,7 @@ export class CapabilityToolProvider {
     toolName: string,
     target: AcpTransportLike,
     args?: Record<string, unknown>,
+    caller?: CallerInfo,
   ): Promise<void> {
     if (!this.willPrompt(sessionId, toolName)) {
       this.log.debug(`${toolName}: already allowed (session or host scope); skipping permission prompt`);
@@ -935,7 +1010,7 @@ export class CapabilityToolProvider {
       // it never joins a group of regular tools, and vice versa.
       if (group && group.hasEvaluate !== isEvaluate) group = undefined;
       if (!group) {
-        group = { members: [], hasEvaluate: isEvaluate, target, settled: false };
+        group = { members: [], hasEvaluate: isEvaluate, target, settled: false, ...(caller ? { caller } : {}) };
         this.permissionGroups.set(sessionId, group);
         const captured = group;
         group.flushTimer = setTimeout(
@@ -976,17 +1051,16 @@ export class CapabilityToolProvider {
       toolCallId: first.toolCallId,
       title,
       toolName: first.toolName,
+      ...(group.caller ? { caller: callerMeta(group.caller) } : {}),
     });
     let response: RequestPermissionResponse | undefined;
     let failure: string | undefined;
     try {
-      response = await group.target.request<RequestPermissionResponse>(
-        REQUEST_PERMISSION_METHOD,
-        request,
-        PERMISSION_TIMEOUT_MS,
-      );
+      response = await this.sendTrackedPrompt(sessionId, group.target, request);
     } catch (err) {
-      failure = `permission request for ${first.toolName} failed or timed out: ${err instanceof Error ? err.message : String(err)}`;
+      failure = err instanceof TransportTimeoutError
+        ? `the user did not respond to the permission prompt for ${first.toolName} within ${Math.round(this.permissionTimeoutMs / 1000)} s`
+        : `permission request for ${first.toolName} failed or timed out: ${err instanceof Error ? err.message : String(err)}`;
     }
     const allowed = failure === undefined && permissionAllowed(response);
     if (allowed && response) {
@@ -1027,6 +1101,201 @@ export class CapabilityToolProvider {
           ),
         );
       }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // External MCP callers (openspec external-mcp-callers, D4–D6)
+  // ------------------------------------------------------------------
+
+  /** Caller-session approvals per executing app, cached for the session. */
+  private readonly callerApprovals = new Map<string, { name: string; apps: Map<AgentApplication, "allow" | "deny"> }>();
+  /** In-flight caller-approval prompts ("<session>|<app>"): concurrent calls share one. */
+  private readonly callerPrompts = new Map<string, Promise<void>>();
+  /** Permission requests still waiting for an answer, per session (for withdrawal). */
+  private readonly openPrompts = new Map<string, Set<OpenPrompt>>();
+
+  /**
+   * resolveTarget, with a caller-friendly error when no connected app
+   * serves the tool ("browser_get_page needs Firefox with the Pi add-on
+   * running").
+   */
+  private resolveTargetFor(
+    ownerClientId: string | undefined,
+    toolName: string,
+    caller: CallerInfo | undefined,
+  ): import("../capability-registry.js").CapabilityClient {
+    const registry = this.registry as CapabilityRegistry;
+    try {
+      return registry.resolveTarget(ownerClientId, toolName);
+    } catch (err) {
+      const app = applicationForTool(toolName);
+      if (!caller || !app || !(err instanceof PiBrowserProtocolError) || err.code !== PI_BROWSER_ERROR.MCP_UNAVAILABLE) {
+        throw err;
+      }
+      const name = applicationShortName(app);
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+        `${toolName} needs ${name} with the Pi add-on running. Ask the user to open ${name}, then retry.`,
+        { tool: toolName },
+      );
+    }
+  }
+
+  /**
+   * The caller gate: refuse when external access is off; otherwise make sure
+   * the caller is approved for the executing app (session cache → stored
+   * decision → one prompt in that app).
+   */
+  private async approveCaller(
+    sessionId: string,
+    caller: CallerInfo,
+    app: AgentApplication,
+    target: AcpTransportLike,
+    toolName: string,
+  ): Promise<void> {
+    if (!this.permissions.getExternalAccess()) {
+      this.log.info(`${toolName}: external MCP access is off — refusing ${caller.name} without a prompt`);
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, EXTERNAL_ACCESS_OFF_MESSAGE, {
+        tool: toolName,
+      });
+    }
+    const appName = applicationShortName(app);
+    const deniedError = () =>
+      new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+        `the user denied ${caller.name} access to the ${appName} tools. Ask them to allow it in the Pi permissions page.`,
+        { tool: toolName },
+      );
+    const cached = this.callerApprovals.get(sessionId)?.apps.get(app);
+    if (cached === "allow") return;
+    if (cached === "deny") throw deniedError();
+    const stored = this.permissions.getCallerState(app, caller.name);
+    if (stored) {
+      this.cacheCallerDecision(sessionId, caller, app, stored);
+      if (stored === "allow") return;
+      this.log.info(`${toolName}: caller ${caller.name} is denied for ${app} — refusing without a prompt`);
+      throw deniedError();
+    }
+    if (this.autoApproves("*")) {
+      this.log.info(`caller ${caller.name}: approval auto-granted for ${app} via PI_BROWSER_AUTO_APPROVE (test seam)`);
+      this.cacheCallerDecision(sessionId, caller, app, "allow");
+      return;
+    }
+    const key = `${sessionId}|${app}`;
+    let pending = this.callerPrompts.get(key);
+    if (!pending) {
+      pending = this.promptCaller(sessionId, caller, app, target, toolName).finally(() => {
+        this.callerPrompts.delete(key);
+      });
+      this.callerPrompts.set(key, pending);
+    }
+    await pending;
+  }
+
+  private cacheCallerDecision(sessionId: string, caller: CallerInfo, app: AgentApplication, state: "allow" | "deny"): void {
+    let entry = this.callerApprovals.get(sessionId);
+    if (!entry) {
+      entry = { name: caller.name, apps: new Map() };
+      this.callerApprovals.set(sessionId, entry);
+    }
+    entry.apps.set(app, state);
+  }
+
+  /** Ask the executing app whether the caller may use its tools. */
+  private async promptCaller(
+    sessionId: string,
+    caller: CallerInfo,
+    app: AgentApplication,
+    target: AcpTransportLike,
+    toolName: string,
+  ): Promise<void> {
+    const appName = applicationShortName(app);
+    const request = buildCallerApprovalRequest({
+      sessionId,
+      toolCallId: `caller:${crypto.randomUUID()}`,
+      caller: callerMeta(caller),
+      application: app,
+      toolName,
+    });
+    this.log.info(`caller ${caller.name}: asking ${app} to approve it (first call: ${toolName}, session=${sessionId})`);
+    let response: RequestPermissionResponse | undefined;
+    try {
+      response = await this.sendTrackedPrompt(sessionId, target, request);
+    } catch (err) {
+      const text = err instanceof TransportTimeoutError
+        ? `the user did not respond within ${Math.round(this.permissionTimeoutMs / 1000)} s to the prompt allowing ${caller.name} to use the ${appName} tools`
+        : `the prompt allowing ${caller.name} to use the ${appName} tools failed: ${err instanceof Error ? err.message : String(err)}`;
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, text, { tool: toolName });
+    }
+    const outcome = (response as { outcome?: RequestPermissionResponse["outcome"] } | undefined)?.outcome;
+    const optionId = outcome?.outcome === "selected" ? outcome.optionId : undefined;
+    if (optionId === CALLER_ALLOW_ALWAYS) {
+      this.permissions.setCallerState(app, caller.name, "allow");
+      this.cacheCallerDecision(sessionId, caller, app, "allow");
+      this.log.info(`caller ${caller.name}: always allowed for ${app} (persisted)`);
+      return;
+    }
+    if (optionId === CALLER_ALLOW_ONCE) {
+      this.cacheCallerDecision(sessionId, caller, app, "allow");
+      this.log.info(`caller ${caller.name}: allowed for ${app} for this connection`);
+      return;
+    }
+    if (optionId === CALLER_DENY) {
+      this.permissions.setCallerState(app, caller.name, "deny");
+      this.cacheCallerDecision(sessionId, caller, app, "deny");
+      this.log.info(`caller ${caller.name}: denied for ${app} (persisted)`);
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+        `the user denied ${caller.name} access to the ${appName} tools. Ask them to allow it in the Pi permissions page.`,
+        { tool: toolName },
+      );
+    }
+    // Cancelled (approval window closed, add-on-side timeout) or unknown:
+    // deny this call only — nothing is remembered, the next call asks again.
+    this.log.info(`caller ${caller.name}: approval for ${app} cancelled (not remembered)`);
+    throw new PiBrowserProtocolError(
+      PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+      `the user denied the request (the approval prompt for ${caller.name} was closed without an answer)`,
+      { tool: toolName },
+    );
+  }
+
+  /**
+   * Send a session/request_permission and remember it until it settles, so
+   * a timeout or a closed caller session can withdraw it from the add-on UI
+   * (x-pi-browser/permission_withdrawn).
+   */
+  private async sendTrackedPrompt(
+    sessionId: string,
+    target: AcpTransportLike,
+    request: import("@pi-browser/protocol").RequestPermissionRequest,
+  ): Promise<RequestPermissionResponse> {
+    const entry: OpenPrompt = { toolCallId: request.toolCall.toolCallId, target };
+    let set = this.openPrompts.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.openPrompts.set(sessionId, set);
+    }
+    set.add(entry);
+    try {
+      return await target.request<RequestPermissionResponse>(REQUEST_PERMISSION_METHOD, request, this.permissionTimeoutMs);
+    } catch (err) {
+      if (err instanceof TransportTimeoutError) this.withdrawPrompt(sessionId, entry, "timeout");
+      throw err;
+    } finally {
+      const s = this.openPrompts.get(sessionId);
+      s?.delete(entry);
+      if (s && s.size === 0) this.openPrompts.delete(sessionId);
+    }
+  }
+
+  private withdrawPrompt(sessionId: string, prompt: OpenPrompt, reason: PermissionWithdrawnParams["reason"]): void {
+    const params: PermissionWithdrawnParams = { sessionId, toolCallId: prompt.toolCallId, reason };
+    try {
+      prompt.target.notify(PERMISSION_WITHDRAWN_METHOD, params);
+    } catch (err) {
+      this.log.debug(`permission_withdrawn failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1093,6 +1362,11 @@ export class CapabilityToolProvider {
   /** Release per-session state (session/close or host shutdown). */
   async disposeSession(sessionId: string): Promise<void> {
     this.sessionAllowed.delete(sessionId);
+    this.callerApprovals.delete(sessionId);
+    // A prompt still showing for a session that ended (an MCP caller
+    // disconnected) can never be answered usefully: withdraw it.
+    for (const prompt of this.openPrompts.get(sessionId) ?? []) this.withdrawPrompt(sessionId, prompt, "session_closed");
+    this.openPrompts.delete(sessionId);
     const state = this.sessions.get(sessionId);
     if (state) {
       this.sessions.delete(sessionId);

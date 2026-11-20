@@ -36,7 +36,7 @@ For complete package suites:
 
 ```sh
 npm test -w @pi-browser/thunderbird
-npm test -w @pi-browser/agent
+npm test -w trusted-user-agent
 ```
 
 Build the host and Firefox test exports before the cross-package harness:
@@ -85,7 +85,7 @@ host stdout: stdout is exclusively the framed protocol channel.
 
 ```sh
 npm run build -w @pi-browser/protocol
-npm run build -w @pi-browser/agent
+npm run build -w trusted-user-agent
 npm run build -w @pi-browser/thunderbird
 # For Firefox changes:
 npm run build -w @pi-browser/firefox

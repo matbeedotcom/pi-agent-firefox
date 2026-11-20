@@ -13,7 +13,7 @@ import { isMailTool } from "./mail-tools.js";
 import { isComposeTool } from "./compose-tools.js";
 import { isMailMutationTool } from "./mail-mutation-tools.js";
 import { isContactsTool } from "./contacts-tools.js";
-import type { AgentCapability } from "./integration.js";
+import type { AgentApplication, AgentCapability } from "./integration.js";
 
 /**
  * True when a client advertising `caps` serves `toolName`.
@@ -32,4 +32,17 @@ export function capabilitiesProvideTool(caps: readonly string[], toolName: strin
   if (isContactsTool(toolName)) return has("contacts");
   if (isMailTool(toolName)) return has("mail") || has("attachments");
   return false;
+}
+
+/**
+ * The application that serves a tool (undefined for host-side tools such
+ * as the `javascript` REPL). Used for "needs <App>" errors and per-app
+ * caller approval.
+ */
+export function applicationForTool(toolName: string): AgentApplication | undefined {
+  if (isBrowserTool(toolName) || isControlTool(toolName)) return "firefox";
+  if (isMailMutationTool(toolName) || isComposeTool(toolName) || isContactsTool(toolName) || isMailTool(toolName)) {
+    return "thunderbird";
+  }
+  return undefined;
 }

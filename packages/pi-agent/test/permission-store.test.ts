@@ -113,3 +113,35 @@ test("defaultPermissionFilePath: ~/.pi/browser/permissions.json, env override wi
     else process.env.PI_BROWSER_PERMISSIONS_FILE = prev;
   }
 });
+
+test("PermissionStore: caller decisions are per app, persist, and externalAccess is stored only when off", () => {
+  const file = tempFile();
+  const store = new PermissionStore({ filePath: file });
+  assert.equal(store.getExternalAccess(), true, "on by default");
+  store.setCallerState("firefox", "codex", "allow");
+  store.setCallerState("thunderbird", "codex", "deny");
+  store.setState("mail_search", "allow");
+  let raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+  assert.deepEqual(raw.callers, { firefox: { codex: "allow" }, thunderbird: { codex: "deny" } });
+  assert.equal("externalAccess" in raw, false);
+
+  store.setExternalAccess(false);
+  const again = new PermissionStore({ filePath: file });
+  assert.equal(again.getExternalAccess(), false);
+  assert.equal(again.getCallerState("firefox", "codex"), "allow");
+  assert.equal(again.getCallerState("thunderbird", "codex"), "deny");
+  assert.equal(again.getState("mail_search"), "allow");
+  assert.deepEqual(again.listCallers(), [
+    { application: "firefox", name: "codex", state: "allow" },
+    { application: "thunderbird", name: "codex", state: "deny" },
+  ]);
+
+  again.setCallerState("firefox", "codex", "ask");
+  again.setExternalAccess(true);
+  raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+  assert.deepEqual(raw.callers, { thunderbird: { codex: "deny" } });
+  assert.equal("externalAccess" in raw, false);
+  // clearAll clears tool decisions only.
+  again.clearAll();
+  assert.equal(again.getCallerState("thunderbird", "codex"), "deny");
+});

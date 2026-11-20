@@ -97,7 +97,7 @@ async function newestMtime(dir, pattern) {
  */
 async function ensureBuilt() {
   const needed = [];
-  if (!(await exists(AGENT_HOST))) needed.push("@pi-browser/agent");
+  if (!(await exists(AGENT_HOST))) needed.push("trusted-user-agent");
   let addonStale = !(await exists(path.join(ADDON_DIST, "manifest.json")));
   if (!addonStale) {
     const srcRoot = path.resolve(REPO, "firefox/src");

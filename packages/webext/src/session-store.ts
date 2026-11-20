@@ -196,6 +196,11 @@ export class SessionStore {
     return this.bindings.get(sessionId);
   }
 
+  /** Ids of every session that has a binding (including external caller sessions). */
+  boundSessionIds(): string[] {
+    return [...this.bindings.keys()];
+  }
+
   /** Find the session whose binding refers to the given numeric app id. */
   sessionForRef(refId: number): string | undefined {
     for (const [sessionId, b] of this.bindings) {

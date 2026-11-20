@@ -714,6 +714,11 @@ function openSettings(): void {
         action<PermissionSetResult>("permission_set", { tool, state }, 10_000).then(() => undefined),
       clear: (tool) =>
         action<PermissionClearResult>("permission_clear", tool ? { tool } : {}, 10_000).then(() => undefined),
+      setExternalAccess: (on) =>
+        action<PermissionSetResult>("permission_set", { externalAccess: on }, 10_000).then(() => undefined),
+      forgetCaller: (caller) =>
+        action<PermissionClearResult>("permission_clear", { caller }, 10_000).then(() => undefined),
+      application: "thunderbird",
     };
     mountPermissionSettings(body, api);
   }

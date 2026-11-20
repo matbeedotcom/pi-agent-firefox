@@ -14,7 +14,7 @@
  * permission prompts, activity tracking). The bridge is undefined outside a
  * broker process, so the extension registers nothing in a plain pi session.
  */
-import type { AgentApplication } from "@pi-browser/protocol";
+import type { AgentApplication, CallerInfo } from "@pi-browser/protocol";
 import type { BrowserMode, NormalizedToolResult } from "./browser/provider.js";
 
 /** Per-ACP-session routing context captured when the session opened. */
@@ -23,6 +23,12 @@ export interface BridgeSessionContext {
   ownerApplication: AgentApplication;
   mode: BrowserMode;
   mcpServerId?: string;
+  /**
+   * Set for caller sessions: an external MCP client (Claude Code, Codex, ...)
+   * connected to the broker's MCP server. Such a session has no owner app;
+   * calls go through the caller gate (external access + per-app approval).
+   */
+  caller?: CallerInfo;
 }
 
 export interface BrowserToolBridge {
@@ -35,13 +41,16 @@ export interface BrowserToolBridge {
   /**
    * Execute one tool through the provider's standard routing + approval
    * path. Omitted sessionId falls back to the most recently active ACP
-   * session (the one the user is driving in the add-on UI).
+   * session (the one the user is driving in the add-on UI). With `caller`,
+   * `sessionId` names a caller session (`mcp:<uuid>`, one per MCP
+   * connection) that needs no ACP session; closeSession(sessionId) ends it.
    */
   call(opts: {
     tool: string;
     args: Record<string, unknown>;
     sessionId?: string;
     toolCallId?: string;
+    caller?: CallerInfo;
   }): Promise<NormalizedToolResult>;
 }
 

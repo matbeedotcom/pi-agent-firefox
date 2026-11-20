@@ -18,6 +18,10 @@ import {
   PERMISSION_TOOL_GROUP_LABELS,
   PERMISSION_TOOL_GROUPS,
   applicationDisplayName,
+  applicationShortName,
+  type AgentApplication,
+  type CallerPermissionEntry,
+  type CallerRef,
   type PermissionConfigResult,
   type PermissionConfigTool,
   type PermissionToolState,
@@ -28,6 +32,14 @@ export interface PermissionSettingsApi {
   getConfig(): Promise<PermissionConfigResult>;
   setTool(tool: string, state: PermissionToolState): Promise<void>;
   clear(tool?: string): Promise<void>;
+  /**
+   * External MCP callers (hosts that report `externalAccess`): turn access
+   * on or off, and forget one remembered caller decision.
+   */
+  setExternalAccess?(on: boolean): Promise<void>;
+  forgetCaller?(caller: CallerRef): Promise<void>;
+  /** This app: its remembered callers are listed (all apps when omitted). */
+  application?: AgentApplication;
 }
 
 /** The three states, in row order, with their button labels. */
@@ -66,6 +78,11 @@ export function mountPermissionSettings(
   const status = document.createElement("div");
   status.className = "ps-status";
   root.append(status);
+
+  // Other apps (MCP): shown only when the host supports external callers.
+  const external = document.createElement("section");
+  external.className = "ps-external hidden";
+  root.append(external);
 
   const list = document.createElement("div");
   list.className = "ps-list";
@@ -179,10 +196,94 @@ export function mountPermissionSettings(
     }
   }
 
-  async function refresh(): Promise<void> {
+  function renderExternal(config: PermissionConfigResult): void {
+    external.textContent = "";
+    if (config.externalAccess === undefined || !api.setExternalAccess) {
+      external.classList.add("hidden");
+      return;
+    }
+    external.classList.remove("hidden");
+    const heading = document.createElement("h4");
+    heading.className = "ps-group";
+    heading.textContent = "Other apps (MCP)";
+    const toggleLabel = document.createElement("label");
+    toggleLabel.className = "ps-external-toggle";
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.checked = config.externalAccess;
+    toggle.setAttribute("data-testid", "external-access");
+    toggleLabel.append(toggle, document.createTextNode(" Allow other apps (MCP) to use these tools"));
+    toggle.addEventListener("change", () => {
+      const on = toggle.checked;
+      void run(async () => {
+        await api.setExternalAccess?.(on);
+        setStatus(on ? "Other apps can ask to use the tools." : "Other apps are refused without a prompt.");
+      });
+    });
+    const note = document.createElement("p");
+    note.className = "ps-intro";
+    note.textContent =
+      "Agents such as Claude Code, Codex or Cursor connect through the pi-browser MCP server. Each one asks once per app, " +
+      "and every tool call still asks as set below. Names are reported by the apps themselves.";
+    external.append(heading, toggleLabel, note);
+
+    const callers = (config.callers ?? []).filter((c) => !api.application || c.application === api.application);
+    const list = document.createElement("div");
+    list.className = "ps-callers";
+    if (callers.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "ps-desc";
+      empty.textContent = "No remembered apps yet.";
+      list.append(empty);
+    }
+    for (const caller of callers) list.append(renderCaller(caller));
+    external.append(list);
+  }
+
+  function renderCaller(caller: CallerPermissionEntry): HTMLElement {
+    const row = document.createElement("div");
+    row.className = `ps-row ps-caller ps-row-${caller.state}`;
+    const name = document.createElement("span");
+    name.className = "ps-name";
+    name.textContent = caller.name;
+    const state = document.createElement("span");
+    state.className = "ps-note";
+    state.textContent = `${caller.state === "allow" ? "Always allowed" : "Denied"}${api.application ? "" : ` in ${applicationShortName(caller.application)}`}`;
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.className = "ps-revoke";
+    revoke.textContent = "Revoke";
+    revoke.title = `Forget this decision: ${caller.name} will be asked again`;
+    revoke.addEventListener("click", () => {
+      void run(async () => {
+        await api.forgetCaller?.({ application: caller.application, name: caller.name });
+        setStatus(`${caller.name} will be asked again.`);
+      });
+    });
+    row.append(revoke, name, state);
+    return row;
+  }
+
+  /** Run one change, then re-read the host state. */
+  async function run(change: () => Promise<void>): Promise<void> {
+    if (busy) return;
+    busy = true;
+    try {
+      await change();
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "change failed", "err");
+    } finally {
+      busy = false;
+    }
+    await refresh(true);
+  }
+
+  async function refresh(keepStatus = false): Promise<void> {
     try {
       const config = await api.getConfig();
+      renderExternal(config);
       renderGroups(config);
+      if (keepStatus) return;
       setStatus("");
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "failed to load permissions", "err");

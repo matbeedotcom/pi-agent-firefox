@@ -12,8 +12,8 @@ import type { MailSearchResult } from "./mail-tools.js";
 export const PI_BROWSER = {
   /** Package name. */
   name: "pi-browser",
-  /** Package release version (npm version of @pi-browser/agent). */
-  version: "0.2.5",
+  /** Package release version (npm version of trusted-user-agent). */
+  version: "0.3.0",
   /**
    * Pi Browser integration protocol version (bump on breaking changes to
    * x-pi-browser/* semantics or integration metadata). v2 = 2026-09-11
@@ -23,6 +23,13 @@ export const PI_BROWSER = {
    * request is still pending; MailSearchResult gains complete/sortComplete/scanned.
    */
   protocolVersion: 3,
+  // 2026-11-20 (v0.3.0, external MCP callers): additive only, so the version
+  // stays 3 — add-ons reject any other value, and mixed versions must keep
+  // working. New: the `pi-browser/caller` MCP notification (broker socket),
+  // `_meta.piBrowser.caller` / `callerApproval` on session/request_permission,
+  // the x-pi-browser/permission_withdrawn notification, and caller /
+  // externalAccess fields on x-pi-browser/permissions|permission_set|
+  // permission_clear. Older peers ignore all of them (see callers.ts).
   /**
    * Browser tool schema version (bump when tool schemas change).
    * v2 = 2026-09-12: added browser_evaluate, browser_get_accessibility_tree,
@@ -454,6 +461,13 @@ export interface PermissionConfigTool {
 /** Result for x-pi-browser/permissions. */
 export interface PermissionConfigResult {
   tools: PermissionConfigTool[];
+  /**
+   * External MCP callers (v0.3.0+ hosts; absent from older hosts): whether
+   * other apps may use the tools over MCP at all (default true).
+   */
+  externalAccess?: boolean;
+  /** Remembered caller decisions, per app (v0.3.0+ hosts). */
+  callers?: import("./callers.js").CallerPermissionEntry[];
 }
 
 /**
@@ -466,19 +480,31 @@ export type PermissionToolState = "ask" | "deny" | "allow";
 
 /** Params for x-pi-browser/permission_set. */
 export interface PermissionSetParams {
-  tool: string;
-  state: PermissionToolState;
+  /** Set one tool's state (with `state`). */
+  tool?: string;
+  state?: PermissionToolState;
+  /** Set one caller's decision for one app (with `state`; "ask" forgets it). */
+  caller?: import("./callers.js").CallerRef;
+  /** Turn external MCP access on or off. */
+  externalAccess?: boolean;
 }
 
-/** Result for x-pi-browser/permission_set. */
+/** Result for x-pi-browser/permission_set (echoes what was set). */
 export interface PermissionSetResult {
-  tool: string;
-  state: PermissionToolState;
+  tool?: string;
+  state?: PermissionToolState;
+  caller?: import("./callers.js").CallerRef;
+  externalAccess?: boolean;
 }
 
-/** Params for x-pi-browser/permission_clear (omit `tool` to clear all). */
+/**
+ * Params for x-pi-browser/permission_clear: `tool` clears one tool,
+ * `caller` forgets one caller decision, neither clears every tool decision
+ * (caller decisions are kept).
+ */
 export interface PermissionClearParams {
   tool?: string;
+  caller?: import("./callers.js").CallerRef;
 }
 
 /** Result for x-pi-browser/permission_clear. */

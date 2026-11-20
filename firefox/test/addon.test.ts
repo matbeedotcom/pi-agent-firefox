@@ -1273,3 +1273,37 @@ test("ToolDispatcher: activity lifecycle preserves results and is isolated from 
   assert.deepEqual(events.map((e) => e.status), ["in_progress", "failed"]);
   assert.ok(events[1].result);
 });
+
+// ---------------------------------------------------------------------------
+// External MCP caller sessions (openspec external-mcp-callers)
+// ---------------------------------------------------------------------------
+
+test("ToolDispatcher: a caller session with no tab is told how to bind one", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  const d = new ToolDispatcher(store);
+  await assert.rejects(
+    d.handleToolCall({ sessionId: "mcp:abc", tool: "browser_get_page", arguments: {} }),
+    (err: unknown) =>
+      err instanceof PiBrowserProtocolError &&
+      err.code === PI_BROWSER_ERROR.BROWSER_NOT_BOUND &&
+      /browser_bind_tab/.test(err.message),
+  );
+});
+
+test("ToolDispatcher: a caller session cannot take a tab from the user's chat session", async () => {
+  const store = new SessionStore();
+  await store.hydrate();
+  store.bind("chat-1", { tabId: 7, windowId: 1 });
+  stub.tabs.get = async (tabId: number) => ({ id: tabId, windowId: 1, title: "Mine", url: "https://example.com" });
+  const d = new ToolDispatcher(store);
+  await assert.rejects(d.bindSessionTab("mcp:abc", 7), /in use by a Pi chat session/);
+  assert.equal(store.getBinding("chat-1")?.tabId, 7, "the chat session keeps its tab");
+  // Another caller's tab can be taken over; the user's session always wins.
+  store.bind("mcp:other", { tabId: 8, windowId: 1 });
+  await d.bindSessionTab("mcp:abc", 8);
+  assert.equal(store.getBinding("mcp:other"), undefined);
+  await d.bindSessionTab("chat-1", 8);
+  assert.equal(store.getBinding("mcp:abc"), undefined);
+  assert.deepEqual(store.boundSessionIds().sort(), ["chat-1"]);
+});

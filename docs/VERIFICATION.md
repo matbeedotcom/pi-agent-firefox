@@ -131,7 +131,7 @@ pre-installed as an unsigned xpi (`xpinstall.signatures.required=false`):
 T2 adds the read-only mail surface + the normalized context model (THUNDERBIRD-PLAN.md
 §9–14). The add-on declares `capabilities: ["mail","attachments"]`; the host registers the
 mail tools and dispatches them to `thunderbird/src/background/mail-dispatcher.ts` over the
-legacy `x-pi-browser/tool` transport (host-side `MailToolProvider` in `@pi-browser/agent`).
+legacy `x-pi-browser/tool` transport (host-side `MailToolProvider` in `trusted-user-agent`).
 **No mutation**: there is no send/move/delete/tag/flag tool; the user composes and presses
 Send manually (T3 stays draft-first).
 
@@ -171,7 +171,7 @@ T3 adds the draft-first compose surface (THUNDERBIRD-PLAN.md §15–17). The add
 `capabilities: ["mail","attachments","compose"]` and the `compose` permission; the five compose
 tools are dispatched to `thunderbird/src/background/compose-dispatcher.ts` over the same
 `x-pi-browser/tool` transport, and the host registers them (gated on the `compose` capability)
-via `@pi-browser/agent` (`compose/schemas.ts` + `CapabilityToolProvider`).
+via `trusted-user-agent` (`compose/schemas.ts` + `CapabilityToolProvider`).
 
 **Tools** (5): `compose_prepare_new`, `compose_prepare_reply`, `compose_prepare_forward`,
 `compose_get`, `compose_update`. Each `prepare_*` opens a populated compose window (returned as
@@ -293,7 +293,7 @@ permission `addressBooks`. Four live bugs fixed here:
 | Workspace | Tests | Covers |
 |-----------|-------|--------|
 | `@pi-browser/protocol` | 14 | framing helpers, JSON-RPC, structured errors, permission helpers, schema constants, **agent identity + `pi.agent.hello` (firefox + thunderbird) + capability normalization** |
-| `@pi-browser/agent` | 62 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
+| `trusted-user-agent` | 62 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
 | `@pi-browser/webext` | — | shared `AcpClient` (injected identity + hello) + `SessionStore` (shared by both add-ons; exercised by the firefox tests + e2e) |
 | `@pi-browser/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) — now on the shared `@pi-browser/webext` |
 | `@pi-browser/thunderbird` | 59 | **mail tool dispatcher** (T2, 19 + 4 tag tests: search-by-tag name→key, `tagMode` all/any, unknown-tag error, `mail_list_tags`): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 9)**: mark read / additive+replace tags / create-unknown-tag / `keyForName` / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 16)**: MV3 `addressBooks.contacts` path, include-*-flags, **MV3 vCard parsing (no `properties` map — `FN`/`N`/`EMAIL`/`ORG`/`TEL`/`TITLE`/`NOTE`/`ADR` + RFC 5545 fold/unescape)**, email-only card, **raw vCard + flat map surfaced**, **contacts_list (enumerate/filter/paginate)**, **no-mutation guard**. **+ schema conformance (1)**: every `browser.*` call is present, MV3-available, and permitted (vs the installed `omni.ja`) |

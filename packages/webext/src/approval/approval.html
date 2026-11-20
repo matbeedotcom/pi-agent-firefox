@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pi — approval needed</title>
+    <link rel="stylesheet" href="approval.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="../icons/icon.svg" alt="" width="20" height="20" />
+        <span class="brand">Pi</span>
+        <span class="queue" id="queue"></span>
+      </header>
+      <section id="card" class="card hidden" aria-live="polite">
+        <div class="caller" id="caller"></div>
+        <h1 id="title"></h1>
+        <p id="desc"></p>
+        <div class="options" id="options"></div>
+        <p class="hint">Closing this window denies the waiting requests.</p>
+      </section>
+      <section id="empty" class="empty hidden">No requests waiting.</section>
+    </main>
+    <script src="approval.js"></script>
+  </body>
+</html>

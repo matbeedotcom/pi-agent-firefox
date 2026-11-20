@@ -825,6 +825,11 @@ function openSettings(): void {
         action<PermissionSetResult>("permission_set", { tool, state }).then(() => undefined),
       clear: (tool) =>
         action<PermissionClearResult>("permission_clear", tool ? { tool } : {}).then(() => undefined),
+      setExternalAccess: (on) =>
+        action<PermissionSetResult>("permission_set", { externalAccess: on }).then(() => undefined),
+      forgetCaller: (caller) =>
+        action<PermissionClearResult>("permission_clear", { caller }).then(() => undefined),
+      application: "firefox",
     };
     settingsUnmount = mountPermissionSettings($<HTMLDivElement>("settings-body"), api);
   }

@@ -13,6 +13,7 @@
 import {
   BROWSER_DOWNLOAD_TIMEOUT_MS,
   PI_BROWSER_ERROR,
+  isCallerSessionId,
   PiBrowserProtocolError,
   getBrowserTool,
   type BrowserToolCallParams,
@@ -114,6 +115,14 @@ export class ToolDispatcher {
     }
     // A tab serves one session: release it from any other binding first.
     const previous = this.store.sessionForRef(tabId);
+    // An external MCP caller never takes a tab away from the user's own Pi
+    // chat session (the reverse is fine: the user's session wins).
+    if (previous && previous !== sessionId && isCallerSessionId(sessionId) && !isCallerSessionId(previous)) {
+      throw new PiBrowserProtocolError(
+        PI_BROWSER_ERROR.INTERNAL,
+        `tab ${tabId} is in use by a Pi chat session in the sidebar — bind another tab, or open one with browser_open_tab`,
+      );
+    }
     if (previous && previous !== sessionId) {
       this.store.unbind(previous);
       console.info(`[pi-browser] bind_tab: tab ${tabId} released from session ${previous}`);
@@ -290,7 +299,9 @@ export class ToolDispatcher {
     if (tabId === undefined) {
       throw new PiBrowserProtocolError(
         PI_BROWSER_ERROR.BROWSER_NOT_BOUND,
-        `session ${sessionId} has no bound Firefox tab`,
+        isCallerSessionId(sessionId)
+          ? "no Firefox tab is bound to this connection yet — call browser_list_tabs and browser_bind_tab (or browser_open_tab) first"
+          : `session ${sessionId} has no bound Firefox tab`,
       );
     }
 

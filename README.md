@@ -3,7 +3,7 @@
 # Pi Browser Agent
 
 A Firefox MV3 add-on that is a **full ACP (Agent Client Protocol) client for [Pi](https://pi.dev)**,
-plus a Pi package (`@pi-browser/agent`) that provides the **`com.matbee.agent` Native Messaging host** (application-neutral: Firefox + Thunderbird).
+plus the host package **`trusted-user-agent`** (npm; command `trusted-ua`, also installable as a pi package) that provides the **`com.matbee.agent` Native Messaging host** (application-neutral: Firefox + Thunderbird). The same host serves the Firefox and Thunderbird tools to **any MCP client** — Claude Code, Codex, Cursor, Gemini CLI, VS Code, pi — see [Use the tools from other agents](#use-the-tools-from-other-agents).
 
 Pi can inspect and operate a tab bound to a session — read page content/DOM (or a compact
 accessibility tree), click and type into referenced elements, wait for selectors, evaluate page
@@ -28,7 +28,7 @@ see **[Debugging ACP/MCP tools](docs/DEBUGGING-TOOLS.md)**.
 
 ```
 packages/protocol/    dependency-light protocol package (shared by Firefox + Node)
-packages/pi-agent/    the Pi package: native host, ACP↔Pi SDK adapter, installers, /pi-browser
+packages/pi-agent/    trusted-user-agent: native host, ACP↔Pi SDK adapter, MCP server, installers, /pi-browser
 firefox/              the Firefox add-on (background / content script / sidebar)
 tests/                integration harness: real host + real framing + fake tab set
 docs/                 verification record + evidence
@@ -40,12 +40,20 @@ Requires **Node 22+** (the host uses Pi SDK APIs that need it) and a stable/nigh
 
 ### Order A — install the plugin first
 
-The plugin (`@pi-browser/agent`) installs from this repository as a pi package
+Without pi, install the host from npm and register it:
+
+```sh
+npm i -g trusted-user-agent
+trusted-ua install          # firefox | thunderbird | mozilla (default: both)
+trusted-ua doctor
+```
+
+With pi, the plugin (`trusted-user-agent`) installs from this repository as a pi package
 (requires Node.js >= 22 available on the machine; pi clones the repo and builds
 the plugin automatically on install):
 
 ```sh
-pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.2.5
+pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.3.0
 ```
 
 1. In any Pi session: `/pi-browser install` — registers the Firefox Native Messaging host.
@@ -138,7 +146,55 @@ The steering for that (tool description + first-call preamble + the
 | `/pi-browser status` | host state + add-on detection (heartbeat) |
 | `/pi-browser doctor` | status + live framed host probe + add-on detection |
 | `/pi-browser uninstall` | remove the registration |
-| `/pi-browser mcp [install\|status\|uninstall]` | register the broker's MCP server in `~/.pi/agent/mcp.json` so Pi subagents can use the add-on tools: `browser_*` + `javascript` (Firefox) and `mail_*`, `compose_*`, `contacts_*` (Thunderbird). Each call runs in the app that serves the tool. The entry launches a small stdio bridge, so it works with pi's built-in MCP client (tools appear as `mcp__pi-browser__<tool>`, loaded on demand via `tool_search`; change the exposure in `/mcp`) and with pi-mcp-adapter (`mcp:pi-browser/<tool>`). It works before Firefox/Thunderbird start; calls succeed once an app with the add-on is running. |
+| `/pi-browser mcp [install\|status\|uninstall] [client]` | register the broker's MCP server in `~/.pi/agent/mcp.json` so Pi subagents can use the add-on tools: `browser_*` + `javascript` (Firefox) and `mail_*`, `compose_*`, `contacts_*` (Thunderbird). Each call runs in the app that serves the tool. The entry launches a small stdio bridge, so it works with pi's built-in MCP client (tools appear as `mcp__pi-browser__<tool>`, loaded on demand via `tool_search`; change the exposure in `/mcp`) and with pi-mcp-adapter (`mcp:pi-browser/<tool>`). It works before Firefox/Thunderbird start; calls succeed once an app with the add-on is running. `client` is `pi` (default) or another MCP client — see below. |
+
+`trusted-ua [install|status|doctor|uninstall] [app]` and `trusted-ua mcp [install|status|uninstall] [client]`
+do the same without pi (after `npm i -g trusted-user-agent`).
+
+## Use the tools from other agents
+
+Any MCP client can use the Firefox and Thunderbird tools while either app is running — no
+Pi chat needs to be open. Register the `pi-browser` MCP server (a small stdio bridge) in your
+client's user config:
+
+| Client | Command | Where the entry goes |
+|--------|---------|----------------------|
+| pi | `trusted-ua mcp install` (or `/pi-browser mcp install`) | `~/.pi/agent/mcp.json` |
+| Claude Code | `trusted-ua mcp install claude` | user scope, through `claude mcp add-json` |
+| Codex | `trusted-ua mcp install codex` | `~/.codex/config.toml` (through `codex mcp add` when available) |
+| Cursor | `trusted-ua mcp install cursor` | `~/.cursor/mcp.json` |
+| Gemini CLI | `trusted-ua mcp install gemini` | `~/.gemini/settings.json` |
+| VS Code | `trusted-ua mcp install vscode` | the user `mcp.json` |
+| every client found | `trusted-ua mcp install all` | each of the above that is installed |
+
+`mcp status [client]` reports each entry as missing, current or stale (for example after the
+package moved); `mcp uninstall [client]` removes only the `pi-browser` entry. Other servers and
+settings in those files are never touched, and a file that can't be parsed is left as it is.
+
+**How approval works for other agents**
+
+- Each MCP connection is its own *caller session*: its own approvals, its own `javascript`
+  REPL, nothing borrowed from your Pi chats. It ends when the agent disconnects.
+- The first time an agent uses an app's tools, that app asks **"Allow codex to use Firefox
+  tools?"** — *Allow this time*, *Always allow codex*, or *Deny*. Firefox and Thunderbird ask
+  separately: allowing an agent in the browser doesn't open your mailbox to it.
+- Every tool call still asks as set on the permissions page (Ask / Deny / Always approve),
+  and the prompt names the agent: "claude-code wants to take a screenshot".
+- Prompts from other agents open a small **approval window** in the app that runs the tool,
+  even when the Pi sidebar or Space is closed. One window per app; further prompts queue in it.
+  **Closing the window denies** what's waiting. While a prompt waits, the Pi toolbar button
+  (Firefox) or Pi Space button (Thunderbird) shows a badge — clicking it brings the window back.
+- Browser tools act on a tab bound to the connection: agents call `browser_list_tabs` +
+  `browser_bind_tab` (or `browser_open_tab`) first. They can't take a tab that a Pi chat in the
+  sidebar has bound.
+- Agent names are what the agents report about themselves; they aren't verified. Any program
+  running as your user can reach the host, so the approval is about knowing and consenting,
+  not a security boundary.
+- To turn it off: Pi settings → permissions → **Other apps (MCP)** → untick *Allow other apps
+  (MCP) to use these tools*. Calls are then refused without a prompt. The same section lists the
+  agents you allowed or denied, with **Revoke**.
+
+Pi subagents that the host itself starts keep using the chat session they belong to.
 
 ## Using Firefox and Thunderbird together (cross-app broker)
 
@@ -206,7 +262,7 @@ sh build.sh          # 1) verifies node >= 22  2) npm ci  3) npm run build
    (workspaces: `packages/protocol`, `packages/webext`, `packages/pi-agent`,
    `firefox`, `thunderbird`, `tests`).
 3. `npm run build` — builds in dependency order: `@pi-browser/protocol` (tsc) →
-   `@pi-browser/webext` (tsc) → `@pi-browser/agent` (tsc, the native host) →
+   `@pi-browser/webext` (tsc) → `trusted-user-agent` (tsc, the native host) →
    `firefox` and `thunderbird` (tsc `--noEmit` type-check gate, then esbuild 0.25.x
    bundles each TypeScript source into the classic scripts shipped in the add-on;
    see the add-on submission's tooling note for details).

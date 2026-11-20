@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { discoverSkillPackages, SkillsRegistry } from "@pi-browser/agent/dist/skills/registry.js";
+import { discoverSkillPackages, SkillsRegistry } from "trusted-user-agent/dist/skills/registry.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGES_ROOT = path.resolve(HERE, "..", "skills-packages");

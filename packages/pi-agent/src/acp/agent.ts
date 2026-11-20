@@ -234,15 +234,30 @@ export class AcpAgent {
           this.transport().respond(id, this.opts.provider.permissionConfig());
           return;
         case X_PI_BROWSER.permission_set: {
-          const p = params as { tool?: unknown; state?: unknown };
-          const tool = typeof p.tool === "string" ? p.tool : "";
+          const p = (params ?? {}) as { tool?: unknown; state?: unknown; caller?: unknown; externalAccess?: unknown };
           const state =
             p.state === "allow" || p.state === "deny" || p.state === "ask" ? p.state : "ask";
+          if (typeof p.externalAccess === "boolean") {
+            this.transport().respond(id, this.opts.provider.setExternalAccess(p.externalAccess));
+            return;
+          }
+          const caller = parseCallerRef(p.caller);
+          if (caller) {
+            this.transport().respond(id, this.opts.provider.setCallerPermission(caller, state));
+            return;
+          }
+          const tool = typeof p.tool === "string" ? p.tool : "";
           this.transport().respond(id, this.opts.provider.setToolPermission(tool, state));
           return;
         }
         case X_PI_BROWSER.permission_clear: {
-          const p = params as { tool?: unknown } | undefined;
+          const p = params as { tool?: unknown; caller?: unknown } | undefined;
+          const caller = parseCallerRef(p?.caller);
+          if (caller) {
+            this.opts.provider.setCallerPermission(caller, "ask");
+            this.transport().respond(id, { cleared: [`${caller.application}:${caller.name}`] });
+            return;
+          }
           const tool = p && typeof p.tool === "string" ? p.tool : undefined;
           this.transport().respond(id, this.opts.provider.clearToolPermissions(tool));
           return;
@@ -717,4 +732,13 @@ export function extractPromptContent(prompt: ContentBlock[]): { text: string; im
     // resource/resource_link blocks: accepted but not forwarded (MVP).
   }
   return { text: texts.join("\n"), images };
+}
+
+/** Parse a `caller` ref from x-pi-browser/permission_set|clear params. */
+function parseCallerRef(raw: unknown): { application: "firefox" | "thunderbird"; name: string } | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as { application?: unknown; name?: unknown };
+  if (r.application !== "firefox" && r.application !== "thunderbird") return undefined;
+  if (typeof r.name !== "string" || r.name === "") return undefined;
+  return { application: r.application, name: r.name };
 }

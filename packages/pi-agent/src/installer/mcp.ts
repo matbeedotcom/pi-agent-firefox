@@ -82,7 +82,7 @@ function readConfig(file: string): McpConfigFile | null {
     const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as McpConfigFile;
   } catch {
-    // corrupt file: treat as missing (install rewrites; status reports the issue)
+    // corrupt file: reported, never rewritten (install refuses; status reports it)
   }
   return null;
 }
@@ -100,6 +100,10 @@ export function runMcpCommand(sub: McpSubcommand, homeDir: string, entryOpts: Mc
 
   switch (sub) {
     case "install": {
+      if (existsSync(file) && !readConfig(file)) {
+        // Never overwrite a file we can't parse: the user's other servers live there.
+        return { ok: false, lines: [`mcp: ${file} is not valid JSON — fix or remove it, then run /pi-browser mcp again (left unchanged)`] };
+      }
       const config = readConfig(file) ?? {};
       const servers =
         config.mcpServers && typeof config.mcpServers === "object" && !Array.isArray(config.mcpServers)
@@ -137,7 +141,7 @@ export function runMcpCommand(sub: McpSubcommand, homeDir: string, entryOpts: Mc
       }
       const config = readConfig(file);
       if (!config) {
-        return { ok: false, lines: [`mcp: ${file} exists but is not valid JSON — run /pi-browser mcp to rewrite it`] };
+        return { ok: false, lines: [`mcp: ${file} exists but is not valid JSON — fix or remove it, then run /pi-browser mcp`] };
       }
       const existing = config.mcpServers?.[MCP_SERVER_NAME];
       if (!existing) {

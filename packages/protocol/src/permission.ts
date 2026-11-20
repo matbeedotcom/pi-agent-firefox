@@ -30,6 +30,14 @@ import { CONTACTS_TOOLS } from "./contacts-tools.js";
 import { MAIL_TOOLS } from "./mail-tools.js";
 import { MAIL_MUTATION_TOOLS } from "./mail-mutation-tools.js";
 import type { AgentApplication, PermissionToolGroup } from "./integration.js";
+import {
+  CALLER_ALLOW_ALWAYS,
+  CALLER_ALLOW_ONCE,
+  CALLER_DENY,
+  applicationShortName,
+  type PermissionCallerMeta,
+  type PermissionRequestPiBrowserMeta,
+} from "./callers.js";
 
 /** Wire method name the host uses to request permission from the client. */
 export const REQUEST_PERMISSION_METHOD = CLIENT_METHODS.session_request_permission;
@@ -63,6 +71,8 @@ export function buildPermissionRequest(params: {
   toolCallId: string;
   title?: string;
   toolName: string;
+  /** Set for caller sessions (external MCP clients): shown as the requester. */
+  caller?: PermissionCallerMeta;
 }): RequestPermissionRequest {
   const options: PermissionOption[] = [
     { optionId: PERMISSION_ALLOW_ONCE, name: "Allow once", kind: "allow_once" },
@@ -86,8 +96,59 @@ export function buildPermissionRequest(params: {
       kind: "fetch",
     },
     options,
-    _meta: { piBrowser: { tool: params.toolName } },
+    _meta: {
+      piBrowser: {
+        tool: params.toolName,
+        ...(params.caller ? { caller: params.caller } : {}),
+      } satisfies PermissionRequestPiBrowserMeta,
+    },
   };
+}
+
+/**
+ * Build the one-time "allow <caller> to use <App> tools?" request for a
+ * caller session (external MCP client). Older add-ons show it as a normal
+ * prompt titled with that question.
+ */
+export function buildCallerApprovalRequest(params: {
+  sessionId: string;
+  toolCallId: string;
+  caller: PermissionCallerMeta;
+  application: AgentApplication;
+  /** The tool call that needs the approval. */
+  toolName: string;
+}): RequestPermissionRequest {
+  const app = applicationShortName(params.application);
+  return {
+    sessionId: params.sessionId,
+    toolCall: {
+      toolCallId: params.toolCallId,
+      title: `${params.caller.name} wants to use ${app} tools`,
+      status: "pending",
+      kind: "other",
+    },
+    options: [
+      { optionId: CALLER_ALLOW_ONCE, name: "Allow this time", kind: "allow_once" },
+      { optionId: CALLER_ALLOW_ALWAYS, name: `Always allow ${params.caller.name}`, kind: "allow_always" },
+      { optionId: CALLER_DENY, name: "Deny", kind: "reject_always" },
+    ],
+    _meta: {
+      // No `tool`: add-ons without caller support then describe the prompt
+      // from its title ("codex wants to use Firefox tools").
+      piBrowser: {
+        triggerTool: params.toolName,
+        caller: params.caller,
+        callerApproval: true,
+        application: params.application,
+      } satisfies PermissionRequestPiBrowserMeta,
+    },
+  };
+}
+
+/** The `_meta.piBrowser` block of a permission request (typed, may be empty). */
+export function permissionRequestMeta(req: { _meta?: unknown } | undefined): PermissionRequestPiBrowserMeta {
+  const meta = (req?._meta as { piBrowser?: unknown } | undefined)?.piBrowser;
+  return typeof meta === "object" && meta !== null ? (meta as PermissionRequestPiBrowserMeta) : {};
 }
 
 /** True when the user allowed the tool (any allow_* option). */

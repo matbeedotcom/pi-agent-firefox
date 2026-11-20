@@ -22,6 +22,17 @@
  * speaks exactly this). Methods served: initialize, notifications/
  * initialized, ping, tools/list, tools/call.
  *
+ * Callers (openspec external-mcp-callers): every connection is its own
+ * *caller session* (`mcp:<uuid>`) named by the `pi-browser/caller`
+ * notification the stdio bridge sends first, or by the client's own
+ * `initialize` clientInfo. Its calls route through the capability registry
+ * with no add-on chat session, go through the caller gate (external access +
+ * per-app caller approval) and keep their own grants and REPL state; the
+ * session ends when the connection closes. A connection whose bridge
+ * reports the broker's own PI_BROWSER_HOST_CHILD (or whose parent process
+ * is the broker) belongs to a pi session the host spawned: its calls keep
+ * the old routing to the most recently active add-on session.
+ *
  * Security model (mirrors broker-ipc.ts): same-user only — the socket lives
  * in the 0700 run dir under $HOME and is 0600, no localhost TCP. Any
  * same-user process (e.g. a pi-subagents child spawned by the broker) can
@@ -39,7 +50,15 @@ import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { PI_BROWSER_META, PI_BROKER } from "@pi-browser/protocol";
+import { randomUUID } from "node:crypto";
+import {
+  MCP_CALLER_NOTIFICATION,
+  PI_BROWSER_META,
+  PI_BROKER,
+  UNKNOWN_CALLER_NAME,
+  parseCallerInfo,
+  type CallerInfo,
+} from "@pi-browser/protocol";
 import { ipcEndpoint, isNamedPipe } from "./broker-ipc.js";
 import { BROWSER_TOOL_SCHEMAS, REPL_TOOL_SCHEMAS } from "../browser/schemas.js";
 import { MAIL_TOOL_SCHEMAS } from "../mail/schemas.js";
@@ -52,10 +71,28 @@ import type { BrowserToolBridge } from "../tool-bridge.js";
 
 export interface McpBrowserServerOptions {
   log: Logger;
-  /** Bridge tool calls are routed through (no sessionId → last-active ACP session). */
+  /** Bridge tool calls are routed through (caller sessions; host children → last-active ACP session). */
   bridge: BrowserToolBridge;
   /** Socket path; defaults to the broker run dir (env PI_BROWSER_BROKER_DIR honored). */
   socketPath?: string;
+  /**
+   * The broker instance id the host put in PI_BROWSER_HOST_CHILD. A caller
+   * reporting it (or whose parent pid is `brokerPid`) was spawned by the host.
+   */
+  instanceId?: string;
+  /** The broker's pid (default process.pid). */
+  brokerPid?: number;
+}
+
+/** Per-connection caller state. */
+interface ConnectionCaller {
+  /** Caller session id (`mcp:<uuid>`). */
+  readonly id: string;
+  info: CallerInfo;
+  /** Named by `pi-browser/caller` (takes precedence over initialize). */
+  announced: boolean;
+  /** A caller-session call ran (closeSession needed at disconnect). */
+  used: boolean;
 }
 
 export interface McpBrowserServerHandle {
@@ -92,8 +129,9 @@ export function mcpInitializeResult(): Record<string, unknown> {
     capabilities: { tools: { listChanged: false } },
     serverInfo: SERVER_INFO,
     instructions:
-      "Pi Browser tools: browser_* act on the Firefox tab bound to the active Pi session; " +
-      "mail_*, compose_*, contacts_* act on Thunderbird. Each tool runs in the app that serves it.",
+      "Pi Browser tools: browser_* act on the Firefox tab bound to this connection — start with " +
+      "browser_list_tabs + browser_bind_tab (or browser_open_tab). mail_*, compose_*, contacts_* act on " +
+      "Thunderbird. Each tool runs in the app that serves it, and the user approves each tool call there.",
   };
 }
 
@@ -135,14 +173,31 @@ async function dispatch(
   msg: JsonRpcMessage,
   bridge: BrowserToolBridge,
   log: Logger,
+  caller: ConnectionCaller,
+  isHostChild: (info: CallerInfo) => boolean,
 ): Promise<void> {
   const { id, method, params } = msg;
   const isNotification = id === undefined;
 
   switch (method) {
-    case "initialize":
+    case MCP_CALLER_NOTIFICATION:
+      caller.info = parseCallerInfo(params);
+      caller.announced = true;
+      log.info(
+        `mcp browser: caller ${caller.id} is "${caller.info.name}"${caller.info.version ? ` ${caller.info.version}` : ""}` +
+          `${caller.info.pid !== undefined ? ` (bridge pid ${caller.info.pid})` : ""}${isHostChild(caller.info) ? " [host child]" : ""}`,
+      );
+      return;
+    case "initialize": {
+      const clientInfo = isRecord(params) ? params.clientInfo : undefined;
+      if (!caller.announced && isRecord(clientInfo)) {
+        const parsed = parseCallerInfo(clientInfo);
+        caller.info = { ...caller.info, name: parsed.name, ...(parsed.version ? { version: parsed.version } : {}) };
+        log.info(`mcp browser: caller ${caller.id} is "${caller.info.name}" (from initialize)`);
+      }
       reply(socket, id, mcpInitializeResult());
       return;
+    }
     case "notifications/initialized":
       return; // notification: no response
     case "ping":
@@ -160,9 +215,18 @@ async function dispatch(
         replyError(socket, id, -32602, `unknown tool: ${tool}`);
         return;
       }
-      log.info(`mcp browser: tools/call ${tool}`);
+      const hostChild = isHostChild(caller.info);
+      log.info(`mcp browser: tools/call ${tool} (${hostChild ? "host child" : `caller ${caller.info.name}, ${caller.id}`})`);
       try {
-        const result = await bridge.call({ tool, args });
+        let result;
+        if (hostChild) {
+          // Spawned by this host (a pi subagent's MCP client): keep the
+          // routing to the most recently active add-on session.
+          result = await bridge.call({ tool, args });
+        } else {
+          caller.used = true;
+          result = await bridge.call({ tool, args, sessionId: caller.id, caller: caller.info });
+        }
         reply(socket, id, {
           content: result.content,
           ...(result.isError ? { isError: true } : {}),
@@ -193,6 +257,10 @@ async function dispatch(
  */
 export async function startMcpBrowserServer(opts: McpBrowserServerOptions): Promise<McpBrowserServerHandle> {
   const { log, bridge } = opts;
+  const brokerPid = opts.brokerPid ?? process.pid;
+  const isHostChild = (info: CallerInfo): boolean =>
+    (opts.instanceId !== undefined && info.hostChild === opts.instanceId) ||
+    (info.ppid !== undefined && info.ppid === brokerPid);
   const dir =
     process.env.PI_BROWSER_BROKER_DIR || path.join(os.homedir(), ".pi", PI_BROKER.runDir);
   const socketPath = opts.socketPath ?? defaultMcpEndpoint();
@@ -250,7 +318,13 @@ export async function startMcpBrowserServer(opts: McpBrowserServerOptions): Prom
   function handleConnection(socket: net.Socket, bridge: BrowserToolBridge, log: Logger): void {
     let buffer = "";
     const pending = new Set<Promise<void>>();
-    log.debug("mcp browser: client connected");
+    const caller: ConnectionCaller = {
+      id: `mcp:${randomUUID()}`,
+      info: { name: UNKNOWN_CALLER_NAME },
+      announced: false,
+      used: false,
+    };
+    log.debug(`mcp browser: client connected (${caller.id})`);
 
     socket.on("data", (chunk: Buffer) => {
       buffer += chunk.toString("utf8");
@@ -266,16 +340,27 @@ export async function startMcpBrowserServer(opts: McpBrowserServerOptions): Prom
           replyError(socket, null, -32700, "parse error");
           continue;
         }
-        const p = dispatch(socket, msg, bridge, log);
+        const p = dispatch(socket, msg, bridge, log, caller, isHostChild);
         pending.add(p);
         void p.finally(() => pending.delete(p));
       }
     });
+    let cleaned = false;
     const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
       connections.delete(socket);
-      log.debug("mcp browser: client disconnected");
+      log.debug(`mcp browser: client disconnected (${caller.id})`);
       for (const p of pending) void p.catch(() => undefined);
       pending.clear();
+      // End the caller session: grants, pending prompts, REPL worker.
+      if (caller.used) {
+        try {
+          bridge.closeSession(caller.id);
+        } catch (err) {
+          log.debug(`mcp browser: closing ${caller.id} failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     };
     socket.on("close", cleanup);
     socket.on("error", (err) => {

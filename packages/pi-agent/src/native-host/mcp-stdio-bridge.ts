@@ -17,11 +17,19 @@
  *   call returns an MCP tool error telling the model what to do instead of
  *   hanging.
  *
+ * - Caller identity: the bridge remembers the client's `initialize`
+ *   clientInfo and, as the first line of every broker connection (including
+ *   reconnects), sends the `pi-browser/caller` notification: name, version,
+ *   its own pid and parent pid, and the PI_BROWSER_HOST_CHILD value it
+ *   inherited. The broker runs the connection as that caller's session.
+ *   An older broker ignores the notification.
+ *
  * Wire format on both sides: newline-delimited JSON-RPC 2.0 (MCP stdio).
  * stdout carries protocol messages only; diagnostics go to stderr.
  */
 import net from "node:net";
 import { createInterface } from "node:readline";
+import { HOST_CHILD_ENV, MCP_CALLER_NOTIFICATION, normalizeCallerName, type CallerInfo } from "@pi-browser/protocol";
 import { defaultMcpEndpoint, mcpInitializeResult, mcpToolListResult } from "./mcp-server.js";
 
 /** How long a tools/call waits to connect to the broker before giving up. */
@@ -44,6 +52,8 @@ export interface BridgeOptions {
   output: NodeJS.WritableStream;
   /** Diagnostics sink (stderr). */
   log?: (line: string) => void;
+  /** Environment to read PI_BROWSER_HOST_CHILD from (default process.env). */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Run the bridge until `input` ends. Resolves when it has shut down. */
@@ -56,6 +66,12 @@ export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
     write({ jsonrpc: "2.0", id, error: { code, message } });
   const toolError = (id: unknown, text: string) =>
     reply(id, { content: [{ type: "text", text }], isError: true });
+
+  const env = opts.env ?? process.env;
+  /** Who is calling: filled from initialize's clientInfo. */
+  const caller: CallerInfo = { name: normalizeCallerName(undefined), pid: process.pid, ppid: process.ppid };
+  const hostChild = env[HOST_CHILD_ENV];
+  if (hostChild) caller.hostChild = hostChild;
 
   let socket: net.Socket | undefined;
   let connecting: Promise<net.Socket | undefined> | undefined;
@@ -73,6 +89,9 @@ export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
       s.once("connect", () => {
         clearTimeout(timer);
         socket = s;
+        // Identify the caller first: the broker names this connection's
+        // caller session from it (older brokers drop unknown notifications).
+        s.write(`${JSON.stringify({ jsonrpc: "2.0", method: MCP_CALLER_NOTIFICATION, params: caller })}\n`);
         let buf = "";
         s.setEncoding("utf8");
         s.on("data", (chunk: string) => {
@@ -131,9 +150,15 @@ export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
     }
     const isRequest = msg.id !== undefined && msg.id !== null;
     switch (msg.method) {
-      case "initialize":
+      case "initialize": {
+        const info = (msg.params as { clientInfo?: { name?: unknown; version?: unknown } } | undefined)?.clientInfo;
+        if (info && typeof info === "object") {
+          caller.name = normalizeCallerName(info.name);
+          if (typeof info.version === "string" && info.version.trim()) caller.version = info.version.trim().slice(0, 32);
+        }
         if (isRequest) reply(msg.id, mcpInitializeResult());
         return;
+      }
       case "ping":
         if (isRequest) reply(msg.id, {});
         return;

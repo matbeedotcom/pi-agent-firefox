@@ -6,8 +6,8 @@ real add-on against the installed Thunderbird (`/home/acidhax/thunderbird`,
 155.0.1 ESR).
 
 ## Prereqs
-- Native host installed for Thunderbird: `npx @pi-browser/agent install thunderbird`
-  (registers `dev.pi.agent`). `npx @pi-browser/agent status` should show a fresh heartbeat.
+- Native host installed for Thunderbird: `trusted-ua install thunderbird`
+  (registers `dev.pi.agent`). `trusted-ua status` should show a fresh heartbeat.
 - The xpi: **`/tmp/pi-thunderbird-t46.xpi`** (rebuild with `cd thunderbird && node build.mjs && zip -r -X /tmp/pi-thunderbird-t46.xpi .` from `thunderbird/dist/` if in doubt).
 - A test account with **at least one message that has an attachment**, **three messages** (one being an “invoice” for T4), and **one contact** (e.g. “Sarah …, Acme”) for T6.
 

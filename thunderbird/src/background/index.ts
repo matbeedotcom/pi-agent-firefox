@@ -37,6 +37,7 @@ import {
   type SessionUpdate,
 } from "@pi-browser/protocol";
 import { AcpClient, SESSION_OPEN_TIMEOUT_MS, fetchPiTheme, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
+import { ApprovalWindowController, isCallerPermissionRequest } from "@pi-browser/webext";
 import { dispatchMailTool, type MailToolContext } from "./mail-dispatcher.js";
 import { dispatchComposeTool } from "./compose-dispatcher.js";
 import { dispatchMutationTool } from "./mutation-dispatcher.js";
@@ -80,7 +81,56 @@ const pendingPermissions = new Map<string, PendingPermission>();
 /** Match the host's PERMISSION_TIMEOUT_MS (120s) with a small buffer. */
 const PERMISSION_PROMPT_TIMEOUT_MS = 125_000;
 
+/**
+ * Prompts from external MCP callers (Claude Code, Codex, ...) never go to
+ * the Space or panes: the user is usually in that other program, so they
+ * open a popup approval window (one at a time, queued) plus a badge on the
+ * Pi Space button. Closing the window denies what is waiting (openspec
+ * external-mcp-callers D6). Opening the Pi pane or Space while something
+ * waits brings the window to the front.
+ */
+const approvals = new ApprovalWindowController({
+  url: browser.runtime.getURL("approval/approval.html"),
+  api: {
+    open: async (url) => {
+      // No `focused` in createData: Thunderbird rejects it ("unsupported").
+      // Ask for focus, and flash the taskbar button: Windows keeps another
+      // program in front (foreground lock), so the flash + badge are what
+      // the user sees there (checked live, openspec task 1.3).
+      const win = await browser.windows.create({ type: "popup", url, width: 460, height: 380 });
+      if (win.id !== undefined) {
+        await browser.windows.update(win.id, { focused: true }).catch(() => {});
+        await browser.windows.update(win.id, { drawAttention: true }).catch(() => {});
+      }
+      return win.id;
+    },
+    focus: async (windowId) => {
+      await browser.windows.update(windowId, { focused: true, drawAttention: true });
+    },
+    close: async (windowId) => {
+      await browser.windows.remove(windowId);
+    },
+  },
+  setBadge: (text) => {
+    if (spaceId === undefined) return;
+    void browser.spaces.update(spaceId, undefined, { badgeText: text }).catch((err: unknown) => {
+      console.warn("[pi-thunderbird] could not set the Pi Space badge", err);
+    });
+  },
+  notifyPage: (requests) => {
+    browser.runtime.sendMessage({ type: "pi/approval_state", requests }).catch(() => {
+      /* approval window not open */
+    });
+  },
+  cancel: (permId) => resolvePermission(permId, "cancelled"),
+});
+browser.windows.onRemoved.addListener((windowId) => approvals.onWindowRemoved(windowId));
+
 function pushPermissionRequest(request: RequestPermissionRequest): void {
+  if (isCallerPermissionRequest(request)) {
+    approvals.add(request);
+    return;
+  }
   broadcastUi({ type: "pi/permission_request", request });
 }
 
@@ -97,6 +147,7 @@ function resolvePermission(permId: string, optionId: string | "cancelled"): void
   clearTimeout(pending.timer);
   pendingPermissions.delete(permId);
   pending.resolve(optionId);
+  approvals.remove(permId);
 }
 
 /**
@@ -246,6 +297,10 @@ const client = new AcpClient(
     // (e.g. the browser). Point the user there; we do not answer it.
     onPermissionPrompted: (params) => {
       broadcastUi({ type: "pi/permission_prompted", params });
+    },
+    // The host gave up on a prompt (timeout, or its MCP caller disconnected).
+    onPermissionWithdrawn: (params) => {
+      if (pendingPermissions.has(params.toolCallId)) resolvePermission(params.toolCallId, "cancelled");
     },
     // A peer app (browser) connected/disconnected: refresh the union in our
     // status copy and re-push state so the Space and panes can update their
@@ -459,6 +514,15 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
     sendResponse({ ok: true });
     return;
   }
+  if (msg.type === "pi/approval_get") {
+    sendResponse({ requests: approvals.pending() });
+    return;
+  }
+  if (msg.type === "pi/approval_focus") {
+    // The Space page opened (its button was clicked): show a waiting approval window.
+    sendResponse({ focused: approvals.focus() });
+    return;
+  }
   if (msg.type === "pi/ensure_connected") {
     // Onboarding: the space's "Check again now" button. Idempotent no-op when
     // already connected; otherwise attempts the connect immediately.
@@ -575,14 +639,14 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
       const state = payload.state === "allow" || payload.state === "deny" || payload.state === "ask" ? payload.state : "ask";
       return client.request<PermissionSetResult>(
         X_PI_BROWSER.permission_set,
-        { tool: String(payload.tool ?? ""), state },
+        permissionSetParams(payload as unknown as Record<string, unknown>, state),
         10_000,
       );
     }
     case "permission_clear": {
       return client.request<PermissionClearResult>(
         X_PI_BROWSER.permission_clear,
-        payload.tool ? { tool: String(payload.tool) } : {},
+        permissionClearParams(payload as unknown as Record<string, unknown>),
         10_000,
       );
     }
@@ -629,6 +693,8 @@ browser.runtime.onConnect.addListener((port: browser.runtime.Port) => {
       // The pane reports its own tabId (from its URL query); prefer that.
       tabId = typeof msg.tabId === "number" ? msg.tabId : tabId;
       if (tabId !== undefined) panePorts.set(tabId, port);
+      // The Pi Space button opened the pane: show a waiting approval window.
+      approvals.focus();
       try {
         port.postMessage({ type: "pi/state", state: currentUiState() });
       } catch {
@@ -715,3 +781,18 @@ setInterval(() => {
     client.ensureConnected();
   }
 }, 10_000);
+
+/** x-pi-browser/permission_set params from a settings action (tool, caller or externalAccess). */
+function permissionSetParams(payload: Record<string, unknown>, state: "allow" | "deny" | "ask"): Record<string, unknown> {
+  if (typeof payload.externalAccess === "boolean") return { externalAccess: payload.externalAccess };
+  const caller = payload.caller as { application?: unknown; name?: unknown } | undefined;
+  if (caller && typeof caller.name === "string") return { caller: { application: caller.application, name: caller.name }, state };
+  return { tool: String(payload.tool ?? ""), state };
+}
+
+/** x-pi-browser/permission_clear params from a settings action (tool, caller, or all tools). */
+function permissionClearParams(payload: Record<string, unknown>): Record<string, unknown> {
+  const caller = payload.caller as { application?: unknown; name?: unknown } | undefined;
+  if (caller && typeof caller.name === "string") return { caller: { application: caller.application, name: caller.name } };
+  return payload.tool ? { tool: String(payload.tool) } : {};
+}

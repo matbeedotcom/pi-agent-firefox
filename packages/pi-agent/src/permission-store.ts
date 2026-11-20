@@ -11,6 +11,11 @@
  * File format (v2):
  *   { "version": 2, "tools": { "mail_search": "allow", "mail_move": "deny" } }
  *
+ * External MCP callers (v0.3.0) add two optional keys to the same v2 file:
+ *   "callers": { "firefox": { "codex": "allow" }, "thunderbird": { "x": "deny" } }
+ *   "externalAccess": false        (stored only when turned off; default on)
+ * Older hosts ignore both keys.
+ *
  * Only tools with a non-default decision are stored; absence means "ask".
  * v1 files ({"tools": {"name": true}}) are migrated on load (true → allow).
  * The file is small (one key per tool), so synchronous fs calls are fine;
@@ -19,7 +24,12 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { PermissionToolState } from "@pi-browser/protocol";
+import type {
+  AgentApplication,
+  CallerPermissionEntry,
+  CallerPermissionState,
+  PermissionToolState,
+} from "@pi-browser/protocol";
 
 export interface PermissionStoreOptions {
   /**
@@ -32,7 +42,11 @@ export interface PermissionStoreOptions {
 interface PermissionFileV2 {
   version: 2;
   tools: Record<string, "allow" | "deny">;
+  callers?: Partial<Record<AgentApplication, Record<string, CallerPermissionState>>>;
+  externalAccess?: boolean;
 }
+
+const CALLER_APPS: readonly AgentApplication[] = ["firefox", "thunderbird"];
 
 interface PermissionFileV1 {
   version: 1;
@@ -49,6 +63,9 @@ export class PermissionStore {
   private readonly filePath: string;
   /** Only non-default decisions are kept; absence = "ask". */
   private readonly tools = new Map<string, "allow" | "deny">();
+  /** Remembered caller decisions: "<app>\u0000<name>" → allow | deny. */
+  private readonly callers = new Map<string, CallerPermissionState>();
+  private externalAccess = true;
   private loaded = false;
 
   constructor(options: PermissionStoreOptions = {}) {
@@ -72,6 +89,17 @@ export class PermissionStore {
       if (raw.version === 2) {
         for (const [name, state] of Object.entries(raw.tools as Record<string, unknown>)) {
           if (state === "allow" || state === "deny") this.tools.set(name, state);
+        }
+        const v2 = raw as Partial<PermissionFileV2>;
+        if (v2.externalAccess === false) this.externalAccess = false;
+        if (typeof v2.callers === "object" && v2.callers !== null) {
+          for (const app of CALLER_APPS) {
+            const byName = (v2.callers as Record<string, unknown>)[app];
+            if (typeof byName !== "object" || byName === null) continue;
+            for (const [name, state] of Object.entries(byName as Record<string, unknown>)) {
+              if (state === "allow" || state === "deny") this.callers.set(callerKey(app, name), state);
+            }
+          }
         }
       } else if (raw.version === 1) {
         // v1 stored only allows (true); migrate to the tri-state file.
@@ -140,10 +168,60 @@ export class PermissionStore {
       .sort();
   }
 
+  // ------------------------------------------------------------------
+  // External MCP callers
+  // ------------------------------------------------------------------
+
+  /** Whether external MCP callers may use the tools at all (default true). */
+  getExternalAccess(): boolean {
+    this.ensureLoaded();
+    return this.externalAccess;
+  }
+
+  setExternalAccess(on: boolean): void {
+    this.ensureLoaded();
+    this.externalAccess = on;
+    this.persist();
+  }
+
+  /** A caller's remembered decision for one app (undefined = ask). */
+  getCallerState(app: AgentApplication, name: string): CallerPermissionState | undefined {
+    this.ensureLoaded();
+    return this.callers.get(callerKey(app, name));
+  }
+
+  /** Remember (allow | deny) or forget ("ask") a caller's decision for one app. */
+  setCallerState(app: AgentApplication, name: string, state: CallerPermissionState | "ask"): void {
+    this.ensureLoaded();
+    if (state === "ask") {
+      if (!this.callers.delete(callerKey(app, name))) return;
+    } else {
+      this.callers.set(callerKey(app, name), state);
+    }
+    this.persist();
+  }
+
+  /** Every remembered caller decision, sorted by app then name. */
+  listCallers(): CallerPermissionEntry[] {
+    this.ensureLoaded();
+    return [...this.callers.entries()]
+      .map(([key, state]) => {
+        const [application, name] = splitCallerKey(key);
+        return { application, name, state };
+      })
+      .sort((a, b) => a.application.localeCompare(b.application) || a.name.localeCompare(b.name));
+  }
+
   private persist(): void {
+    const callers: NonNullable<PermissionFileV2["callers"]> = {};
+    for (const { application, name, state } of this.listCallers()) {
+      (callers[application] ??= {})[name] = state;
+    }
     const file: PermissionFileV2 = {
       version: 2,
       tools: Object.fromEntries([...this.tools.entries()].sort(([a], [b]) => a.localeCompare(b))),
+      ...(Object.keys(callers).length > 0 ? { callers } : {}),
+      ...(this.externalAccess ? {} : { externalAccess: false }),
     };
     const dir = dirname(this.filePath);
     mkdirSync(dir, { recursive: true });
@@ -151,4 +229,13 @@ export class PermissionStore {
     writeFileSync(tmp, JSON.stringify(file, null, 2) + "\n", "utf8");
     renameSync(tmp, this.filePath);
   }
+}
+
+function callerKey(app: AgentApplication, name: string): string {
+  return `${app}\u0000${name}`;
+}
+
+function splitCallerKey(key: string): [AgentApplication, string] {
+  const i = key.indexOf("\u0000");
+  return [key.slice(0, i) as AgentApplication, key.slice(i + 1)];
 }
