@@ -1,6 +1,6 @@
 {
   "name": "@pi-browser/agent",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "description": "Pi Browser: Native Messaging host + ACP adapter for Pi Coding Agent, plus /pi-browser installer commands",
@@ -18,7 +18,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
     "@earendil-works/pi-coding-agent": "^0.85.1",
-    "@pi-browser/protocol": "0.2.3",
+    "@pi-browser/protocol": "0.2.4",
     "typebox": "^1.1.32",
     "zod": "^4.0.0"
   },
