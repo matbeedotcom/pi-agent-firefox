@@ -70,9 +70,10 @@ import type {
   PiBackend,
   ToolSpec,
 } from "./backend.js";
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 import { createSkillsExtensionFactory } from "../skills/extension.js";
 import type { Logger } from "../logger.js";
+import { envValue } from "../env.js";
 
 interface PiBackendOptions {
   log: Logger;
@@ -201,7 +202,7 @@ export class PiSdkBackend implements PiBackend {
    * client has initialized. Disable with PI_BROWSER_PREWARM=0.
    */
   prewarmWorkspace(createDir: () => Promise<string>): void {
-    if (this.prewarmStarted || process.env.PI_BROWSER_PREWARM === "0") return;
+    if (this.prewarmStarted || envValue("PREWARM") === "0") return;
     this.prewarmStarted = true;
     void (async () => {
       try {
@@ -246,8 +247,8 @@ export class PiSdkBackend implements PiBackend {
   async openSession(opts: OpenSessionOptions): Promise<BackendSession> {
     const info = (await SessionManager.listAll()).find((s) => s.id === opts.sessionId);
     if (!info) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.SESSION_NOT_FOUND,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.SESSION_NOT_FOUND,
         `Pi session not found: ${opts.sessionId}`,
       );
     }
@@ -296,8 +297,8 @@ export class PiSdkBackend implements PiBackend {
       const created = await createAgentSessionFromServices(options as never);
       agentSession = created.session;
     } catch (err) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.PI_START_FAILED,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.PI_START_FAILED,
         `failed to start Pi session: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
@@ -398,8 +399,8 @@ export class PiSdkBackend implements PiBackend {
         } catch (err) {
           // A prompt that is rejected outright (not an aborted turn) is a
           // protocol-level failure the client should see.
-          throw new PiBrowserProtocolError(
-            PI_BROWSER_ERROR.INTERNAL,
+          throw new TrustedUaProtocolError(
+            TRUSTED_UA_ERROR.INTERNAL,
             `prompt failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
@@ -416,8 +417,8 @@ export class PiSdkBackend implements PiBackend {
       setModel: async (valueId) => {
         const model = this.resolveModel(valueId);
         if (!model) {
-          throw new PiBrowserProtocolError(
-            PI_BROWSER_ERROR.ACP_CAPABILITY_UNSUPPORTED,
+          throw new TrustedUaProtocolError(
+            TRUSTED_UA_ERROR.ACP_CAPABILITY_UNSUPPORTED,
             `unknown model: ${valueId}`,
           );
         }

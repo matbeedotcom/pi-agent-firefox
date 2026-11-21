@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   parseSkillPackage,
   type ReviewResult,
   type RegisteredSkill,
@@ -113,7 +113,7 @@ function setup(options: { grants?: Map<string, SkillGrant>; contextOk?: boolean;
   const contextRequests: unknown[] = [];
   const results: SkillsResultParams[] = [];
   b.transport.onRequest = (method, params, id) => {
-    if (method === X_PI_BROWSER.skills_context) {
+    if (method === X_TRUSTED_UA.skills_context) {
       contextRequests.push(params);
       if (options.contextOk === false) {
         b.transport.respondError(id, { code: -32000, message: "snapshot gone" });
@@ -127,7 +127,7 @@ function setup(options: { grants?: Map<string, SkillGrant>; contextOk?: boolean;
       b.transport.respond(id, out);
       return;
     }
-    if (method === X_PI_BROWSER.skills_result) {
+    if (method === X_TRUSTED_UA.skills_result) {
       results.push(params as SkillsResultParams);
       b.transport.respond(id, { delivered: true });
       return;
@@ -162,9 +162,9 @@ function setup(options: { grants?: Map<string, SkillGrant>; contextOk?: boolean;
 test("lifecycle sink records plan, event ack and job result lines (agent observation log)", async () => {
   const lifecycle: SkillsLifecycleEvent[] = [];
   const { call, skillList } = setup({ lifecycle: (e) => lifecycle.push(e) });
-  const plan = (await call(X_PI_BROWSER.skills_plan, planParams)) as SkillsPlanResult;
+  const plan = (await call(X_TRUSTED_UA.skills_plan, planParams)) as SkillsPlanResult;
   assert.equal(plan.status, "ok");
-  const ack = (await call(X_PI_BROWSER.skills_event, { event: event(1) })) as SkillsEventResult;
+  const ack = (await call(X_TRUSTED_UA.skills_event, { event: event(1) })) as SkillsEventResult;
   assert.equal(ack.status, "accepted");
   await new Promise((r) => setTimeout(r, 50)); // job settlement is async
   const types = lifecycle.map((e) => e.type);
@@ -203,18 +203,18 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 25));
 
 test("plans compile with versioning; grants and adapters gate rules", async () => {
   const { call } = setup();
-  const first = (await call(X_PI_BROWSER.skills_plan, planParams)) as SkillsPlanResult;
+  const first = (await call(X_TRUSTED_UA.skills_plan, planParams)) as SkillsPlanResult;
   assert.equal(first.status, "ok");
   assert.equal(first.plan?.planVersion, 1);
   assert.equal(first.plan?.rules.length, 2);
   assert.equal(first.plan?.unavailable.length, 0);
 
-  const second = (await call(X_PI_BROWSER.skills_plan, planParams)) as SkillsPlanResult;
+  const second = (await call(X_TRUSTED_UA.skills_plan, planParams)) as SkillsPlanResult;
   assert.equal(second.plan?.planVersion, 2);
 
   // No grants: nothing arms (installed ≠ enabled, design §12).
   const ungranted = setup({ grants: new Map() });
-  const empty = (await ungranted.call(X_PI_BROWSER.skills_plan, planParams)) as SkillsPlanResult;
+  const empty = (await ungranted.call(X_TRUSTED_UA.skills_plan, planParams)) as SkillsPlanResult;
   assert.equal(empty.status, "ok");
   assert.equal(empty.plan?.rules.length, 0);
 });
@@ -223,33 +223,33 @@ test("plan rejects malformed requests as protocol errors, not silent plans", asy
   const { call } = setup();
   // A coordinator only sends verified http(s) URLs with complete frame
   // identity; anything else is a client bug → JSON-RPC error, not a plan.
-  await assert.rejects(call(X_PI_BROWSER.skills_plan, { ...planParams, url: "ftp://example.com/x" }), /skills: Unsupported document URL/);
-  await assert.rejects(call(X_PI_BROWSER.skills_plan, { ...planParams, source: { ...planParams.source, frameId: undefined } }), /skills: Browser events require document, tab and frame identity/);
+  await assert.rejects(call(X_TRUSTED_UA.skills_plan, { ...planParams, url: "ftp://example.com/x" }), /skills: Unsupported document URL/);
+  await assert.rejects(call(X_TRUSTED_UA.skills_plan, { ...planParams, source: { ...planParams.source, frameId: undefined } }), /skills: Browser events require document, tab and frame identity/);
 });
 
 test("events naming a stale or unknown plan are rejected, never guessed", async () => {
   const { call } = setup();
-  const noPlan = (await call(X_PI_BROWSER.skills_event, { event: event(1) })) as SkillsEventResult;
+  const noPlan = (await call(X_TRUSTED_UA.skills_event, { event: event(1) })) as SkillsEventResult;
   assert.deepEqual(noPlan, { status: "stale-plan", reason: noPlan.reason });
   assert.match(noPlan.reason ?? "", /re-plan/);
 
-  await call(X_PI_BROWSER.skills_plan, planParams); // version 1
-  const stale = (await call(X_PI_BROWSER.skills_event, { event: event(99) })) as SkillsEventResult;
+  await call(X_TRUSTED_UA.skills_plan, planParams); // version 1
+  const stale = (await call(X_TRUSTED_UA.skills_event, { event: event(99) })) as SkillsEventResult;
   assert.equal(stale.status, "stale-plan");
 });
 
 test("non-matching events ack no-match without model work", async () => {
   const { call, fake } = setup();
-  await call(X_PI_BROWSER.skills_plan, planParams);
-  const result = (await call(X_PI_BROWSER.skills_event, { event: event(1, { event: "test-package:draft.paused" }) })) as SkillsEventResult;
+  await call(X_TRUSTED_UA.skills_plan, planParams);
+  const result = (await call(X_TRUSTED_UA.skills_event, { event: event(1, { event: "test-package:draft.paused" }) })) as SkillsEventResult;
   assert.equal(result.status, "no-match");
   assert.equal(fake.submissions.length, 0);
 });
 
 test("matching event resolves context by request, submits jobs, and delivers an acked result", async () => {
   const { call, fake, contextRequests, results, skillList } = setup();
-  await call(X_PI_BROWSER.skills_plan, planParams);
-  const ack = (await call(X_PI_BROWSER.skills_event, { event: event(1) })) as SkillsEventResult;
+  await call(X_TRUSTED_UA.skills_plan, planParams);
+  const ack = (await call(X_TRUSTED_UA.skills_event, { event: event(1) })) as SkillsEventResult;
   assert.equal(ack.status, "accepted");
   assert.equal(ack.jobs?.length, 2);
 
@@ -299,15 +299,15 @@ test("a runtime failure reports unavailable, never clear", async () => {
     endpoint: a.transport,
   });
   b.transport.onRequest = (method, params, id) => {
-    if (method === X_PI_BROWSER.skills_result) results.push(params as SkillsResultParams);
-    b.transport.respond(id, method === X_PI_BROWSER.skills_context ? { contextRef: "r", context: { draft: "x" }, bytes: 3 } : { ok: true });
+    if (method === X_TRUSTED_UA.skills_result) results.push(params as SkillsResultParams);
+    b.transport.respond(id, method === X_TRUSTED_UA.skills_context ? { contextRef: "r", context: { draft: "x" }, bytes: 3 } : { ok: true });
   };
   const call = (method: string, params: unknown): Promise<unknown> =>
     new Promise((resolve, reject) => {
       protocol.handle(method, params, resolve, (code, message) => reject(new Error(`${code}: ${message}`)));
     });
-  await call(X_PI_BROWSER.skills_plan, planParams);
-  const ack = (await call(X_PI_BROWSER.skills_event, { event: event(1) })) as SkillsEventResult;
+  await call(X_TRUSTED_UA.skills_plan, planParams);
+  const ack = (await call(X_TRUSTED_UA.skills_event, { event: event(1) })) as SkillsEventResult;
   assert.equal(ack.status, "accepted");
   await tick();
   assert.equal(results.length, 1);
@@ -318,8 +318,8 @@ test("a runtime failure reports unavailable, never clear", async () => {
 
 test("context resolution failure acks unavailable; no job is launched", async () => {
   const { call, fake } = setup({ contextOk: false });
-  await call(X_PI_BROWSER.skills_plan, planParams);
-  const ack = (await call(X_PI_BROWSER.skills_event, { event: event(1) })) as SkillsEventResult;
+  await call(X_TRUSTED_UA.skills_plan, planParams);
+  const ack = (await call(X_TRUSTED_UA.skills_event, { event: event(1) })) as SkillsEventResult;
   assert.equal(ack.status, "unavailable");
   assert.match(ack.reason ?? "", /context unavailable/);
   assert.equal(fake.submissions.length, 0);
@@ -327,27 +327,27 @@ test("context resolution failure acks unavailable; no job is launched", async ()
 
 test("cancel targets one interaction's jobs; status and dispose are bounded", async () => {
   const { call, protocol, fake } = setup();
-  await call(X_PI_BROWSER.skills_plan, planParams);
-  const ack = (await call(X_PI_BROWSER.skills_event, { event: event(1) })) as SkillsEventResult;
+  await call(X_TRUSTED_UA.skills_plan, planParams);
+  const ack = (await call(X_TRUSTED_UA.skills_event, { event: event(1) })) as SkillsEventResult;
   assert.equal(ack.jobs?.length, 2);
 
-  const other = (await call(X_PI_BROWSER.skills_cancel, { interactionId: "nobody" })) as SkillsCancelResult;
+  const other = (await call(X_TRUSTED_UA.skills_cancel, { interactionId: "nobody" })) as SkillsCancelResult;
   assert.equal(other.cancelled, 0);
 
-  const cancelled = (await call(X_PI_BROWSER.skills_cancel, { interactionId: "composer-7" })) as SkillsCancelResult;
+  const cancelled = (await call(X_TRUSTED_UA.skills_cancel, { interactionId: "composer-7" })) as SkillsCancelResult;
   assert.equal(cancelled.cancelled, 2);
   assert.deepEqual(fake.cancellations.sort(), [
     "test-package/constructive-reply:composer-7:0",
     "test-package/friendliness:composer-7:0",
   ]);
 
-  const status = (await call(X_PI_BROWSER.skills_status)) as SkillsStatusResult;
+  const status = (await call(X_TRUSTED_UA.skills_status)) as SkillsStatusResult;
   assert.equal(status.available, true);
   assert.equal(status.plans, 1);
   assert.equal(status.armedRules, 2);
 
   // A second event after cancel re-arms and is cancellable again.
-  const rearm = (await call(X_PI_BROWSER.skills_event, { event: event(1) })) as SkillsEventResult;
+  const rearm = (await call(X_TRUSTED_UA.skills_event, { event: event(1) })) as SkillsEventResult;
   assert.equal(rearm.status, "accepted");
   protocol.dispose();
   assert.equal(protocol.plans().count, 0);
@@ -356,6 +356,6 @@ test("cancel targets one interaction's jobs; status and dispose are bounded", as
 
 test("unknown methods are not claimed; malformed params fail with a protocol error", async () => {
   const { call } = setup();
-  await assert.rejects(call("x-pi-browser/other", {}), /METHOD_NOT_FOUND/);
-  await assert.rejects(call(X_PI_BROWSER.skills_event, { event: { version: 2 } }), /skills:/);
+  await assert.rejects(call("x-trusted-ua/other", {}), /METHOD_NOT_FOUND/);
+  await assert.rejects(call(X_TRUSTED_UA.skills_event, { event: { version: 2 } }), /skills:/);
 });

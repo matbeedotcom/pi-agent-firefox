@@ -8,7 +8,7 @@
  */
 import type { JsonRpcErrorObject } from "./jsonrpc.js";
 
-export const PI_BROWSER_ERROR = {
+export const TRUSTED_UA_ERROR = {
   NATIVE_HOST_NOT_INSTALLED: "NATIVE_HOST_NOT_INSTALLED",
   NATIVE_HOST_VERSION_MISMATCH: "NATIVE_HOST_VERSION_MISMATCH",
   PI_NOT_FOUND: "PI_NOT_FOUND",
@@ -34,58 +34,63 @@ export const PI_BROWSER_ERROR = {
   MAIL_CURSOR_EXPIRED: "MAIL_CURSOR_EXPIRED",
 } as const;
 
-export type PiBrowserErrorCode = (typeof PI_BROWSER_ERROR)[keyof typeof PI_BROWSER_ERROR];
+export type TrustedUaErrorCode = (typeof TRUSTED_UA_ERROR)[keyof typeof TRUSTED_UA_ERROR];
 
 /** JSON-RPC reserved range for application errors. */
 const APP_ERROR_BASE = -32099;
 
-const ORDER: PiBrowserErrorCode[] = [
-  PI_BROWSER_ERROR.NATIVE_HOST_NOT_INSTALLED,
-  PI_BROWSER_ERROR.NATIVE_HOST_VERSION_MISMATCH,
-  PI_BROWSER_ERROR.PI_NOT_FOUND,
-  PI_BROWSER_ERROR.PI_START_FAILED,
-  PI_BROWSER_ERROR.ACP_INITIALIZATION_FAILED,
-  PI_BROWSER_ERROR.ACP_CAPABILITY_UNSUPPORTED,
-  PI_BROWSER_ERROR.SESSION_NOT_FOUND,
-  PI_BROWSER_ERROR.SESSION_BUSY,
-  PI_BROWSER_ERROR.BROWSER_NOT_BOUND,
-  PI_BROWSER_ERROR.BROWSER_TAB_CLOSED,
-  PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND,
-  PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
-  PI_BROWSER_ERROR.BROWSER_ELEMENT_STALE,
-  PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT,
-  PI_BROWSER_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
-  PI_BROWSER_ERROR.MCP_UNAVAILABLE,
-  PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
-  PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH,
-  PI_BROWSER_ERROR.INTERNAL,
-  PI_BROWSER_ERROR.MAIL_NO_CONTEXT,
-  PI_BROWSER_ERROR.MAIL_MESSAGE_NOT_FOUND,
-  PI_BROWSER_ERROR.MAIL_ATTACHMENT_NOT_FOUND,
-  PI_BROWSER_ERROR.MAIL_CURSOR_EXPIRED,
+const ORDER: TrustedUaErrorCode[] = [
+  TRUSTED_UA_ERROR.NATIVE_HOST_NOT_INSTALLED,
+  TRUSTED_UA_ERROR.NATIVE_HOST_VERSION_MISMATCH,
+  TRUSTED_UA_ERROR.PI_NOT_FOUND,
+  TRUSTED_UA_ERROR.PI_START_FAILED,
+  TRUSTED_UA_ERROR.ACP_INITIALIZATION_FAILED,
+  TRUSTED_UA_ERROR.ACP_CAPABILITY_UNSUPPORTED,
+  TRUSTED_UA_ERROR.SESSION_NOT_FOUND,
+  TRUSTED_UA_ERROR.SESSION_BUSY,
+  TRUSTED_UA_ERROR.BROWSER_NOT_BOUND,
+  TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED,
+  TRUSTED_UA_ERROR.BROWSER_FRAME_NOT_FOUND,
+  TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
+  TRUSTED_UA_ERROR.BROWSER_ELEMENT_STALE,
+  TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT,
+  TRUSTED_UA_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
+  TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
+  TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND,
+  TRUSTED_UA_ERROR.PROTOCOL_VERSION_MISMATCH,
+  TRUSTED_UA_ERROR.INTERNAL,
+  TRUSTED_UA_ERROR.MAIL_NO_CONTEXT,
+  TRUSTED_UA_ERROR.MAIL_MESSAGE_NOT_FOUND,
+  TRUSTED_UA_ERROR.MAIL_ATTACHMENT_NOT_FOUND,
+  TRUSTED_UA_ERROR.MAIL_CURSOR_EXPIRED,
 ];
 
-export const PI_BROWSER_ERROR_CODES: ReadonlyMap<PiBrowserErrorCode, number> = new Map(
+export const TRUSTED_UA_ERROR_CODES: ReadonlyMap<TrustedUaErrorCode, number> = new Map(
   ORDER.map((code, i) => [code, APP_ERROR_BASE + 1 + i]),
 );
 
-const NUMERIC_TO_CODE = new Map<number, PiBrowserErrorCode>([...PI_BROWSER_ERROR_CODES].map(([c, n]) => [n, c]));
+const NUMERIC_TO_CODE = new Map<number, TrustedUaErrorCode>([...TRUSTED_UA_ERROR_CODES].map(([c, n]) => [n, c]));
 
-export function isPiBrowserErrorCode(value: unknown): value is PiBrowserErrorCode {
-  return typeof value === "string" && PI_BROWSER_ERROR_CODES.has(value as PiBrowserErrorCode);
+export function isTrustedUaErrorCode(value: unknown): value is TrustedUaErrorCode {
+  return typeof value === "string" && TRUSTED_UA_ERROR_CODES.has(value as TrustedUaErrorCode);
 }
 
 /** JSON-RPC numeric code for a Pi Browser error code. */
-export function piBrowserErrorNumeric(code: PiBrowserErrorCode): number {
-  return PI_BROWSER_ERROR_CODES.get(code) ?? APP_ERROR_BASE;
+export function trustedUaErrorNumeric(code: TrustedUaErrorCode): number {
+  return TRUSTED_UA_ERROR_CODES.get(code) ?? APP_ERROR_BASE;
 }
 
-/** Build a JSON-RPC error object carrying a structured Pi Browser code. */
-export function toErrorObject(code: PiBrowserErrorCode, message: string, data?: unknown): JsonRpcErrorObject {
+/**
+ * Build a JSON-RPC error object carrying a structured code. The code rides
+ * `data.trustedUaError`, and also `data.piBrowserError`, the name v0.4.0 and
+ * older peers read (openspec rename-trusted-user-agent).
+ */
+export function toErrorObject(code: TrustedUaErrorCode, message: string, data?: unknown): JsonRpcErrorObject {
   return {
-    code: piBrowserErrorNumeric(code),
+    code: trustedUaErrorNumeric(code),
     message,
     data: {
+      trustedUaError: code,
       piBrowserError: code,
       ...(typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {}),
     },
@@ -94,26 +99,28 @@ export function toErrorObject(code: PiBrowserErrorCode, message: string, data?: 
 
 /**
  * Recover the structured code from a JSON-RPC error object. Prefers the
- * explicit `data.piBrowserError` string, falls back to the reserved numeric
+ * explicit `data.trustedUaError` string, falls back to the reserved numeric
  * range, returns undefined for plain JSON-RPC/protocol errors.
  */
-export function codeFromErrorObject(err: JsonRpcErrorObject | undefined | null): PiBrowserErrorCode | undefined {
+export function codeFromErrorObject(err: JsonRpcErrorObject | undefined | null): TrustedUaErrorCode | undefined {
   if (!err) return undefined;
-  const data = err.data as { piBrowserError?: unknown } | undefined;
-  if (data && isPiBrowserErrorCode(data.piBrowserError)) return data.piBrowserError;
+  const data = err.data as { trustedUaError?: unknown; piBrowserError?: unknown } | undefined;
+  if (data && isTrustedUaErrorCode(data.trustedUaError)) return data.trustedUaError;
+  // v0.4.0 and older peers.
+  if (data && isTrustedUaErrorCode(data.piBrowserError)) return data.piBrowserError;
   const byNumeric = NUMERIC_TO_CODE.get(err.code);
   return byNumeric;
 }
 
 /** Error type used internally on both sides of the link. */
-export class PiBrowserProtocolError extends Error {
+export class TrustedUaProtocolError extends Error {
   constructor(
-    public readonly code: PiBrowserErrorCode,
+    public readonly code: TrustedUaErrorCode,
     message: string,
     public readonly data?: unknown,
   ) {
     super(message);
-    this.name = "PiBrowserProtocolError";
+    this.name = "TrustedUaProtocolError";
   }
 
   toErrorObject(): JsonRpcErrorObject {

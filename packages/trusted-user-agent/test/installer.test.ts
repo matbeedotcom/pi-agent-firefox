@@ -390,7 +390,7 @@ test("mcp: install → status → idempotent reinstall → uninstall lifecycle",
     assert.equal(result.ok, false);
     assert.ok(result.lines.some((l) => l.includes("not configured")), JSON.stringify(result.lines));
 
-    // Install creates the config with the pi-browser entry.
+    // Install creates the config with the trusted-ua entry.
     result = await runCommand("mcp", ctx); // default sub: install
     assert.equal(result.ok, true);
     type McpConfig = {
@@ -400,7 +400,7 @@ test("mcp: install → status → idempotent reinstall → uninstall lifecycle",
     let config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
     // A stdio entry (pi's built-in MCP client speaks stdio/HTTP only) that
     // launches the bridge to the broker's socket/pipe.
-    assert.deepEqual(config.mcpServers["pi-browser"], {
+    assert.deepEqual(config.mcpServers["trusted-ua"], {
       command: process.execPath,
       args: [path.join(root, "dist", "native-host", "mcp-stdio-main.js")],
       directTools: true,
@@ -424,25 +424,25 @@ test("mcp: install → status → idempotent reinstall → uninstall lifecycle",
 
     // The user's own tuning (e.g. exposure changed in pi's /mcp manager) is
     // kept by a reinstall and does not make status report a stale entry.
-    config.mcpServers["pi-browser"] = { ...config.mcpServers["pi-browser"], exposure: "direct", enabled: false };
+    config.mcpServers["trusted-ua"] = { ...config.mcpServers["trusted-ua"], exposure: "direct", enabled: false };
     await writeFile(file, `${JSON.stringify(config)}\n`);
     result = await runCommand("mcp", ctx, "status");
     assert.equal(result.ok, true, JSON.stringify(result.lines));
     result = await runCommand("mcp", ctx);
     config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
-    assert.equal(config.mcpServers["pi-browser"].exposure, "direct", "user's exposure kept");
-    assert.equal(config.mcpServers["pi-browser"].enabled, false, "user's enabled flag kept");
+    assert.equal(config.mcpServers["trusted-ua"].exposure, "direct", "user's exposure kept");
+    assert.equal(config.mcpServers["trusted-ua"].enabled, false, "user's enabled flag kept");
 
     // A pre-0.2.5 socket entry (pi-mcp-adapter only) is reported stale…
-    await writeFile(file, `${JSON.stringify({ mcpServers: { "pi-browser": { socket: "/old/path.sock", directTools: true } } })}\n`);
+    await writeFile(file, `${JSON.stringify({ mcpServers: { "trusted-ua": { socket: "/old/path.sock", directTools: true } } })}\n`);
     result = await runCommand("mcp", ctx, "status");
     assert.equal(result.ok, false);
     assert.ok(result.lines.some((l) => l.includes("STALE")), JSON.stringify(result.lines));
     // …and install replaces it with the stdio entry.
     result = await runCommand("mcp", ctx);
     config = JSON.parse(await readFile(file, "utf8")) as McpConfig;
-    assert.equal(config.mcpServers["pi-browser"].socket, undefined);
-    assert.equal(config.mcpServers["pi-browser"].command, process.execPath);
+    assert.equal(config.mcpServers["trusted-ua"].socket, undefined);
+    assert.equal(config.mcpServers["trusted-ua"].command, process.execPath);
 
     // Uninstall removes the entry and the now-empty file.
     result = await runCommand("mcp", ctx); // re-configure first
@@ -479,7 +479,7 @@ test("mcp: install merges with an existing multi-server config", async () => {
       mcpServers: Record<string, unknown>;
     };
     assert.deepEqual(config.mcpServers.github, { command: "npx", args: ["-y", "gh-mcp"] }, "other servers preserved");
-    assert.ok(config.mcpServers["pi-browser"], "pi-browser entry added");
+    assert.ok(config.mcpServers["trusted-ua"], "trusted-ua entry added");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

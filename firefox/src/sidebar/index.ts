@@ -14,7 +14,7 @@ import {
 } from "@trusted-ua/protocol";
 import { grantEvaluationPermission } from "../page-evaluation-permission.js";
 import {
-  applyPiTheme,
+  applyTrustedUaTheme,
   MarkdownView,
   mountNewSessionPanel,
   mountPermissionSettings,
@@ -26,7 +26,7 @@ import {
   PLAN_CARD_ID,
   type PlanEntryLike,
   renderMarkdownInto,
-  type PiTheme,
+  type TrustedUaTheme,
   type PermissionSettingsApi,
 } from "@trusted-ua/webext";
 import type {
@@ -46,7 +46,7 @@ interface StatusInfo {
   state: string;
   detail?: string;
   agentInfo?: { name?: string; version?: string };
-  piBrowserMeta?: { version: string; protocolVersion: number; browserToolVersion: number; workspaceRoot?: string };
+  trustedUaMeta?: { version: string; protocolVersion: number; browserToolVersion: number; workspaceRoot?: string };
   /** Union of capabilities across ALL connected apps (live, plan §29). */
   capabilities?: AgentCapability[];
 }
@@ -70,7 +70,7 @@ interface UiState {
   activeSessionId?: string;
   sessions: SessionUi[];
   /** Active browser theme (LWT colors); undefined when the API is unavailable. */
-  theme?: PiTheme;
+  theme?: TrustedUaTheme;
   /** Still-pending permission prompts; the modal is re-derived from this. */
   permissionRequests?: PermissionRequestUi[];
 }
@@ -360,8 +360,8 @@ function renderStatus(): void {
       el.classList.add("ok");
       const agent = s.agentInfo ? `${s.agentInfo.name ?? "agent"} ${s.agentInfo.version ?? ""}`.trim() : "connected";
       el.textContent = `Pi · ${agent}`;
-      el.title = s.piBrowserMeta
-        ? `integration v${s.piBrowserMeta.version}, protocol v${s.piBrowserMeta.protocolVersion}, tools v${s.piBrowserMeta.browserToolVersion}`
+      el.title = s.trustedUaMeta
+        ? `integration v${s.trustedUaMeta.version}, protocol v${s.trustedUaMeta.protocolVersion}, tools v${s.trustedUaMeta.browserToolVersion}`
         : "";
       break;
     }
@@ -703,7 +703,7 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     prevStatusState = state.status.state;
     uiState = state;
     activeSessionId = state.activeSessionId;
-    applyPiTheme(state.theme);
+    applyTrustedUaTheme(state.theme);
     renderAll();
     syncPermissionPrompt(state.permissionRequests);
   } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
@@ -744,7 +744,7 @@ interface PermissionRequestUi {
   sessionId: string;
   toolCall: { toolCallId: string; title?: string; kind?: string; content?: unknown; rawInput?: unknown };
   options: PermissionOptionUi[];
-  _meta?: { piBrowser?: { tool?: string; agent?: { id: string; name: string } } };
+  _meta?: { trustedUa?: { tool?: string; agent?: { id: string; name: string } } };
 }
 
 function showPermissionPrompt(request: PermissionRequestUi): void {
@@ -759,9 +759,9 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
     browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId: "cancelled" }).catch(() => {});
     return;
   }
-  const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
+  const tool = request._meta?.trustedUa?.tool ?? request.toolCall.title ?? "an action";
 
-  if (request._meta?.piBrowser?.agent) {
+  if (request._meta?.trustedUa?.agent) {
     // The agent's own request (sidebar-acp-agents): its name, what it wants
     // to do (command, diff) and its own options.
     const text = describePermissionRequest(request as never);
@@ -843,7 +843,7 @@ function hidePermissionPrompt(): void {
 // builds the session.
 const newPanelEl = $<HTMLDivElement>("new-panel");
 const newSessionPanel = mountNewSessionPanel(newPanelEl, {
-  workspaceRoot: () => uiState.status.piBrowserMeta?.workspaceRoot,
+  workspaceRoot: () => uiState.status.trustedUaMeta?.workspaceRoot,
   suggestedCwd: () => (activeSessionId ? uiState.sessions.find((s) => s.sessionId === activeSessionId)?.cwd : undefined),
   create: async (cwd, agent) => {
     await action<{ sessionId: string }>("new_session", { cwd, ...(agent ? { agent } : {}) });
@@ -969,7 +969,7 @@ void (async () => {
     uiState = state;
     activeSessionId = state.activeSessionId;
     prevStatusState = state.status.state;
-    applyPiTheme(state.theme);
+    applyTrustedUaTheme(state.theme);
     renderAll();
     syncPermissionPrompt(state.permissionRequests);
     // Rehydrate the transcript of the active session if needed.

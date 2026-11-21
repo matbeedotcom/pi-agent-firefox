@@ -13,6 +13,9 @@ import type { Readable, Writable } from "node:stream";
 import { encodeFrame, FrameDecoder, FramingError } from "./framing.js";
 import type { JsonRpcErrorObject } from "@trusted-ua/protocol";
 import {
+  initializeIsLegacy,
+  normalizeIncoming,
+  toLegacy,
   isJsonRpcNotification,
   isJsonRpcRequest,
   isJsonRpcResponse,
@@ -83,8 +86,13 @@ export interface Dispatcher {
  * `write` is invoked with parsed JSON-RPC messages (the stdio adapter
  * wraps them into Firefox frames).
  */
-export function createJsonRpcDispatcher(write: (msg: unknown) => void, opts: DispatcherOptions): Dispatcher {
+export function createJsonRpcDispatcher(rawWrite: (msg: unknown) => void, opts: DispatcherOptions): Dispatcher {
   const { log } = opts;
+  // Dialect of the peer (openspec rename-trusted-user-agent D2): incoming
+  // messages are always normalized to the new names; outgoing ones use the
+  // v0.4.0 names when the peer's `initialize` spoke only those.
+  let legacyPeer = false;
+  const write = (msg: unknown): void => rawWrite(legacyPeer ? toLegacy(msg) : msg);
   const pending = new Map<number, PendingRequest>();
   let nextId = 1;
   let closed = false;
@@ -161,8 +169,13 @@ export function createJsonRpcDispatcher(write: (msg: unknown) => void, opts: Dis
     },
   };
 
-  function deliverMessage(msg: unknown): void {
+  function deliverMessage(raw: unknown): void {
     if (closed) return;
+    if (isJsonRpcRequest(raw) && raw.method === "initialize") {
+      legacyPeer = initializeIsLegacy(raw.params);
+      if (legacyPeer) log.info("peer speaks the v0.4.0 (pi-browser) dialect; translating");
+    }
+    const msg = normalizeIncoming(raw).message;
     if (isJsonRpcResponse(msg)) {
       const p = pending.get(msg.id);
       if (!p) {

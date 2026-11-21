@@ -32,7 +32,7 @@
     {
       "side": "client",
       "type": "extended",
-      "method": "x-pi-browser/skills_status",
+      "method": "x-trusted-ua/skills_status",
       "params": {},
       "expect": {
         "available": true

@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   type PagePlan,
   type SkillEvent,
   type SkillsEventResult,
@@ -68,10 +68,10 @@ interface FakeHostOptions {
 function setup(options: FakeHostOptions = {}) {
   const events: SkillEvent[] = [];
   const request = (method: string, params?: unknown): Promise<unknown> => {
-    if (method === X_PI_BROWSER.skills_plan) {
+    if (method === X_TRUSTED_UA.skills_plan) {
       return Promise.resolve({ status: "ok", plan } satisfies SkillsPlanResult);
     }
-    if (method === X_PI_BROWSER.skills_event) {
+    if (method === X_TRUSTED_UA.skills_event) {
       const event = (params as { event: SkillEvent }).event;
       events.push(event);
       const ack = options.eventAck ?? {
@@ -92,7 +92,7 @@ function setup(options: FakeHostOptions = {}) {
 
 /** Deliver one host job outcome using the HOST's jobId format. */
 function deliver(hostDelivers: (m: string, p: unknown) => unknown, jobId: string, event: { eventId: string; skillKey: string; skillRevision: string }, params: Partial<SkillsResultParams>): unknown {
-  return hostDelivers(X_PI_BROWSER.skills_result, {
+  return hostDelivers(X_TRUSTED_UA.skills_result, {
     jobId,
     eventId: event.eventId,
     skillKey: event.skillKey,
@@ -132,8 +132,8 @@ test("arm sends ONE transport event carrying the gate eventId; host jobs map to 
 test("suggestion holds and syncs the card; unavailable delivery leaves a usable bypass", async () => {
   const states: { state?: string }[] = [];
   const request = (method: string, params?: unknown): Promise<unknown> => {
-    if (method === X_PI_BROWSER.skills_plan) return Promise.resolve({ status: "ok", plan });
-    if (method === X_PI_BROWSER.skills_event) {
+    if (method === X_TRUSTED_UA.skills_plan) return Promise.resolve({ status: "ok", plan });
+    if (method === X_TRUSTED_UA.skills_event) {
       const event = (params as { event: SkillEvent }).event;
       return Promise.resolve({ status: "accepted", jobs: [{ jobId: `job:${event.eventId}:p/friendliness`, skillKey: "p/friendliness", key: "k" }] });
     }
@@ -153,7 +153,7 @@ test("suggestion holds and syncs the card; unavailable delivery leaves a usable 
   // Runtime failure on a fresh arm (host job crashed): local bypass stays usable.
   // New contextRevision: the same interaction at the old revision is a redelivery (deduped).
   const second = await runtime.arm({ document: doc, event: "p:before-submit", identity: { ...identity("edited"), contextRevision: 2 }, plan });
-  const ack = runtime.handleHostRequest(X_PI_BROWSER.skills_result, {
+  const ack = runtime.handleHostRequest(X_TRUSTED_UA.skills_result, {
     jobId: second.jobs[0]!.jobId, eventId: second.tickets[0]!.eventId, skillKey: "p/friendliness", skillRevision: "v1",
     status: "unavailable", reason: "host down",
   });
@@ -201,7 +201,7 @@ test("closeDocument drops the gate and its snapshots; closeTab covers unknown ge
   runtime.closeDocument(doc);
   assert.equal(runtime.view(doc), undefined);
   assert.throws(
-    () => hostDelivers(X_PI_BROWSER.skills_context, { contextRef: ref, interactionId: "composer-7", planVersion: 1, fields: ["draft"], maxBytes: 32_768 }),
+    () => hostDelivers(X_TRUSTED_UA.skills_context, { contextRef: ref, interactionId: "composer-7", planVersion: 1, fields: ["draft"], maxBytes: 32_768 }),
     /unknown contextRef/,
   );
   deliver(hostDelivers, jobs[0]!.jobId, tickets[0]!, { decision: "clear" });
@@ -234,8 +234,8 @@ test("speculative arm lands in the rule's GATE session (card shows review before
   const events: SkillEvent[] = [];
   const card: { event?: string; state?: string }[] = [];
   const request = (method: string, params?: unknown): Promise<unknown> => {
-    if (method === X_PI_BROWSER.skills_plan) return Promise.resolve({ status: "ok", plan: specPlan });
-    if (method === X_PI_BROWSER.skills_event) {
+    if (method === X_TRUSTED_UA.skills_plan) return Promise.resolve({ status: "ok", plan: specPlan });
+    if (method === X_TRUSTED_UA.skills_event) {
       const event = (params as { event: SkillEvent }).event;
       events.push(event);
       return Promise.resolve({ status: "accepted", jobs: [{ jobId: `job:${event.eventId}:p/friendliness`, skillKey: "p/friendliness", key: "k" }] });
@@ -282,7 +282,7 @@ test("speculative arm lands in the rule's GATE session (card shows review before
 test("context resolution stays privacy-by-request through the runtime", async () => {
   const { runtime, events, hostDelivers } = setup();
   await runtime.arm({ document: doc, event: "p:before-submit", identity: identity(), plan, snapshot: { draft: "d", secret: "no" } });
-  const resolved = hostDelivers(X_PI_BROWSER.skills_context, {
+  const resolved = hostDelivers(X_TRUSTED_UA.skills_context, {
     contextRef: events[0]!.contextRef, interactionId: "composer-7", planVersion: 1, fields: ["draft"], maxBytes: 32_768,
   }) as { context: Record<string, unknown> };
   assert.equal(resolved.context.draft, "d");

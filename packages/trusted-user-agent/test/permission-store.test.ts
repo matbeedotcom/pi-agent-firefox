@@ -98,19 +98,56 @@ test("PermissionStore: clear() is a no-op (no rewrite) when the tool has no deci
   assert.equal(existsSync(file), false, "no file created for a no-op clear");
 });
 
-test("defaultPermissionFilePath: ~/.pi/browser/permissions.json, env override wins", () => {
+test("PermissionStore (default paths): reads the v0.4.0 ~/.pi/browser file, saves to ~/.trusted-ua", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync } = await import("node:fs");
+  const os = await import("node:os");
+  const pathMod = await import("node:path");
+  const home = mkdtempSync(pathMod.join(os.tmpdir(), "tua-perm-home-"));
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, P: process.env.PI_BROWSER_PERMISSIONS_FILE, T: process.env.TRUSTED_UA_PERMISSIONS_FILE, D: process.env.PI_BROWSER_DATA_ROOT, TD: process.env.TRUSTED_UA_DATA_ROOT };
+  try {
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    for (const k of ["PI_BROWSER_PERMISSIONS_FILE", "TRUSTED_UA_PERMISSIONS_FILE", "PI_BROWSER_DATA_ROOT", "TRUSTED_UA_DATA_ROOT"]) delete process.env[k];
+    const legacyDir = pathMod.join(home, ".pi", "browser");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(pathMod.join(legacyDir, "permissions.json"), JSON.stringify({ version: 2, tools: { browser_screenshot: "allow" } }));
+    const store = new PermissionStore();
+    assert.equal(store.getState("browser_screenshot"), "allow", "v0.4.0 decision carried over");
+    store.setState("browser_get_dom", "deny");
+    const written = JSON.parse(readFileSync(pathMod.join(home, ".trusted-ua", "permissions.json"), "utf8"));
+    assert.equal(written.tools.browser_screenshot, "allow", "migrated on first write");
+    assert.equal(written.tools.browser_get_dom, "deny");
+    assert.ok(JSON.parse(readFileSync(pathMod.join(legacyDir, "permissions.json"), "utf8")).tools.browser_screenshot, "old file kept");
+  } finally {
+    for (const [k, v] of [["HOME", saved.HOME], ["USERPROFILE", saved.USERPROFILE], ["PI_BROWSER_PERMISSIONS_FILE", saved.P], ["TRUSTED_UA_PERMISSIONS_FILE", saved.T], ["PI_BROWSER_DATA_ROOT", saved.D], ["TRUSTED_UA_DATA_ROOT", saved.TD]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
+test("defaultPermissionFilePath: ~/.trusted-ua/permissions.json, env override wins (new or old name)", () => {
   const prev = process.env.PI_BROWSER_PERMISSIONS_FILE;
+  const prevNew = process.env.TRUSTED_UA_PERMISSIONS_FILE;
   try {
     delete process.env.PI_BROWSER_PERMISSIONS_FILE;
+    delete process.env.TRUSTED_UA_PERMISSIONS_FILE;
     const def = defaultPermissionFilePath();
     assert.match(def, /permissions\.json$/);
-    assert.match(def, /\.pi[\\/]browser[\\/]/);
+    assert.match(def, /\.trusted-ua[\\/]/);
+
+    process.env.TRUSTED_UA_PERMISSIONS_FILE = "/tmp/new-perms.json";
+    process.env.PI_BROWSER_PERMISSIONS_FILE = "/tmp/old-perms.json";
+    assert.equal(defaultPermissionFilePath(), "/tmp/new-perms.json", "the new name wins");
+    delete process.env.TRUSTED_UA_PERMISSIONS_FILE;
 
     process.env.PI_BROWSER_PERMISSIONS_FILE = "/tmp/custom-perms.json";
     assert.equal(defaultPermissionFilePath(), "/tmp/custom-perms.json");
   } finally {
     if (prev === undefined) delete process.env.PI_BROWSER_PERMISSIONS_FILE;
     else process.env.PI_BROWSER_PERMISSIONS_FILE = prev;
+    if (prevNew === undefined) delete process.env.TRUSTED_UA_PERMISSIONS_FILE;
+    else process.env.TRUSTED_UA_PERMISSIONS_FILE = prevNew;
   }
 });
 

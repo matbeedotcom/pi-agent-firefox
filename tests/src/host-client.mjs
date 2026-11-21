@@ -6,7 +6,7 @@
  * Used by e2e.test.mjs and broker.test.mjs (cross-app broker tests).
  */
 import {
-  PI_BROWSER_ERROR,
+  TRUSTED_UA_ERROR,
   isStructuredErrorObject,
 } from "@trusted-ua/protocol";
 
@@ -73,13 +73,13 @@ class HostClient {
         .then((result) => this.sendRaw({ jsonrpc: "2.0", id: msg.id, result: result ?? null }))
         .catch((err) => {
           // Mirror the add-on's AcpClient error serialization exactly:
-          // structured errors become reserved numeric codes + data.piBrowserError.
+          // structured errors become reserved numeric codes + data.trustedUaError.
           const error = isStructuredErrorObject(err)
             ? { code: err.code, message: err.message, ...(err.data ? { data: err.data } : {}) }
             : {
                 code: -32603,
                 message: err instanceof Error ? err.message : String(err),
-                data: { piBrowserError: PI_BROWSER_ERROR.INTERNAL },
+                data: { trustedUaError: TRUSTED_UA_ERROR.INTERNAL },
               };
           this.sendRaw({ jsonrpc: "2.0", id: msg.id, error });
         });

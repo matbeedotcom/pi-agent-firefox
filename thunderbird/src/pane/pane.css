@@ -1,5 +1,5 @@
 /* Pi pane — compact, message-inline chat rendered beside the message pane by the
- * piPane Experiment. Same visual language as the Pi Space (space/style.css), in a
+ * trustedUaPane Experiment. Same visual language as the Pi Space (space/style.css), in a
  * single narrow column: the pane is ~320px wide, so the Space's left rail becomes
  * a top header + a session dropdown.
  */
@@ -11,7 +11,7 @@
   --muted: #9a96ab;
   --accent: #7c6cf0;
   --accent-2: #5a4fd0;
-  /* Theme-bridge vars (applyPiTheme overrides these inline when the browser
+  /* Theme-bridge vars (applyTrustedUaTheme overrides these inline when the browser
    * theme is available; the defaults below keep the dark palette). */
   --accent-text: #ffffff;
   --field: var(--bg);
@@ -24,7 +24,7 @@
 }
 
 /* Light fallback palette, active when the browser theme reports light mode
- * (applyPiTheme sets data-pi-theme on <html>). Used when the theme API
+ * (applyTrustedUaTheme sets data-pi-theme on <html>). Used when the theme API
  * exposes no concrete colors — Thunderbird's built-in Light/Dark themes
  * declare none, so the mode is all we get. Real LWT colors (when present)
  * are applied inline on <html> and win over these defaults. */

@@ -18,11 +18,11 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  HOST_CHILD_ENV,
+  MCP_SERVER_NAME,
   PARENT_SESSION_ENV,
-  PI_BROKER,
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
+  TRUSTED_UA_BROKER,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
   type AgentsResult,
   type SessionUpdate,
 } from "@trusted-ua/protocol";
@@ -31,6 +31,8 @@ import { AgentConnection, AgentRpcError, AgentStoppedError } from "./connection.
 import { AgentRegistry, type AgentSpec } from "./registry.js";
 import { AcpRelaySession, type RelayHost, type RelayOwner } from "./relay-session.js";
 import { AgentSessionIndex, type AgentSessionEntry } from "./session-index.js";
+import { runDir } from "../../paths.js";
+import { envBoth } from "../../env.js";
 
 /** ACP's "authentication required" error code. */
 const AUTH_REQUIRED_CODE = -32000;
@@ -156,7 +158,7 @@ export class ExternalAgents implements RelayHost {
     const resolved = this.registry.resolve(agentId);
     if (!resolved.ok) {
       const name = resolved.spec?.name ?? agentId;
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.ACP_INITIALIZATION_FAILED, `${name} is not available: ${resolved.reason}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.ACP_INITIALIZATION_FAILED, `${name} is not available: ${resolved.reason}`);
     }
     const spec = resolved.spec;
     const conn: AgentConnection = new AgentConnection({
@@ -190,16 +192,15 @@ export class ExternalAgents implements RelayHost {
   }
 
   mcpServers(session: AcpRelaySession): unknown[] {
-    const env = [{ name: PARENT_SESSION_ENV, value: session.parentToken }];
-    if (this.instanceId) env.unshift({ name: HOST_CHILD_ENV, value: this.instanceId });
+    // Both the TRUSTED_UA_ and the v0.4.0 PI_BROWSER_ names (env.ts).
+    const pairs: Array<[string, string]> = [["PARENT_SESSION", session.parentToken]];
+    if (this.instanceId) pairs.unshift(["HOST_CHILD", this.instanceId]);
     // Some agents start MCP servers with a trimmed environment (Codex keeps
     // only a few inherited variables), so name the broker's run dir here
     // instead of relying on inheritance.
-    env.push({
-      name: "PI_BROWSER_BROKER_DIR",
-      value: process.env.PI_BROWSER_BROKER_DIR || path.join(homedir(), ".pi", PI_BROKER.runDir),
-    });
-    return [{ name: "pi-browser", command: this.bridge.command, args: [...this.bridge.args], env }];
+    pairs.push(["BROKER_DIR", runDir()]);
+    const env = pairs.flatMap(([n, v]) => Object.entries(envBoth(n, v)).map(([name, value]) => ({ name, value })));
+    return [{ name: MCP_SERVER_NAME, command: this.bridge.command, args: [...this.bridge.args], env }];
   }
 
   permissionTimeoutMs(): number {
@@ -215,19 +216,19 @@ export class ExternalAgents implements RelayHost {
     this.index.upsert({ sessionId: session.id, agent: session.agentId, cwd: session.cwd, ...(title ? { title } : {}) });
   }
 
-  describeError(agentId: string, err: unknown, action: string): PiBrowserProtocolError {
-    if (err instanceof PiBrowserProtocolError) return err;
+  describeError(agentId: string, err: unknown, action: string): TrustedUaProtocolError {
+    if (err instanceof TrustedUaProtocolError) return err;
     const spec = this.registry.load().specs.find((s) => s.id === agentId);
     const name = spec?.name ?? agentId;
     if (err instanceof AgentRpcError && isAuthError(err)) {
-      return new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.ACP_INITIALIZATION_FAILED,
+      return new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.ACP_INITIALIZATION_FAILED,
         `${name} needs you to log in: ${spec?.loginHint ?? "log in with the agent's own CLI"}, then try again`,
       );
     }
-    if (err instanceof AgentStoppedError) return new PiBrowserProtocolError(PI_BROWSER_ERROR.ACP_INITIALIZATION_FAILED, err.message);
+    if (err instanceof AgentStoppedError) return new TrustedUaProtocolError(TRUSTED_UA_ERROR.ACP_INITIALIZATION_FAILED, err.message);
     const message = err instanceof Error ? err.message : String(err);
-    return new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${name} could not ${action}: ${message}`);
+    return new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${name} could not ${action}: ${message}`);
   }
 
   forget(session: AcpRelaySession): void {
@@ -300,10 +301,10 @@ export class ExternalAgents implements RelayHost {
         throw this.describeError(agentId, err, "start a session");
       }
       if (typeof result?.sessionId !== "string" || !result.sessionId) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${this.nameOf(agentId)} returned no session id`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${this.nameOf(agentId)} returned no session id`);
       }
       if (this.sessions.has(result.sessionId)) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, `session ${result.sessionId} is already open`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_BUSY, `session ${result.sessionId} is already open`);
       }
       const relay = new AcpRelaySession(this, result.sessionId, agentId, this.nameOf(agentId), cwd, owner, token);
       relay.applySessionResult(result);
@@ -325,18 +326,18 @@ export class ExternalAgents implements RelayHost {
     const open = this.sessions.get(sessionId);
     if (open) {
       if (open.owner.transport !== owner.transport) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, `session ${sessionId} is open in another app`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_BUSY, `session ${sessionId} is open in another app`);
       }
       if (how === "load") open.replayTranscript();
       return open;
     }
     const entry = this.index.get(sessionId);
-    if (!entry) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+    if (!entry) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
     const name = this.nameOf(entry.agent);
     const conn = await this.connection(entry.agent);
     if (!conn.init?.loadSession) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.SESSION_NOT_FOUND,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.SESSION_NOT_FOUND,
         `This session can't be reopened with ${name}: it doesn't support loading sessions. Start a new session.`,
       );
     }

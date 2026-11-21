@@ -13,4 +13,5 @@ export * from "./permission.js";
 export * from "./tool-capabilities.js";
 export * from "./callers.js";
 export * from "./agents.js";
+export * from "./legacy.js";
 export * from "./skills.js";

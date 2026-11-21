@@ -3,7 +3,7 @@
  * §2, §7, §13 "addon-coordinator" host half).
  *
  * Application messages ride the existing ACP transport under the negotiated
- * x-pi-browser/skills_* namespace; standard prompt traffic stays separate.
+ * x-trusted-ua/skills_* namespace; standard prompt traffic stays separate.
  * One SkillsProtocol instance wraps ONE client connection (one addon
  * connection = one source of verified identity) and shares the broker's
  * single SkillsHost across all clients.
@@ -22,13 +22,13 @@
  * semantic results: an unavailable outcome never clears a required review.
  */
 import {
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   parseSkillsCancelParams,
   parseSkillsContextResult,
   parseSkillsEventParams,
   parseSkillsPlanParams,
-  PI_BROWSER_ERROR,
-  type PiBrowserErrorCode,
+  TRUSTED_UA_ERROR,
+  type TrustedUaErrorCode,
   type ReviewResult,
   type SkillEvent,
   type SkillPlanRule,
@@ -117,7 +117,7 @@ export interface SkillsProtocol {
     method: string,
     params: unknown,
     respond: (result: unknown) => void,
-    respondError: (code: PiBrowserErrorCode, message: string) => void,
+    respondError: (code: TrustedUaErrorCode, message: string) => void,
   ): boolean;
   /** Drop this client's plans and cancel its in-flight jobs. */
   dispose(): void;
@@ -218,7 +218,7 @@ async function resolveEventContext(
       contextRef: evt.contextRef, interactionId: evt.interactionId,
       planVersion: evt.planVersion, fields, maxBytes: ctx.maxContextBytes,
     };
-    const response = await deps.endpoint.request<SkillsContextResult>(X_PI_BROWSER.skills_context, request, ctx.contextTimeoutMs);
+    const response = await deps.endpoint.request<SkillsContextResult>(X_TRUSTED_UA.skills_context, request, ctx.contextTimeoutMs);
     const parsed = parseSkillsContextResult(response, ctx.maxContextBytes);
     return { payload: JSON.stringify(parsed.context) };
   } catch (err) {
@@ -323,7 +323,7 @@ function deliverResult(
   // Delivery is best-effort and acked: a client that is gone (disconnect,
   // navigation) must not wedge the already-settled job.
   ctx.deps.endpoint
-    .request(X_PI_BROWSER.skills_result, params, ctx.contextTimeoutMs)
+    .request(X_TRUSTED_UA.skills_result, params, ctx.contextTimeoutMs)
     .catch((err: unknown) => ctx.deps.log.warn(`skills result delivery failed for ${jobId}: ${err instanceof Error ? err.message : String(err)}`));
 }
 
@@ -341,20 +341,20 @@ export function createSkillsProtocol(deps: SkillsProtocolDeps): SkillsProtocol {
       const fail = (err: unknown) => {
         const message = `skills: ${err instanceof Error ? err.message : JSON.stringify(err)}`;
         deps.log.warn(`skills protocol error (${method}): ${message}`);
-        respondError(PI_BROWSER_ERROR.INTERNAL, message);
+        respondError(TRUSTED_UA_ERROR.INTERNAL, message);
       };
       try {
         switch (method) {
-          case X_PI_BROWSER.skills_plan:
+          case X_TRUSTED_UA.skills_plan:
             respond(handlePlan(ctx, params));
             return true;
-          case X_PI_BROWSER.skills_event:
+          case X_TRUSTED_UA.skills_event:
             void handleEvent(ctx, params).then(respond, fail);
             return true;
-          case X_PI_BROWSER.skills_cancel:
+          case X_TRUSTED_UA.skills_cancel:
             respond(handleCancel(ctx, params));
             return true;
-          case X_PI_BROWSER.skills_status:
+          case X_TRUSTED_UA.skills_status:
             respond(handleStatus(ctx));
             return true;
           default:

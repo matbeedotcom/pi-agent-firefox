@@ -1,4 +1,4 @@
-/* piSearch Experiment — parent scope (addon_parent).
+/* trustedUaSearch Experiment — parent scope (addon_parent).
  *
  * Exposes Thunderbird's Gloda global message index — the SAME engine the
  * toolbar search bar uses (GlodaMsgSearcher: FTS3 over the live SQLite index,
@@ -10,7 +10,7 @@
  * sub-second (search bar parity).
  *
  * API surface:
- *   browser.piSearch.searchMessages(text, { limit?, andTerms? })
+ *   browser.trustedUaSearch.searchMessages(text, { limit?, andTerms? })
  *     → Promise<Array<MessageHeader>>
  *       Standard WebExtension MessageHeaders (the same objects
  *       browser.messages.* returns, with the session-global `id` every other
@@ -18,7 +18,7 @@
  *       (subject/attachment matches weigh most), resolved when the query
  *       completes (onQueryCompleted). Hits whose message is no longer in its
  *       folder (stale index rows) are dropped.
- *   browser.piSearch.status() → { enabled }
+ *   browser.trustedUaSearch.status() → { enabled }
  *
  * Version coupling: imports GlodaMsgSearcher/GlodaPublic by resource: URI
  * (module layout verified on TB 153 ESR and 160 release); pin strict_max_version if
@@ -27,7 +27,7 @@
 "use strict";
 
 (function (exports) {
-  class PiSearch extends ExtensionCommon.ExtensionAPI {
+  class TrustedUaSearch extends ExtensionCommon.ExtensionAPI {
     getAPI(context) {
       // Lazy ESM imports — GlodaPublic's import initializes the GlodaIndexer
       // (app singleton; safe to import repeatedly, cached by the module loader).
@@ -65,7 +65,7 @@
       function searchMessages(text, options = {}) {
         return new Promise((resolve, reject) => {
           if (typeof text !== "string" || !text.trim()) {
-            reject(new Error("piSearch.searchMessages: text is required"));
+            reject(new Error("trustedUaSearch.searchMessages: text is required"));
             return;
           }
           const limit = Math.min(Math.max(Math.trunc(options.limit ?? 100), 1), 1000);
@@ -104,12 +104,12 @@
       }
 
       return {
-        piSearch: {
+        trustedUaSearch: {
           searchMessages,
           status,
         },
       };
     }
   }
-  exports.piSearch = PiSearch;
+  exports.trustedUaSearch = TrustedUaSearch;
 })(this);

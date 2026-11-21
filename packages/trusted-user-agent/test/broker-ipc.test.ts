@@ -20,7 +20,7 @@ import {
   type BrokerServerHandle,
 } from "../src/native-host/broker-ipc.js";
 import { createStdioTransport } from "../src/native-host/transport.js";
-import { PI_BROKER } from "@trusted-ua/protocol";
+import { TRUSTED_UA_BROKER } from "@trusted-ua/protocol";
 
 const quiet = createLogger({ level: "error", stderr: { write: () => true } });
 
@@ -41,7 +41,7 @@ after(() => {
 test("ipc endpoint: socket file on POSIX, per-dir named pipe on Windows", () => {
   assert.equal(ipcEndpoint("/home/u/.pi/run", "agent-broker.sock", "linux"), path.join("/home/u/.pi/run", "agent-broker.sock"));
   const a = ipcEndpoint(String.raw`C:\Users\u\.pi\run`, "agent-broker.sock", "win32");
-  assert.match(a, /^\\\\\.\\pipe\\pi-agent-[0-9a-f]{16}-agent-broker$/);
+  assert.match(a, /^\\\\\.\\pipe\\trusted-ua-[0-9a-f]{16}-agent-broker$/);
   assert.ok(isNamedPipe(a));
   assert.equal(ipcEndpoint(String.raw`c:\users\U\.PI\run`, "agent-broker.sock", "win32"), a, "case-insensitive like Windows paths");
   assert.notEqual(ipcEndpoint(String.raw`C:\Users\other\.pi\run`, "agent-broker.sock", "win32"), a, "per-user (per run dir)");
@@ -52,8 +52,8 @@ test("ipc endpoint: socket file on POSIX, per-dir named pipe on Windows", () => 
 test("broker: paths respect env override", () => {
   const p = brokerPaths("/home/fake");
   assert.equal(p.dir, brokerDir);
-  assert.equal(p.socket, ipcEndpoint(brokerDir, PI_BROKER.socketFile));
-  assert.equal(p.state, path.join(brokerDir, PI_BROKER.stateFile));
+  assert.equal(p.socket, ipcEndpoint(brokerDir, TRUSTED_UA_BROKER.socketFile));
+  assert.equal(p.state, path.join(brokerDir, TRUSTED_UA_BROKER.stateFile));
 });
 
 test("relay attach: null when no broker state exists", async () => {
@@ -263,7 +263,7 @@ test("broker: preserves an ACP frame coalesced with the relay handshake", { time
     await once(socket, "connect");
     const request = encodeFrame({ jsonrpc: "2.0", id: 1, method: "initialize" });
     socket.write(Buffer.concat([
-      encodeFrame({ type: PI_BROKER.handshake, token: readBrokerState(brokerPaths().state)!.token }),
+      encodeFrame({ type: TRUSTED_UA_BROKER.handshake, token: readBrokerState(brokerPaths().state)!.token }),
       request,
     ]));
     assert.deepEqual(await payload, request);
@@ -277,7 +277,7 @@ test("relay: preserves an ACP frame coalesced with the handshake ack", { timeout
   const response = encodeFrame({ jsonrpc: "2.0", id: 1, result: {} });
   const server = net.createServer((socket) => {
     socket.once("data", () => socket.write(Buffer.concat([
-      encodeFrame({ type: PI_BROKER.handshakeAck, version: PI_BROKER.version }), response,
+      encodeFrame({ type: TRUSTED_UA_BROKER.handshakeAck, version: TRUSTED_UA_BROKER.version }), response,
     ])));
   });
   server.listen(brokerPaths().socket);

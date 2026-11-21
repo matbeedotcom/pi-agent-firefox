@@ -23,7 +23,7 @@
  * initialized, ping, tools/list, tools/call.
  *
  * Callers (openspec external-mcp-callers): every connection is its own
- * *caller session* (`mcp:<uuid>`) named by the `pi-browser/caller`
+ * *caller session* (`mcp:<uuid>`) named by the `trusted-ua/caller`
  * notification the stdio bridge sends first, or by the client's own
  * `initialize` clientInfo. Its calls route through the capability registry
  * with no add-on chat session, go through the caller gate (external access +
@@ -53,8 +53,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   MCP_CALLER_NOTIFICATION,
-  PI_BROWSER_META,
-  PI_BROKER,
+  LEGACY_MCP_CALLER_NOTIFICATION,
+  MCP_SERVER_NAME,
+  TRUSTED_UA_META,
+  TRUSTED_UA_BROKER,
   UNKNOWN_CALLER_NAME,
   parseCallerInfo,
   type CallerInfo,
@@ -68,6 +70,7 @@ import { CONTACTS_TOOL_SCHEMAS } from "../contacts/schemas.js";
 import { MCP_PROTOCOL_VERSION } from "../browser/mcp-acp-client.js";
 import type { Logger } from "../logger.js";
 import type { BrowserToolBridge } from "../tool-bridge.js";
+import { runDir } from "../paths.js";
 
 export interface McpBrowserServerOptions {
   log: Logger;
@@ -89,7 +92,7 @@ interface ConnectionCaller {
   /** Caller session id (`mcp:<uuid>`). */
   readonly id: string;
   info: CallerInfo;
-  /** Named by `pi-browser/caller` (takes precedence over initialize). */
+  /** Named by `trusted-ua/caller` (takes precedence over initialize). */
   announced: boolean;
   /** A caller-session call ran (closeSession needed at disconnect). */
   used: boolean;
@@ -107,7 +110,7 @@ interface JsonRpcMessage {
   params?: unknown;
 }
 
-const SERVER_INFO = { name: "pi-browser", version: PI_BROWSER_META.version };
+const SERVER_INFO = { name: MCP_SERVER_NAME, version: TRUSTED_UA_META.version };
 
 /** Every tool this server lists and accepts (see the header for why static). */
 export const MCP_TOOL_SCHEMAS: ReadonlyArray<{ name: string; description?: string; parameters: unknown }> = [
@@ -148,8 +151,7 @@ export function mcpToolListResult(): { tools: Array<Record<string, unknown>> } {
 
 /** The broker's MCP endpoint (PI_BROWSER_BROKER_DIR honored): unix socket, or a named pipe on Windows. */
 export function defaultMcpEndpoint(): string {
-  const dir = process.env.PI_BROWSER_BROKER_DIR || path.join(os.homedir(), ".pi", PI_BROKER.runDir);
-  return ipcEndpoint(dir, PI_BROKER.mcpSocketFile);
+  return ipcEndpoint(runDir(), TRUSTED_UA_BROKER.mcpSocketFile);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -181,6 +183,7 @@ async function dispatch(
 
   switch (method) {
     case MCP_CALLER_NOTIFICATION:
+    case LEGACY_MCP_CALLER_NOTIFICATION: // a v0.4.0 bridge; new bridges send both
       caller.info = parseCallerInfo(params);
       caller.announced = true;
       log.info(
@@ -273,8 +276,7 @@ export async function startMcpBrowserServer(opts: McpBrowserServerOptions): Prom
   const isHostChild = (info: CallerInfo): boolean =>
     (opts.instanceId !== undefined && info.hostChild === opts.instanceId) ||
     (info.ppid !== undefined && info.ppid === brokerPid);
-  const dir =
-    process.env.PI_BROWSER_BROKER_DIR || path.join(os.homedir(), ".pi", PI_BROKER.runDir);
+  const dir = runDir();
   const socketPath = opts.socketPath ?? defaultMcpEndpoint();
 
   mkdirSync(dir, { recursive: true, mode: 0o700 });

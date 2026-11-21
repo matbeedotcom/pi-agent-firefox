@@ -39,11 +39,11 @@ test("request/response correlation across multiple in-flight requests", async ()
 test("error responses carry structured error objects", async () => {
   const { a, b } = pair();
   b.transport.onRequest = (_m, _p, id) => {
-    b.transport.respondError(id, { code: JSONRPC_ERROR.INVALID_PARAMS, message: "bad", data: { piBrowserError: "SESSION_BUSY" } });
+    b.transport.respondError(id, { code: JSONRPC_ERROR.INVALID_PARAMS, message: "bad", data: { trustedUaError: "SESSION_BUSY" } });
   };
   const err = (await a.transport.request("m").catch((e) => e)) as JsonRpcErrorObject;
   assert.equal(err.code, JSONRPC_ERROR.INVALID_PARAMS);
-  assert.equal((err.data as { piBrowserError: string }).piBrowserError, "SESSION_BUSY");
+  assert.equal((err.data as { trustedUaError: string }).trustedUaError, "SESSION_BUSY");
 });
 
 test("notifications flow without responses", async () => {

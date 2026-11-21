@@ -1,6 +1,6 @@
 /**
  * Pi Browser integration protocol: identity, versioning, and the private
- * `x-pi-browser/*` compatibility namespace.
+ * `x-trusted-ua/*` compatibility namespace.
  *
  * The private namespace is a transport compatibility layer only (see
  * PRODUCT.md §29–30). Tool names, arguments, and results are defined by
@@ -9,31 +9,31 @@
  */
 import type { MailSearchResult } from "./mail-tools.js";
 
-export const PI_BROWSER = {
-  /** Package name. */
-  name: "pi-browser",
+export const TRUSTED_UA = {
+  /** Product name (openspec rename-trusted-user-agent; was "pi-browser"). */
+  name: "trusted-ua",
   /** Package release version (npm version of trusted-user-agent). */
   version: "0.4.0",
   /**
    * Pi Browser integration protocol version (bump on breaking changes to
-   * x-pi-browser/* semantics or integration metadata). v2 = 2026-09-11
+   * x-trusted-ua/* semantics or integration metadata). v2 = 2026-09-11
    * identity rename (add-on IDs to @matbee.com, host name to com.matbee.agent).
-   * v3 = 2026-09-12: x-pi-browser/tool_update — long-running tools (mail_search)
-   * stream batches/progress to the host while the original x-pi-browser/tool
+   * v3 = 2026-09-12: x-trusted-ua/tool_update — long-running tools (mail_search)
+   * stream batches/progress to the host while the original x-trusted-ua/tool
    * request is still pending; MailSearchResult gains complete/sortComplete/scanned.
    */
   protocolVersion: 3,
   // 2026-11-20 (v0.3.0, external MCP callers): additive only, so the version
   // stays 3 — add-ons reject any other value, and mixed versions must keep
-  // working. New: the `pi-browser/caller` MCP notification (broker socket),
-  // `_meta.piBrowser.caller` / `callerApproval` on session/request_permission,
-  // the x-pi-browser/permission_withdrawn notification, and caller /
-  // externalAccess fields on x-pi-browser/permissions|permission_set|
+  // working. New: the `trusted-ua/caller` MCP notification (broker socket),
+  // `_meta.trustedUa.caller` / `callerApproval` on session/request_permission,
+  // the x-trusted-ua/permission_withdrawn notification, and caller /
+  // externalAccess fields on x-trusted-ua/permissions|permission_set|
   // permission_clear. Older peers ignore all of them (see callers.ts).
   // 2026-11-20 (v0.4.0, sidebar ACP agents): additive again — the
-  // x-pi-browser/agents request, `_meta.piBrowser.agent` on session/new,
+  // x-trusted-ua/agents request, `_meta.trustedUa.agent` on session/new,
   // listed sessions and relayed permission requests, `parentSession` on
-  // `pi-browser/caller`, and the "cancelled" permission_withdrawn reason
+  // `trusted-ua/caller`, and the "cancelled" permission_withdrawn reason
   // (see agents.ts). Older peers create and see pi sessions only.
   /**
    * Browser tool schema version (bump when tool schemas change).
@@ -58,7 +58,7 @@ export const PI_BROWSER = {
    * escape rejection); no add-on-side change (host-side realm global).
    * v8 = 2026-09-12: mail_search became incremental — results carry
    * `complete`, `sortComplete`, and `scanned`, and long searches stream
-   * partial batches over x-pi-browser/tool_update (protocol v3).
+   * partial batches over x-trusted-ua/tool_update (protocol v3).
    */
   browserToolVersion: 8,
   /** Stable Firefox Native Messaging host name (manifest `name`). */
@@ -89,7 +89,7 @@ export const AGENT_CAPABILITIES: readonly AgentCapability[] = [
 ];
 
 /** Agent-level integration identity (application-neutral). */
-export const PI_AGENT = {
+export const TRUSTED_UA_HOST = {
   /**
    * Native Messaging host name (manifest `name`), shared by both
    * applications. 2026-09-11: renamed from the `dev.pi.*` placeholders to a
@@ -106,7 +106,7 @@ export const PI_AGENT = {
    */
   authorizedExtensions: ["pi-agent-firefox@matbee.com", "pi-firefox@matbee.com", "pi-agent-thunderbird@matbee.com"],
   /**
-   * Agent integration protocol version (bump on breaking _meta.piAgent
+   * Agent integration protocol version (bump on breaking _meta.trustedUaAgent
    * changes). v2 = 2026-09-11 identity rename.
    */
   protocolVersion: 2,
@@ -121,16 +121,16 @@ export interface AgentClientIdentity {
 
 /**
  * Integration hello (THUNDERBIRD-PLAN.md §24). Sent by the client in the
- * ACP `initialize` params under `_meta.piAgent`.
+ * ACP `initialize` params under `_meta.trustedUaAgent`.
  */
 export interface AgentHello {
-  type: "pi.agent.hello";
+  type: "trusted-ua.hello";
   client: AgentClientIdentity;
   capabilities: AgentCapability[];
 }
 
-/** `_meta.piAgent` exchanged during ACP initialization. */
-export interface PiAgentMeta {
+/** `_meta.trustedUaAgent` exchanged during ACP initialization. */
+export interface TrustedUaAgentMeta {
   version: string;
   protocolVersion: number;
   /** Which client is attached (host echo of the hello). */
@@ -142,14 +142,14 @@ export interface PiAgentMeta {
    * initialize — the session tool surface (plan §29). Lets the add-on UI
    * show peer-app capabilities (e.g. browsing from the mail client). Absent
    * on legacy hosts and in standalone single-app mode (use `capabilities`).
-   * Live changes arrive via x-pi-browser/capabilities_changed.
+   * Live changes arrive via x-trusted-ua/capabilities_changed.
    */
   connectedCapabilities?: AgentCapability[];
 }
 
-export const PI_AGENT_META: PiAgentMeta = {
-  version: PI_BROWSER.version,
-  protocolVersion: PI_AGENT.protocolVersion,
+export const TRUSTED_UA_AGENT_META: TrustedUaAgentMeta = {
+  version: TRUSTED_UA.version,
+  protocolVersion: TRUSTED_UA_HOST.protocolVersion,
   capabilities: [],
 };
 
@@ -171,7 +171,7 @@ export function normalizeCapabilities(values: unknown): AgentCapability[] {
  * falls back to browser compatibility defaults.
  */
 export function parseAgentHello(params: unknown): AgentHello | undefined {
-  const meta = (params as { _meta?: { piAgent?: unknown } } | null | undefined)?._meta?.piAgent;
+  const meta = (params as { _meta?: { trustedUaAgent?: unknown } } | null | undefined)?._meta?.trustedUaAgent;
   if (typeof meta !== "object" || meta === null) return undefined;
   const m = meta as Record<string, unknown>;
   const client = m.client as Record<string, unknown> | undefined;
@@ -179,7 +179,7 @@ export function parseAgentHello(params: unknown): AgentHello | undefined {
     return undefined;
   }
   return {
-    type: "pi.agent.hello",
+    type: "trusted-ua.hello",
     client: {
       application: client.application,
       extensionId: typeof client.extensionId === "string" ? client.extensionId : "",
@@ -189,11 +189,11 @@ export function parseAgentHello(params: unknown): AgentHello | undefined {
   };
 }
 
-/** Build the `_meta.piAgent` client hello block for ACP `initialize` params. */
-export function buildAgentHelloMeta(hello: Omit<AgentHello, "type">): { piAgent: AgentHello } {
+/** Build the `_meta.trustedUaAgent` client hello block for ACP `initialize` params. */
+export function buildAgentHelloMeta(hello: Omit<AgentHello, "type">): { trustedUaAgent: AgentHello } {
   return {
-    piAgent: {
-      type: "pi.agent.hello",
+    trustedUaAgent: {
+      type: "trusted-ua.hello",
       client: hello.client,
       capabilities: normalizeCapabilities(hello.capabilities),
     },
@@ -208,7 +208,7 @@ export function buildAgentHelloMeta(hello: Omit<AgentHello, "type">): { piAgent:
  * no localhost TCP). Native Messaging remains the externally visible
  * Mozilla security boundary — the relay only forwards bytes.
  */
-export const PI_BROKER = {
+export const TRUSTED_UA_BROKER = {
   /** Run directory name under $HOME (0700; env PI_BROWSER_BROKER_DIR overrides). */
   runDir: "run",
   /** Unix socket file name inside the run directory (0600). */
@@ -231,7 +231,7 @@ export const PI_BROKER = {
 } as const;
 
 /** Metadata exchanged during ACP initialization (PRODUCT.md §45). */
-export interface PiBrowserMeta {
+export interface TrustedUaMeta {
   version: string;
   protocolVersion: number;
   browserToolVersion: number;
@@ -244,20 +244,20 @@ export interface PiBrowserMeta {
   workspaceRoot?: string;
 }
 
-export const PI_BROWSER_META: PiBrowserMeta = {
-  version: PI_BROWSER.version,
-  protocolVersion: PI_BROWSER.protocolVersion,
-  browserToolVersion: PI_BROWSER.browserToolVersion,
+export const TRUSTED_UA_META: TrustedUaMeta = {
+  version: TRUSTED_UA.version,
+  protocolVersion: TRUSTED_UA.protocolVersion,
+  browserToolVersion: TRUSTED_UA.browserToolVersion,
 };
 
 /** Private extension methods (PRODUCT.md §30). Never used for ACP session semantics. */
-export const X_PI_BROWSER = {
+export const X_TRUSTED_UA = {
   /** Firefox → host: liveness/version probe used by /pi-browser status|doctor. */
-  ping: "x-pi-browser/ping",
+  ping: "x-trusted-ua/ping",
   /** Host → Firefox: browser tool invocation (legacy compatibility transport). */
-  tool: "x-pi-browser/tool",
+  tool: "x-trusted-ua/tool",
   /** Firefox → host: browser-side notifications (tab closed/navigated, binding changed). */
-  notify: "x-pi-browser/notify",
+  notify: "x-trusted-ua/notify",
   /**
    * Host → session-owner client: a tool's approval prompt is being shown in
    * ANOTHER app (cross-app routing). The owner's UI is where the user is
@@ -266,88 +266,88 @@ export const X_PI_BROWSER = {
    * displays it; it does NOT answer it (the executing client owns the
    * canonical session/request_permission round-trip).
    */
-  permission_prompted: "x-pi-browser/permission_prompted",
+  permission_prompted: "x-trusted-ua/permission_prompted",
   /**
    * Client → host: incremental progress for a tool call that is still
-   * pending (the x-pi-browser/tool request has not answered yet). The host
+   * pending (the x-trusted-ua/tool request has not answered yet). The host
    * maps batches onto ACP session/update tool_call_update so the model can
    * see results before the final answer; the final tool response is
    * unchanged, so clients that ignore updates stay compatible.
    * The update never authorizes anything — it only reports results of the
    * already-approved call.
    */
-  tool_update: "x-pi-browser/tool_update",
+  tool_update: "x-trusted-ua/tool_update",
   /**
    * Host → all clients: the set of connected capability providers changed
    * (a peer app connected or disconnected). Carries the current union so
    * each UI can update its "capabilities:" line. Display-only; additive —
    * legacy hosts never send it and clients ignore it when absent.
    */
-  capabilities_changed: "x-pi-browser/capabilities_changed",
+  capabilities_changed: "x-trusted-ua/capabilities_changed",
   /**
    * Client → host: fetch the permission configuration — every approval-
    * gated tool with its persistent "always allow" state. The add-on
    * Configuration page renders from this (PRODUCT.md §55).
    */
-  permissions: "x-pi-browser/permissions",
+  permissions: "x-trusted-ua/permissions",
   /**
    * Client → host: set one tool's persistent state (ask | deny | allow)
    * from the Configuration page.
    */
-  permission_set: "x-pi-browser/permission_set",
+  permission_set: "x-trusted-ua/permission_set",
   /**
    * Client → host: clear the persistent "always allow" state of one tool
    * (or of every tool when `tool` is omitted).
    */
-  permission_clear: "x-pi-browser/permission_clear",
+  permission_clear: "x-trusted-ua/permission_clear",
   /**
    * Client → host: compile a page plan for a verified source identity
    * (skills-runtime-design.md §2, §7). The source identity is supplied by
    * the addon coordinator, never a page payload.
    */
-  skills_plan: "x-pi-browser/skills_plan",
+  skills_plan: "x-trusted-ua/skills_plan",
   /**
    * Client → host: submit a verified skill event. Responds with an ack:
    * accepted (jobs launched), no-match, stale-plan (re-plan), unavailable,
    * or duplicate (coordinator redelivery).
    */
-  skills_event: "x-pi-browser/skills_event",
+  skills_event: "x-trusted-ua/skills_event",
   /** Client → host: cancel pending skill work for one interaction. */
-  skills_cancel: "x-pi-browser/skills_cancel",
+  skills_cancel: "x-trusted-ua/skills_cancel",
   /** Client → host: probe the skill runtime (queue, live plans, stats). */
-  skills_status: "x-pi-browser/skills_status",
+  skills_status: "x-trusted-ua/skills_status",
   /**
    * Host → client: resolve a contextRef against the coordinator's bounded
    * snapshot store (privacy by request: only the requested fields return).
    */
-  skills_context: "x-pi-browser/skills_context",
+  skills_context: "x-trusted-ua/skills_context",
   /**
    * Host → client: deliver a skill job outcome for a submitted event. The
    * coordinator routes it to the gate/UI and acks delivery; the request ID
    * makes delivery explicit (design §7: results require request IDs).
    */
-  skills_result: "x-pi-browser/skills_result",
+  skills_result: "x-trusted-ua/skills_result",
   /**
    * Client → host: the agents a new session can run on (built-in pi plus
    * configured external ACP agents), with availability. See agents.ts.
    */
-  agents: "x-pi-browser/agents",
+  agents: "x-trusted-ua/agents",
 } as const;
 
-/** Params for x-pi-browser/ping (Firefox → host). */
+/** Params for x-trusted-ua/ping (Firefox → host). */
 export interface PingParams {
   clientVersion?: string;
 }
 
-/** Result for x-pi-browser/ping. */
+/** Result for x-trusted-ua/ping. */
 export interface PingResult {
   pong: true;
-  meta: PiBrowserMeta;
+  meta: TrustedUaMeta;
   /** Whether the host reached a Pi SDK model runtime (diagnostic only). */
   backendReady: boolean;
 }
 
-/** Params for x-pi-browser/tool (host → Firefox). */
+/** Params for x-trusted-ua/tool (host → Firefox). */
 export interface BrowserToolCallParams {
   sessionId: string;
   tool: string;
@@ -356,14 +356,14 @@ export interface BrowserToolCallParams {
   timeoutMs?: number;
   /**
    * Stable id for this call, generated by the host. The client echoes it in
-   * x-pi-browser/tool_update notifications so the host can route updates to
+   * x-trusted-ua/tool_update notifications so the host can route updates to
    * the pending call (and reject updates for unknown calls). Older clients
    * never send updates, so it is optional on the wire.
    */
   toolCallId?: string;
 }
 
-/** Params for x-pi-browser/tool_update (client → host). */
+/** Params for x-trusted-ua/tool_update (client → host). */
 export interface BrowserToolUpdateParams {
   sessionId: string;
   /** Matches the tool call currently executing in this session. */
@@ -401,13 +401,13 @@ export interface BrowserNotifyParams {
   data?: Record<string, unknown>;
 }
 
-/** Params for x-pi-browser/capabilities_changed (host → client). */
+/** Params for x-trusted-ua/capabilities_changed (host → client). */
 export interface CapabilitiesChangedParams {
   /** Union of all connected clients' capabilities (canonical order). */
   capabilities: AgentCapability[];
 }
 
-/** Params for x-pi-browser/permission_prompted (host → session-owner client). */
+/** Params for x-trusted-ua/permission_prompted (host → session-owner client). */
 export interface PermissionPromptedParams {
   sessionId: string;
   /** The tool call the approval belongs to (matches the session/update stream). */
@@ -448,7 +448,7 @@ export type PermissionToolGroup =
   | "contacts";
 
 /**
- * One approval-gated tool as reported by x-pi-browser/permissions.
+ * One approval-gated tool as reported by x-trusted-ua/permissions.
  * `state` is the tool's persistent decision: "ask" (prompt every time),
  * "deny" (refuse without asking) or "allow" (always approved). `managedBy`
  * marks tools whose grant is owned by the application (not the host store)
@@ -468,7 +468,7 @@ export interface PermissionConfigTool {
   note?: string;
 }
 
-/** Result for x-pi-browser/permissions. */
+/** Result for x-trusted-ua/permissions. */
 export interface PermissionConfigResult {
   tools: PermissionConfigTool[];
   /**
@@ -488,7 +488,7 @@ export interface PermissionConfigResult {
  */
 export type PermissionToolState = "ask" | "deny" | "allow";
 
-/** Params for x-pi-browser/permission_set. */
+/** Params for x-trusted-ua/permission_set. */
 export interface PermissionSetParams {
   /** Set one tool's state (with `state`). */
   tool?: string;
@@ -499,7 +499,7 @@ export interface PermissionSetParams {
   externalAccess?: boolean;
 }
 
-/** Result for x-pi-browser/permission_set (echoes what was set). */
+/** Result for x-trusted-ua/permission_set (echoes what was set). */
 export interface PermissionSetResult {
   tool?: string;
   state?: PermissionToolState;
@@ -508,7 +508,7 @@ export interface PermissionSetResult {
 }
 
 /**
- * Params for x-pi-browser/permission_clear: `tool` clears one tool,
+ * Params for x-trusted-ua/permission_clear: `tool` clears one tool,
  * `caller` forgets one caller decision, neither clears every tool decision
  * (caller decisions are kept).
  */
@@ -517,7 +517,7 @@ export interface PermissionClearParams {
   caller?: import("./callers.js").CallerRef;
 }
 
-/** Result for x-pi-browser/permission_clear. */
+/** Result for x-trusted-ua/permission_clear. */
 export interface PermissionClearResult {
   cleared: string[];
 }

@@ -36,7 +36,7 @@ import {
   CALLER_DENY,
   applicationShortName,
   type PermissionCallerMeta,
-  type PermissionRequestPiBrowserMeta,
+  type PermissionRequestTrustedUaMeta,
 } from "./callers.js";
 
 /** Wire method name the host uses to request permission from the client. */
@@ -97,10 +97,10 @@ export function buildPermissionRequest(params: {
     },
     options,
     _meta: {
-      piBrowser: {
+      trustedUa: {
         tool: params.toolName,
         ...(params.caller ? { caller: params.caller } : {}),
-      } satisfies PermissionRequestPiBrowserMeta,
+      } satisfies PermissionRequestTrustedUaMeta,
     },
   };
 }
@@ -135,20 +135,20 @@ export function buildCallerApprovalRequest(params: {
     _meta: {
       // No `tool`: add-ons without caller support then describe the prompt
       // from its title ("codex wants to use Firefox tools").
-      piBrowser: {
+      trustedUa: {
         triggerTool: params.toolName,
         caller: params.caller,
         callerApproval: true,
         application: params.application,
-      } satisfies PermissionRequestPiBrowserMeta,
+      } satisfies PermissionRequestTrustedUaMeta,
     },
   };
 }
 
-/** The `_meta.piBrowser` block of a permission request (typed, may be empty). */
-export function permissionRequestMeta(req: { _meta?: unknown } | undefined): PermissionRequestPiBrowserMeta {
-  const meta = (req?._meta as { piBrowser?: unknown } | undefined)?.piBrowser;
-  return typeof meta === "object" && meta !== null ? (meta as PermissionRequestPiBrowserMeta) : {};
+/** The `_meta.trustedUa` block of a permission request (typed, may be empty). */
+export function permissionRequestMeta(req: { _meta?: unknown } | undefined): PermissionRequestTrustedUaMeta {
+  const meta = (req?._meta as { trustedUa?: unknown } | undefined)?.trustedUa;
+  return typeof meta === "object" && meta !== null ? (meta as PermissionRequestTrustedUaMeta) : {};
 }
 
 /** True when the user allowed the tool (any allow_* option). */
@@ -218,7 +218,7 @@ export interface GatedToolEntry {
 /**
  * The complete, canonical list of approval-gated tools (browser, REPL,
  * control, mail, compose, mail mutations, contacts) in stable group order.
- * Both the host (x-pi-browser/permissions) and the add-on UIs derive their
+ * Both the host (x-trusted-ua/permissions) and the add-on UIs derive their
  * tool list from here, so the page can never drift from the real surface.
  */
 export function listGatedTools(): GatedToolEntry[] {

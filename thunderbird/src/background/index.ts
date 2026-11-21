@@ -9,7 +9,7 @@
  *     which loads the space/ page that is the chat UI)
  *   - declaring the Thunderbird application identity + capabilities in the
  *     pi.agent.hello handshake
- *   - dispatching read-only mail tools (T2) over the legacy x-pi-browser/tool
+ *   - dispatching read-only mail tools (T2) over the legacy x-trusted-ua/tool
  *     transport to the mail-dispatcher, which wraps Thunderbird's WebExtension
  *     mail APIs.
  *
@@ -24,9 +24,9 @@ import {
   isContactsTool,
   isMailTool,
   isMailMutationTool,
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
-  X_PI_BROWSER,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
+  X_TRUSTED_UA,
   type PermissionClearResult,
   type PermissionConfigResult,
   type PermissionSetResult,
@@ -36,7 +36,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@trusted-ua/protocol";
-import { AcpClient, SESSION_OPEN_TIMEOUT_MS, fetchPiTheme, SessionStore, type HostStatus, type PiTheme } from "@trusted-ua/webext";
+import { AcpClient, SESSION_OPEN_TIMEOUT_MS, fetchTrustedUaTheme, SessionStore, type HostStatus, type TrustedUaTheme } from "@trusted-ua/webext";
 import { ApprovalWindowController, isCallerPermissionRequest, fetchAgents } from "@trusted-ua/webext";
 import { dispatchMailTool, type MailToolContext } from "./mail-dispatcher.js";
 import { dispatchComposeTool } from "./compose-dispatcher.js";
@@ -58,7 +58,7 @@ let bootstrapInFlight = false;
 let spaceId: number | undefined;
 
 /** Active browser theme snapshot (browser.theme); undefined when unavailable. */
-let theme: PiTheme | undefined;
+let theme: TrustedUaTheme | undefined;
 
 // ---------------------------------------------------------------------------
 // Permission prompts (sensitive tools require explicit user approval)
@@ -198,7 +198,7 @@ async function ensurePiSpace(): Promise<number | undefined> {
     const found = existing.find((s) => s.name === SPACE_NAME);
     if (found) {
       spaceId = found.id;
-      await browser.piPane.registerSpaceButton(SPACE_NAME);
+      await browser.trustedUaPane.registerSpaceButton(SPACE_NAME);
       return spaceId;
     }
     const space = await browser.spaces.create(
@@ -207,7 +207,7 @@ async function ensurePiSpace(): Promise<number | undefined> {
       { title: "Pi Agent", defaultIcon: "icons/icon.svg" },
     );
     spaceId = space.id;
-    await browser.piPane.registerSpaceButton(SPACE_NAME);
+    await browser.trustedUaPane.registerSpaceButton(SPACE_NAME);
     return spaceId;
   } catch (err) {
     console.error("[pi-thunderbird] ensurePiSpace failed", err);
@@ -221,7 +221,7 @@ async function ensurePiSpace(): Promise<number | undefined> {
 
 const client = new AcpClient(
   {
-    clientName: "pi-thunderbird",
+    clientName: "trusted-ua-thunderbird",
     application: "thunderbird",
     // Capabilities: T2 read-only mail + attachments, T3 draft-first compose
     // (no send), T4 mail organization (mailModify: mark read/tag/archive/move —
@@ -232,12 +232,12 @@ const client = new AcpClient(
     onSessionUpdate(params: SessionNotification) {
       pushSessionUpdate(params.sessionId, params.update);
     },
-    // Read-only mail tools arrive over the legacy x-pi-browser/tool transport.
+    // Read-only mail tools arrive over the legacy x-trusted-ua/tool transport.
     // Dispatch the known mail tools; reject anything else with a structured
     // error (no browser or compose tools are served in T2).
     onToolCall: async (params) => {
       if (isMailTool(params.tool)) {
-        // Long searches stream batches over x-pi-browser/tool_update while the
+        // Long searches stream batches over x-trusted-ua/tool_update while the
         // original request stays pending. The sequence is per toolCallId and
         // strictly increasing; the host validates and maps each update. The
         // callback only reports results of the already-approved call — it
@@ -274,18 +274,18 @@ const client = new AcpClient(
         const result = await dispatchContactsTool(params.tool, params.arguments);
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       }
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND,
         `Thunderbird does not serve tool: ${params.tool}`,
       );
     },
     onMcpConnect: () =>
       Promise.reject(
-        new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, "Thunderbird declares no MCP server (mail tools use the legacy transport)"),
+        new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_UNAVAILABLE, "Thunderbird declares no MCP server (mail tools use the legacy transport)"),
       ),
     onMcpMessage: () =>
       Promise.reject(
-        new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, "Thunderbird declares no MCP server (mail tools use the legacy transport)"),
+        new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_UNAVAILABLE, "Thunderbird declares no MCP server (mail tools use the legacy transport)"),
       ),
     onMcpDisconnect: async () => {
       /* nothing to release */
@@ -339,11 +339,11 @@ interface UiState {
   sessions: ReturnType<SessionStore["snapshot"]>["sessions"];
   lastSessionId?: string;
   spaceId?: number;
-  theme?: PiTheme;
+  theme?: TrustedUaTheme;
 }
 
 /**
- * Pi pane Ports — the piPane Experiment mounts a native 4th-column <browser>
+ * Pi pane Ports — the trustedUaPane Experiment mounts a native 4th-column <browser>
  * that hosts our pane/ page (a WebExtension view). That page opens a runtime
  * Port named "pi-pane" and shares the SAME state/update/action protocol as the
  * Space, but per-tab and streaming. The Experiment owns no Pi logic; it only
@@ -410,22 +410,22 @@ async function createSession(cwd: string, agent?: string): Promise<string> {
   const res = await client.request<{
     sessionId: string;
     configOptions?: unknown;
-    _meta?: { piBrowser?: { workspace?: string; agent?: { id: string; name: string } } };
+    _meta?: { trustedUa?: { workspace?: string; agent?: { id: string; name: string } } };
   }>(
     AGENT_METHODS.session_new,
     // No mcpServers: the add-on declares no MCP server. The host uses the
     // legacy transport; the mail tools are still registered because the client
     // advertises the "mail"/"attachments" capabilities in its hello.
     // `agent`: an external ACP agent chosen in the new-session panel.
-    { cwd, ...(agent ? { _meta: { piBrowser: { agent } } } : {}) },
+    { cwd, ...(agent ? { _meta: { trustedUa: { agent } } } : {}) },
     SESSION_OPEN_TIMEOUT_MS,
   );
   const sessionId = res.sessionId;
   // The agent may provision a per-task workspace as the session cwd (when the
   // requested cwd was neutral). Record the real cwd so the UI shows where the
   // model's files land.
-  const effectiveCwd = res._meta?.piBrowser?.workspace ?? cwd;
-  store.upsertCreated(sessionId, effectiveCwd, res.configOptions as never, res._meta?.piBrowser?.agent);
+  const effectiveCwd = res._meta?.trustedUa?.workspace ?? cwd;
+  store.upsertCreated(sessionId, effectiveCwd, res.configOptions as never, res._meta?.trustedUa?.agent);
   store.setLastSession(sessionId);
   activeSessionId = sessionId;
   pushState();
@@ -448,8 +448,8 @@ async function openExistingSession(sessionId: string, cwd: string, load: boolean
 
 async function sendPrompt(sessionId: string, text: string): Promise<void> {
   const view = store.get(sessionId);
-  if (!view) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
-  if (view.streaming) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, "session is busy");
+  if (!view) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+  if (view.streaming) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_BUSY, "session is busy");
   store.setStreaming(sessionId, true);
   pushState();
   try {
@@ -536,8 +536,8 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
     .then((result) => sendResponse({ ok: true, ...(result !== undefined ? { result } : {}) }))
     .catch((err) => {
       const data =
-        err instanceof PiBrowserProtocolError
-          ? { piBrowserError: err.code, message: err.message }
+        err instanceof TrustedUaProtocolError
+          ? { trustedUaError: err.code, message: err.message }
           : { message: String(err) };
       sendResponse({ ok: false, error: data });
     });
@@ -570,7 +570,7 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
     }
     case "new_session": {
       if (!client.connected) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.NATIVE_HOST_NOT_INSTALLED, "not connected to native host");
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.NATIVE_HOST_NOT_INSTALLED, "not connected to native host");
       }
       const cwd = String(payload.cwd ?? "").trim() || processCwdLikeFallback();
       const agent = typeof payload.agent === "string" && payload.agent ? payload.agent : undefined;
@@ -585,7 +585,7 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
     case "select_session": {
       const sessionId = String(payload.sessionId);
       const view = store.get(sessionId);
-      if (!view) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      if (!view) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
       if (!view.loaded) {
         await openExistingSession(sessionId, view.cwd, true);
       } else {
@@ -598,7 +598,7 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
     case "prompt": {
       const sessionId = String(payload.sessionId);
       const text = String(payload.text ?? "");
-      if (!text.trim()) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "empty prompt");
+      if (!text.trim()) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "empty prompt");
       void sendPrompt(sessionId, text);
       return { accepted: true };
     }
@@ -631,7 +631,7 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
         // Space not created yet (startup race); try to ensure it now.
         await ensurePiSpace();
       }
-      if (spaceId === undefined) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "Pi Space not available");
+      if (spaceId === undefined) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "Pi Space not available");
       await browser.spaces.open(spaceId);
       return {};
     }
@@ -642,25 +642,25 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
     // Permission Configuration page (PRODUCT.md §55): the host is the
     // source of truth for the per-tool "always allow" state.
     case "permission_config": {
-      return client.request<PermissionConfigResult>(X_PI_BROWSER.permissions, {}, 10_000);
+      return client.request<PermissionConfigResult>(X_TRUSTED_UA.permissions, {}, 10_000);
     }
     case "permission_set": {
       const state = payload.state === "allow" || payload.state === "deny" || payload.state === "ask" ? payload.state : "ask";
       return client.request<PermissionSetResult>(
-        X_PI_BROWSER.permission_set,
+        X_TRUSTED_UA.permission_set,
         permissionSetParams(payload as unknown as Record<string, unknown>, state),
         10_000,
       );
     }
     case "permission_clear": {
       return client.request<PermissionClearResult>(
-        X_PI_BROWSER.permission_clear,
+        X_TRUSTED_UA.permission_clear,
         permissionClearParams(payload as unknown as Record<string, unknown>),
         10_000,
       );
     }
     default:
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `unknown action: ${action}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `unknown action: ${action}`);
   }
 }
 
@@ -729,8 +729,8 @@ browser.runtime.onConnect.addListener((port: browser.runtime.Port) => {
       })
       .catch((err) => {
         const data =
-          err instanceof PiBrowserProtocolError
-            ? { piBrowserError: err.code, message: err.message }
+          err instanceof TrustedUaProtocolError
+            ? { trustedUaError: err.code, message: err.message }
             : { message: String(err) };
         try {
           port.postMessage({ type: "pane/action_result", requestId, ok: false, error: data });
@@ -765,10 +765,10 @@ void (async () => {
   await ensurePiSpace();
   // Read the active browser theme so the Space and panes render with it;
   // re-read on theme change and re-push state (UIs apply theme per state).
-  theme = await fetchPiTheme();
+  theme = await fetchTrustedUaTheme();
   if (typeof browser.theme !== "undefined" && browser.theme?.onUpdated) {
     browser.theme.onUpdated.addListener(() => {
-      void fetchPiTheme().then((t) => {
+      void fetchTrustedUaTheme().then((t) => {
         theme = t;
         pushState();
       });
@@ -783,7 +783,7 @@ void (async () => {
 // ensureConnected() auto-detects a host installed after startup.
 setInterval(() => {
   if (client.connected && hostStatus.state === "connected") {
-    client.request(X_PI_BROWSER.ping, {}, 5_000).catch(() => {
+    client.request(X_TRUSTED_UA.ping, {}, 5_000).catch(() => {
       /* the port's onDisconnect handler deals with dropped links */
     });
   } else {
@@ -791,7 +791,7 @@ setInterval(() => {
   }
 }, 10_000);
 
-/** x-pi-browser/permission_set params from a settings action (tool, caller or externalAccess). */
+/** x-trusted-ua/permission_set params from a settings action (tool, caller or externalAccess). */
 function permissionSetParams(payload: Record<string, unknown>, state: "allow" | "deny" | "ask"): Record<string, unknown> {
   if (typeof payload.externalAccess === "boolean") return { externalAccess: payload.externalAccess };
   const caller = payload.caller as { application?: unknown; name?: unknown } | undefined;
@@ -799,7 +799,7 @@ function permissionSetParams(payload: Record<string, unknown>, state: "allow" | 
   return { tool: String(payload.tool ?? ""), state };
 }
 
-/** x-pi-browser/permission_clear params from a settings action (tool, caller, or all tools). */
+/** x-trusted-ua/permission_clear params from a settings action (tool, caller, or all tools). */
 function permissionClearParams(payload: Record<string, unknown>): Record<string, unknown> {
   const caller = payload.caller as { application?: unknown; name?: unknown } | undefined;
   if (caller && typeof caller.name === "string") return { caller: { application: caller.application, name: caller.name } };

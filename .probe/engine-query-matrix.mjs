@@ -14,13 +14,13 @@
  *
  * Harness: identical to .probe/live-mail-search.mjs (mock broker + real host
  * + real add-on + real engine), one prompt firing the whole matrix as
- * sequential mock tool calls (mail_debug_query, the piDebug-gated raw query
+ * sequential mock tool calls (mail_debug_query, the trustedUaDebug-gated raw query
  * runner in the dispatcher).
  *
  * Run: node .probe/engine-query-matrix.mjs
  * Env: PI_MATRIX_TEXT (default "pi browser"), PI_MATRIX_TERM (default "browser")
  *
- * The add-on dist must contain the piDebug build (thunderbird/dist).
+ * The add-on dist must contain the trustedUaDebug build (thunderbird/dist).
  */
 import { execSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";

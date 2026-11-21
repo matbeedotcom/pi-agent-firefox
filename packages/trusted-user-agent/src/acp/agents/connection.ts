@@ -16,7 +16,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import { PROTOCOL_VERSION, PI_BROWSER_META } from "@trusted-ua/protocol";
+import { PROTOCOL_VERSION, TRUSTED_UA_META } from "@trusted-ua/protocol";
 import type { Logger } from "../../logger.js";
 import type { AgentSpec } from "./registry.js";
 
@@ -193,7 +193,7 @@ export class AgentConnection {
       this.request("initialize", {
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-        clientInfo: { name: "pi-browser", title: "Pi Browser", version: PI_BROWSER_META.version },
+        clientInfo: { name: "trusted-ua", title: "Trusted User Agent", version: TRUSTED_UA_META.version },
       }, this.initializeTimeoutMs),
       spawnError,
     ])) as {

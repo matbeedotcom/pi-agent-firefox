@@ -9,7 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   type SkillEventSource,
   type SkillsContextRequestParams,
   type SkillsContextResult,
@@ -36,7 +36,7 @@ function setup(options: { onResult?: (params: SkillsResultParams) => void } = {}
   const recorded: Recorded[] = [];
   const fakeRequest = (method: string, params?: unknown): Promise<unknown> => {
     recorded.push({ method, params });
-    if (method === X_PI_BROWSER.skills_plan) {
+    if (method === X_TRUSTED_UA.skills_plan) {
       return Promise.resolve({
         status: "ok",
         plan: {
@@ -102,7 +102,7 @@ test("events are stamped, snapshots are stored, contextRef resolution is privacy
     fields: ["draft"],
     maxBytes: 32_768,
   };
-  const resolved = coordinator.handleHostRequest(X_PI_BROWSER.skills_context, hostRequest) as SkillsContextResult;
+  const resolved = coordinator.handleHostRequest(X_TRUSTED_UA.skills_context, hostRequest) as SkillsContextResult;
   const context = resolved.context as Record<string, unknown>;
   assert.equal(context.draft, "Nice post!");
   assert.equal(Object.keys(context).length, 1);
@@ -111,7 +111,7 @@ test("events are stamped, snapshots are stored, contextRef resolution is privacy
 
   // Unknown refs are rejected (stale snapshots after navigation/reconnect).
   assert.throws(
-    () => coordinator.handleHostRequest(X_PI_BROWSER.skills_context, { ...hostRequest, contextRef: "snap:gone" }),
+    () => coordinator.handleHostRequest(X_TRUSTED_UA.skills_context, { ...hostRequest, contextRef: "snap:gone" }),
     /unknown contextRef/,
   );
 });
@@ -131,7 +131,7 @@ test("redelivered events dedupe without resubmitting", async () => {
   assert.equal(first.status, "accepted");
   const second = await coordinator.submitEvent(input);
   assert.equal(second.status, "duplicate");
-  assert.equal(recorded.filter((r) => r.method === X_PI_BROWSER.skills_event).length, 1);
+  assert.equal(recorded.filter((r) => r.method === X_TRUSTED_UA.skills_event).length, 1);
   // A new draft revision is a new identity, not a duplicate.
   const third = await coordinator.submitEvent({ ...input, draftRevision: 1, contextRevision: 4 });
   assert.equal(third.status, "accepted");
@@ -167,17 +167,17 @@ test("job outcomes route to onResult and ack delivery", () => {
     jobId: "job:1", eventId: "evt:1", skillKey: "p/s", skillRevision: "v1",
     status: "done", decision: "suggest", replacementText: "A kinder reply",
   };
-  const ack = coordinator.handleHostRequest(X_PI_BROWSER.skills_result, params) as { delivered: boolean };
+  const ack = coordinator.handleHostRequest(X_TRUSTED_UA.skills_result, params) as { delivered: boolean };
   assert.deepEqual(ack, { delivered: true });
   assert.deepEqual(seen, [params]);
 
   // Semantic results only: an unavailable outcome carries no decision.
   assert.throws(
-    () => coordinator.handleHostRequest(X_PI_BROWSER.skills_result, { ...params, status: "unavailable", decision: "clear", reason: "boom" }),
+    () => coordinator.handleHostRequest(X_TRUSTED_UA.skills_result, { ...params, status: "unavailable", decision: "clear", reason: "boom" }),
     /no decision/,
   );
   // Unknown methods answer METHOD_NOT_FOUND (the client sends -32601).
-  assert.equal(coordinator.handleHostRequest("x-pi-browser/other", {}), undefined);
+  assert.equal(coordinator.handleHostRequest("x-trusted-ua/other", {}), undefined);
 });
 
 test("a new connection epoch invalidates snapshots, plans, and dedup state", async () => {
@@ -199,7 +199,7 @@ test("a new connection epoch invalidates snapshots, plans, and dedup state", asy
   assert.equal(newRef.status, "accepted");
   assert.throws(
     () =>
-      coordinator.handleHostRequest(X_PI_BROWSER.skills_context, {
+      coordinator.handleHostRequest(X_TRUSTED_UA.skills_context, {
         contextRef: oldRef, interactionId: "composer-7", planVersion: 1, fields: ["draft"], maxBytes: 32_768,
       }),
     /unknown contextRef/,
@@ -223,7 +223,7 @@ test("mail documents use account identity; forgetDocument drops a document's sta
   coordinator.forgetDocument(doc);
   assert.throws(
     () =>
-      coordinator.handleHostRequest(X_PI_BROWSER.skills_context, {
+      coordinator.handleHostRequest(X_TRUSTED_UA.skills_context, {
         contextRef: (recorded[1]!.params as { event: { contextRef: string } }).event.contextRef,
         interactionId: "composer-7", planVersion: 1, fields: ["draft"], maxBytes: 32_768,
       }),

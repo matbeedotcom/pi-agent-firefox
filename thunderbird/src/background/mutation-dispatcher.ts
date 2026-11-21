@@ -11,7 +11,7 @@
  *  - Additive tagging reads each message's current tags first (via messages.get)
  *    so it does not clobber existing tags.
  */
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 import { createTag, listTags, resolveTagKeys } from "./tag-utils.js";
 
 export type MutationToolResult = Record<string, unknown>;
@@ -23,7 +23,7 @@ export type MutationToolResult = Record<string, unknown>;
 function reqIntArr(args: Record<string, unknown>, key: string): number[] {
   const v = args[key];
   if (!Array.isArray(v) || v.length === 0 || !v.every((n) => typeof n === "number" && Number.isFinite(n))) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${key} must be a non-empty array of message ids`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${key} must be a non-empty array of message ids`);
   }
   return v;
 }
@@ -31,7 +31,7 @@ function reqIntArr(args: Record<string, unknown>, key: string): number[] {
 function reqStrArr(args: Record<string, unknown>, key: string): string[] {
   const v = args[key];
   if (!Array.isArray(v) || v.length === 0 || !v.every((s) => typeof s === "string" && s.length > 0)) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${key} must be a non-empty array of strings`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${key} must be a non-empty array of strings`);
   }
   return v;
 }
@@ -39,7 +39,7 @@ function reqStrArr(args: Record<string, unknown>, key: string): string[] {
 function reqStr(args: Record<string, unknown>, key: string): string {
   const v = args[key];
   if (typeof v !== "string" || v.length === 0) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${key} must be a non-empty string`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${key} must be a non-empty string`);
   }
   return v;
 }
@@ -81,7 +81,7 @@ async function mailSetTags(args: Record<string, unknown>): Promise<MutationToolR
     if (!keys.includes(key)) keys.push(key);
   }
   if (keys.length === 0) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "no tags could be resolved");
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "no tags could be resolved");
   }
 
   for (const id of ids) {
@@ -138,6 +138,6 @@ export async function dispatchMutationTool(
     case "mail_move":
       return mailMove(args);
     default:
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown mutation tool: ${tool}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown mutation tool: ${tool}`);
   }
 }

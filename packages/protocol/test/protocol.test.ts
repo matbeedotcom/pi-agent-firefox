@@ -20,10 +20,10 @@ import {
 } from "../src/control-tools.js";
 import {
   codeFromErrorObject,
-  isPiBrowserErrorCode,
-  PI_BROWSER_ERROR,
-  PI_BROWSER_ERROR_CODES,
-  PiBrowserProtocolError,
+  isTrustedUaErrorCode,
+  TRUSTED_UA_ERROR,
+  TRUSTED_UA_ERROR_CODES,
+  TrustedUaProtocolError,
   toErrorObject,
 } from "../src/errors.js";
 import { COMPOSE_TOOLS } from "../src/compose-tools.js";
@@ -37,11 +37,11 @@ import {
 } from "../src/mail-tools.js";
 import {
   AGENT_CAPABILITIES,
-  PI_AGENT,
-  PI_AGENT_META,
-  PI_BROWSER,
-  PI_BROWSER_META,
-  X_PI_BROWSER,
+  TRUSTED_UA_HOST,
+  TRUSTED_UA_AGENT_META,
+  TRUSTED_UA,
+  TRUSTED_UA_META,
+  X_TRUSTED_UA,
   applicationDisplayName,
   buildAgentHelloMeta,
   normalizeCapabilities,
@@ -215,29 +215,29 @@ test("repl tool registry: host-side javascript tool (never on the add-on surface
 });
 
 test("error codes map to unique reserved JSON-RPC codes", () => {
-  const numeric = [...PI_BROWSER_ERROR_CODES.values()];
+  const numeric = [...TRUSTED_UA_ERROR_CODES.values()];
   assert.equal(new Set(numeric).size, numeric.length);
   for (const n of numeric) {
     assert.ok(n >= -32099 && n <= -32001, `code out of range: ${n}`);
   }
-  const err = toErrorObject(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, "tab gone", { tabId: 3 });
-  assert.equal((err.data as { piBrowserError?: string })?.piBrowserError, "BROWSER_TAB_CLOSED");
+  const err = toErrorObject(TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED, "tab gone", { tabId: 3 });
+  assert.equal((err.data as { trustedUaError?: string })?.trustedUaError, "BROWSER_TAB_CLOSED");
   assert.equal(codeFromErrorObject(err), "BROWSER_TAB_CLOSED");
   assert.equal(codeFromErrorObject({ code: -32601, message: "nope" }), undefined);
-  assert.ok(isPiBrowserErrorCode(PI_BROWSER_ERROR.SESSION_NOT_FOUND));
-  assert.ok(!isPiBrowserErrorCode("NOPE"));
-  const p = new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, "busy");
-  assert.equal((p.toErrorObject().data as { piBrowserError?: string })?.piBrowserError, "SESSION_BUSY");
+  assert.ok(isTrustedUaErrorCode(TRUSTED_UA_ERROR.SESSION_NOT_FOUND));
+  assert.ok(!isTrustedUaErrorCode("NOPE"));
+  const p = new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_BUSY, "busy");
+  assert.equal((p.toErrorObject().data as { trustedUaError?: string })?.trustedUaError, "SESSION_BUSY");
 });
 
 test("integration metadata is stable and complete", () => {
-  assert.equal(PI_BROWSER.nativeHost, "dev.pi.browser");
-  assert.equal(PI_BROWSER.extensionId, "pi-agent-firefox@matbee.com");
-  assert.equal(PI_BROWSER_META.protocolVersion, 3);
-  assert.equal(PI_BROWSER_META.browserToolVersion, 8);
-  assert.equal(X_PI_BROWSER.tool, "x-pi-browser/tool");
+  assert.equal(TRUSTED_UA.nativeHost, "dev.pi.browser");
+  assert.equal(TRUSTED_UA.extensionId, "pi-agent-firefox@matbee.com");
+  assert.equal(TRUSTED_UA_META.protocolVersion, 3);
+  assert.equal(TRUSTED_UA_META.browserToolVersion, 8);
+  assert.equal(X_TRUSTED_UA.tool, "x-trusted-ua/tool");
   // v3: the incremental progress channel for long-running tool calls.
-  assert.equal(X_PI_BROWSER.tool_update, "x-pi-browser/tool_update");
+  assert.equal(X_TRUSTED_UA.tool_update, "x-trusted-ua/tool_update");
 });
 
 test("mail_search result contract: incremental fields are optional", () => {
@@ -297,7 +297,7 @@ test("permission helpers: request shape + outcome classification", () => {
   assert.equal(sessionOpt?.name, "Allow for this session");
   assert.equal(sessionOpt?.kind, "allow_once");
   // The tool name is carried in _meta for the client UI.
-  assert.equal((req._meta as { piBrowser?: { tool?: string } }).piBrowser?.tool, "browser_screenshot");
+  assert.equal((req._meta as { trustedUa?: { tool?: string } }).trustedUa?.tool, "browser_screenshot");
 
   // Outcome classification.
   assert.equal(permissionAllowed({ outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } }), true);
@@ -366,16 +366,16 @@ test("listGatedTools: canonical inventory covers every tool registry", () => {
   assert.equal(getGatedTool("pi_prompt")?.group, "control");
 });
 
-test("permission config wire methods: x-pi-browser/permissions|permission_set|permission_clear", () => {
-  assert.equal(X_PI_BROWSER.permissions, "x-pi-browser/permissions");
-  assert.equal(X_PI_BROWSER.permission_set, "x-pi-browser/permission_set");
-  assert.equal(X_PI_BROWSER.permission_clear, "x-pi-browser/permission_clear");
+test("permission config wire methods: x-trusted-ua/permissions|permission_set|permission_clear", () => {
+  assert.equal(X_TRUSTED_UA.permissions, "x-trusted-ua/permissions");
+  assert.equal(X_TRUSTED_UA.permission_set, "x-trusted-ua/permission_set");
+  assert.equal(X_TRUSTED_UA.permission_clear, "x-trusted-ua/permission_clear");
 });
 
 test("cross-app remote-prompt notification: method + app display names", () => {
   // Host → session-owner client, display-only (the executing client answers
   // the canonical session/request_permission itself).
-  assert.equal(X_PI_BROWSER.permission_prompted, "x-pi-browser/permission_prompted");
+  assert.equal(X_TRUSTED_UA.permission_prompted, "x-trusted-ua/permission_prompted");
   assert.equal(applicationDisplayName("thunderbird"), "Thunderbird (mail)");
   assert.equal(applicationDisplayName("firefox"), "Firefox (browser)");
 });
@@ -393,16 +393,16 @@ test("permissionPromptDescription: friendly text for known tools, safe fallback"
 });
 
 test("agent identity: host name + authorized extensions", () => {
-  assert.equal(PI_AGENT.nativeHost, "com.matbee.agent");
-  assert.equal(PI_AGENT.legacyNativeHost, "dev.pi.browser");
-  assert.deepEqual(PI_AGENT.authorizedExtensions, [
+  assert.equal(TRUSTED_UA_HOST.nativeHost, "com.matbee.agent");
+  assert.equal(TRUSTED_UA_HOST.legacyNativeHost, "dev.pi.browser");
+  assert.deepEqual(TRUSTED_UA_HOST.authorizedExtensions, [
     "pi-agent-firefox@matbee.com",
     "pi-firefox@matbee.com",
     "pi-agent-thunderbird@matbee.com",
   ]);
-  assert.equal(PI_AGENT.protocolVersion, 2);
-  assert.equal(PI_AGENT_META.protocolVersion, PI_AGENT.protocolVersion);
-  assert.deepEqual(PI_AGENT_META.capabilities, []);
+  assert.equal(TRUSTED_UA_HOST.protocolVersion, 2);
+  assert.equal(TRUSTED_UA_AGENT_META.protocolVersion, TRUSTED_UA_HOST.protocolVersion);
+  assert.deepEqual(TRUSTED_UA_AGENT_META.capabilities, []);
   assert.deepEqual(AGENT_CAPABILITIES, ["browser", "mail", "compose", "attachments", "contacts", "mailModify"]);
 });
 
@@ -439,9 +439,9 @@ test("agent hello: absent or malformed hello parses to undefined (legacy fallbac
   assert.equal(parseAgentHello({ protocolVersion: 1 }), undefined);
   assert.equal(parseAgentHello(undefined), undefined);
   assert.equal(parseAgentHello({ _meta: {} }), undefined);
-  assert.equal(parseAgentHello({ _meta: { piAgent: { client: { application: "opera" } } } }), undefined);
-  assert.equal(parseAgentHello({ _meta: { piAgent: { client: "nope" } } }), undefined);
-  assert.equal(parseAgentHello({ _meta: { piAgent: { capabilities: ["browser"] } } }), undefined);
+  assert.equal(parseAgentHello({ _meta: { trustedUaAgent: { client: { application: "opera" } } } }), undefined);
+  assert.equal(parseAgentHello({ _meta: { trustedUaAgent: { client: "nope" } } }), undefined);
+  assert.equal(parseAgentHello({ _meta: { trustedUaAgent: { capabilities: ["browser"] } } }), undefined);
 });
 
 test("normalizeCapabilities: non-array and unknown values are ignored", () => {

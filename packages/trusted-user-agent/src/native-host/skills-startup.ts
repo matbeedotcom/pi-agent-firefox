@@ -23,6 +23,8 @@ import { createSkillsProtocol } from "../skills/skills-protocol.js";
 import type { SkillGrant } from "../skills/planner.js";
 import type { IsolatedSessionFactory } from "../skills/isolated-runner.js";
 import type { AcpTransport } from "./transport.js";
+import { runDir as brokerRunDir } from "../paths.js";
+import { piAgentDir } from "../env.js";
 
 export interface SkillsRuntime {
   host: SkillsHost;
@@ -127,7 +129,7 @@ export function startSkillsCatalogReloader(deps: {
   /** JSONL observation sink for reload outcomes. */
   record?: (event: SkillsLifecycleEvent) => void;
 }): SkillsCatalogReloader {
-  const runDir = process.env.PI_BROWSER_BROKER_DIR?.trim() || path.join(homedir(), ".pi", "run");
+  const runDir = brokerRunDir();
   const triggerPath = path.join(runDir, SKILLS_CATALOG_RELOAD_FILE);
   // Normally the broker created it already; don't depend on that ordering.
   mkdirSync(runDir, { recursive: true, mode: 0o700 });
@@ -190,7 +192,7 @@ export async function startSkillsRuntime(deps: {
       // Reuse the backend's model runtime so provider credentials resolve
       // identically for job sessions and chat sessions.
       ...(deps.backend instanceof PiSdkBackend ? { modelRuntime: await deps.backend.sharedModelRuntime() } : {}),
-      ...(process.env.PI_BROWSER_AGENT_DIR ? { agentDir: process.env.PI_BROWSER_AGENT_DIR } : {}),
+      ...(piAgentDir() ? { agentDir: piAgentDir() } : {}),
       ...(deps.sessionFactory ? { sessionFactory: deps.sessionFactory } : {}),
     });
     deps.log.info(
@@ -204,7 +206,7 @@ export async function startSkillsRuntime(deps: {
 }
 
 export interface ClientSkillsProtocol {
-  /** Agent hook: claims x-pi-browser/skills_* requests from one client. */
+  /** Agent hook: claims x-trusted-ua/skills_* requests from one client. */
   extendedRequest: (method: string, params: unknown, id: number) => boolean;
   /** Drop this client's plans and cancel its in-flight jobs (on disconnect). */
   dispose: () => void;

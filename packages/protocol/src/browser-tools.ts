@@ -3,7 +3,7 @@
  *
  * These schemas are transport-independent: the same names, arguments, and
  * results are used whether tools are invoked over the private
- * x-pi-browser/tool compatibility transport or over MCP (stdio/HTTP or
+ * x-trusted-ua/tool compatibility transport or over MCP (stdio/HTTP or
  * MCP-over-ACP). The Firefox side implements the tools; the Pi side
  * registers them as agent tools.
  */

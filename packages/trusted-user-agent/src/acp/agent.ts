@@ -10,11 +10,11 @@
 import {
   AGENT_METHODS,
   CLIENT_METHODS,
-  PI_AGENT_META,
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
-  PI_BROWSER_META,
-  X_PI_BROWSER,
+  TRUSTED_UA_AGENT_META,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
+  TRUSTED_UA_META,
+  X_TRUSTED_UA,
   JSONRPC_ERROR,
   PROTOCOL_VERSION,
   toErrorObject,
@@ -24,7 +24,7 @@ import {
   type AgentsResult,
   type AgentApplication,
   type AgentCapability,
-  type PiAgentMeta,
+  type TrustedUaAgentMeta,
 
   type AcpImageContent,
   type CancelNotification,
@@ -104,7 +104,7 @@ export interface AcpAgentOptions {
   /**
    * External ACP agents (openspec sidebar-acp-agents), shared by every
    * client of the broker. Without it every session runs on pi and
-   * x-pi-browser/agents lists pi only.
+   * x-trusted-ua/agents lists pi only.
    */
   externalAgents?: ExternalAgents;
 }
@@ -243,13 +243,13 @@ export class AcpAgent {
         case AGENT_METHODS.session_set_config_option:
           this.transport().respond(id, await this.sessionSetConfigOption(params as SetSessionConfigOptionRequest));
           return;
-        case X_PI_BROWSER.agents:
+        case X_TRUSTED_UA.agents:
           this.transport().respond(id, this.listAgents());
           return;
-        case X_PI_BROWSER.permissions:
+        case X_TRUSTED_UA.permissions:
           this.transport().respond(id, this.opts.provider.permissionConfig());
           return;
-        case X_PI_BROWSER.permission_set: {
+        case X_TRUSTED_UA.permission_set: {
           const p = (params ?? {}) as { tool?: unknown; state?: unknown; caller?: unknown; externalAccess?: unknown };
           const state =
             p.state === "allow" || p.state === "deny" || p.state === "ask" ? p.state : "ask";
@@ -266,7 +266,7 @@ export class AcpAgent {
           this.transport().respond(id, this.opts.provider.setToolPermission(tool, state));
           return;
         }
-        case X_PI_BROWSER.permission_clear: {
+        case X_TRUSTED_UA.permission_clear: {
           const p = params as { tool?: unknown; caller?: unknown } | undefined;
           const caller = parseCallerRef(p?.caller);
           if (caller) {
@@ -278,12 +278,12 @@ export class AcpAgent {
           this.transport().respond(id, this.opts.provider.clearToolPermissions(tool));
           return;
         }
-        case X_PI_BROWSER.ping: {
+        case X_TRUSTED_UA.ping: {
           const backendReady = await this.opts.backend.ready.then(() => true, () => false);
           // Refresh the add-on heartbeat (no-op for non-add-on clients), so
           // /pi-browser status|doctor can report add-on presence.
           touchClientHeartbeat(this.clientIdentityName);
-          this.transport().respond(id, { pong: true, meta: PI_BROWSER_META, backendReady });
+          this.transport().respond(id, { pong: true, meta: TRUSTED_UA_META, backendReady });
           return;
         }
         default: {
@@ -303,11 +303,11 @@ export class AcpAgent {
   }
 
   private async handleNotification(method: string, params: unknown): Promise<void> {
-    if (method === X_PI_BROWSER.notify) {
+    if (method === X_TRUSTED_UA.notify) {
       this.opts.provider.handleNotify(params as import("@trusted-ua/protocol").BrowserNotifyParams);
       return;
     }
-    if (method === X_PI_BROWSER.tool_update) {
+    if (method === X_TRUSTED_UA.tool_update) {
       // This agent's transport IS the registered client connection (one
       // agent per client), so source-client identity is structural here;
       // the provider validates session, call identity, tool, and sequence.
@@ -319,14 +319,14 @@ export class AcpAgent {
   }
 
   private respondFailure(id: number, err: unknown): void {
-    if (err instanceof PiBrowserProtocolError) {
+    if (err instanceof TrustedUaProtocolError) {
       this.opts.log.warn(`request failed [${err.code}] ${err.message}`);
       this.transport().respondError(id, err.toErrorObject());
       return;
     }
     const message = err instanceof Error ? err.message : String(err);
     this.opts.log.error(`request failed: ${message}`, err);
-    this.transport().respondError(id, toErrorObject(PI_BROWSER_ERROR.INTERNAL, message));
+    this.transport().respondError(id, toErrorObject(TRUSTED_UA_ERROR.INTERNAL, message));
   }
 
   // ------------------------------------------------------------------
@@ -334,18 +334,18 @@ export class AcpAgent {
   // ------------------------------------------------------------------
 
   /**
-   * Push x-pi-browser/capabilities_changed (the current union) to this
+   * Push x-trusted-ua/capabilities_changed (the current union) to this
    * client. The broker calls this for every connected client when the
    * provider set changes, so UIs update their "capabilities:" line.
    */
   notifyCapabilitiesChanged(capabilities: AgentCapability[]): void {
-    this.opts.transport.notify(X_PI_BROWSER.capabilities_changed, { capabilities });
+    this.opts.transport.notify(X_TRUSTED_UA.capabilities_changed, { capabilities });
   }
 
   private initialize(req: InitializeRequest) {
     if (req.protocolVersion !== PROTOCOL_VERSION) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.PROTOCOL_VERSION_MISMATCH,
         `unsupported ACP protocol version: ${req.protocolVersion} (agent supports ${PROTOCOL_VERSION})`,
       );
     }
@@ -377,8 +377,8 @@ export class AcpAgent {
     if (this.opts.backend.prewarmWorkspace) {
       setTimeout(() => this.opts.backend.prewarmWorkspace?.(() => this.workspaces.create()), PREWARM_DELAY_MS).unref?.();
     }
-    const piAgentMeta: PiAgentMeta = {
-      ...PI_AGENT_META,
+    const trustedUaAgentMeta: TrustedUaAgentMeta = {
+      ...TRUSTED_UA_AGENT_META,
       application: this.clientApplication,
       capabilities: this.clientCapabilities,
       // Session tool surface (plan §29): the union of every connected
@@ -398,7 +398,7 @@ export class AcpAgent {
         mcpCapabilities: { acp: true },
       },
       agentInfo: this.opts.agentInfo,
-      _meta: { piBrowser: { ...PI_BROWSER_META, workspaceRoot: this.workspaces.root }, piAgent: piAgentMeta },
+      _meta: { trustedUa: { ...TRUSTED_UA_META, workspaceRoot: this.workspaces.root }, trustedUaAgent: trustedUaAgentMeta },
     };
   }
 
@@ -427,14 +427,14 @@ export class AcpAgent {
     return {
       sessionId: state.id,
       configOptions: state.configOptions,
-      _meta: { piBrowser: { workspace: state.cwd } },
+      _meta: { trustedUa: { workspace: state.cwd } },
     };
   }
 
   private async sessionResume(req: ResumeSessionRequest) {
     if (this.isRelaySession(req.sessionId)) {
       const relay = await this.relayOpen(req.sessionId, "resume", req.mcpServers, req.cwd);
-      return { configOptions: relay.configOptions, _meta: { piBrowser: this.relayMeta(relay) } };
+      return { configOptions: relay.configOptions, _meta: { trustedUa: this.relayMeta(relay) } };
     }
     const { state } = await this.openBackendSession(
       // Resumed sessions must keep the browser/`javascript` tool surface
@@ -452,7 +452,7 @@ export class AcpAgent {
   private async sessionLoad(req: LoadSessionRequest) {
     if (this.isRelaySession(req.sessionId)) {
       const relay = await this.relayOpen(req.sessionId, "load", req.mcpServers, req.cwd);
-      return { configOptions: relay.configOptions, _meta: { piBrowser: this.relayMeta(relay) } };
+      return { configOptions: relay.configOptions, _meta: { trustedUa: this.relayMeta(relay) } };
     }
     const existing = this.sessions.get(req.sessionId);
     if (existing) {
@@ -488,7 +488,7 @@ export class AcpAgent {
           cwd: e.cwd,
           updatedAt: e.updatedAt,
           title: e.title ?? null,
-          _meta: { piBrowser: { agent: { id: e.agent, name: ext.registry.nameOf(e.agent) } } },
+          _meta: { trustedUa: { agent: { id: e.agent, name: ext.registry.nameOf(e.agent) } } },
         });
       }
       sessions.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
@@ -503,21 +503,21 @@ export class AcpAgent {
     const relay = this.relays.get(req.sessionId);
     if (relay) {
       this.opts.bridge?.touchSession(req.sessionId);
-      if (!req.prompt?.length) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "empty prompt");
+      if (!req.prompt?.length) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "empty prompt");
       this.opts.log.info(`session/prompt ${req.sessionId} -> ${relay.agentId} (${req.prompt.length} blocks)`);
       return relay.prompt(req.prompt);
     }
     const st = this.sessions.get(req.sessionId);
-    if (!st) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${req.sessionId}`);
+    if (!st) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${req.sessionId}`);
     // Bridge fallback target: bridge tool calls without an explicit session
     // id route to the session the user is actively driving.
     this.opts.bridge?.touchSession(req.sessionId);
     if (st.session.isStreaming) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, `session ${req.sessionId} is busy`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_BUSY, `session ${req.sessionId} is busy`);
     }
     const { text, images } = extractPromptContent(req.prompt);
     if (!text && images.length === 0) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "empty prompt");
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "empty prompt");
     }
     this.opts.log.info(`session/prompt ${req.sessionId} (${text.length} chars, ${images.length} images)`);
     this.opts.log.debug(`session/prompt ${req.sessionId} text=${JSON.stringify(text)}`);
@@ -551,21 +551,21 @@ export class AcpAgent {
     const relay = this.relays.get(req.sessionId);
     if (relay) return { configOptions: await relay.setConfigOption(req.configId, req.value) };
     const st = this.sessions.get(req.sessionId);
-    if (!st) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${req.sessionId}`);
+    if (!st) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${req.sessionId}`);
 
     const value = req.value as string | boolean;
     if (req.configId === CONFIG_ID_MODEL) {
       if (typeof value !== "string" || !value) {
-        throw new PiBrowserProtocolError("INTERNAL", "model option requires a non-empty value id");
+        throw new TrustedUaProtocolError("INTERNAL", "model option requires a non-empty value id");
       }
       await st.session.setModel(value);
     } else if (req.configId === CONFIG_ID_THINKING) {
       if (typeof value !== "string") {
-        throw new PiBrowserProtocolError("INTERNAL", "thinking option requires a string value");
+        throw new TrustedUaProtocolError("INTERNAL", "thinking option requires a string value");
       }
       st.session.setThinkingLevel(value);
     } else {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.ACP_CAPABILITY_UNSUPPORTED, `unknown config option: ${req.configId}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.ACP_CAPABILITY_UNSUPPORTED, `unknown config option: ${req.configId}`);
     }
 
     st.configOptions = await this.currentConfigOptions(st);
@@ -614,7 +614,7 @@ export class AcpAgent {
     if (this.sessions.has(session.sessionId)) {
       session.dispose();
       this.opts.provider.disposeSession(session.sessionId);
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, `session ${session.sessionId} is already open`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_BUSY, `session ${session.sessionId} is already open`);
     }
 
     let state: SessionState = {
@@ -798,7 +798,7 @@ export class AcpAgent {
   private externalAgents(): ExternalAgents {
     const ext = this.opts.externalAgents;
     if (!ext) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.ACP_CAPABILITY_UNSUPPORTED, "this host runs pi sessions only");
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.ACP_CAPABILITY_UNSUPPORTED, "this host runs pi sessions only");
     }
     return ext;
   }
@@ -817,7 +817,7 @@ export class AcpAgent {
     return {
       sessionId: relay.id,
       configOptions: relay.configOptions,
-      _meta: { piBrowser: this.relayMeta(relay) },
+      _meta: { trustedUa: this.relayMeta(relay) },
     };
   }
 
@@ -868,7 +868,7 @@ export function extractPromptContent(prompt: ContentBlock[]): { text: string; im
   return { text: texts.join("\n"), images };
 }
 
-/** Parse a `caller` ref from x-pi-browser/permission_set|clear params. */
+/** Parse a `caller` ref from x-trusted-ua/permission_set|clear params. */
 function parseCallerRef(raw: unknown): { application: "firefox" | "thunderbird"; name: string } | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const r = raw as { application?: unknown; name?: unknown };

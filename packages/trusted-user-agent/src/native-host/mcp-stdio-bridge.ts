@@ -19,7 +19,7 @@
  *
  * - Caller identity: the bridge remembers the client's `initialize`
  *   clientInfo and, as the first line of every broker connection (including
- *   reconnects), sends the `pi-browser/caller` notification: name, version,
+ *   reconnects), sends the `trusted-ua/caller` notification: name, version,
  *   its own pid and parent pid, and the PI_BROWSER_HOST_CHILD value it
  *   inherited. The broker runs the connection as that caller's session.
  *   An older broker ignores the notification.
@@ -29,8 +29,9 @@
  */
 import net from "node:net";
 import { createInterface } from "node:readline";
-import { HOST_CHILD_ENV, MCP_CALLER_NOTIFICATION, PARENT_SESSION_ENV, normalizeCallerName, type CallerInfo } from "@trusted-ua/protocol";
+import { LEGACY_MCP_CALLER_NOTIFICATION, MCP_CALLER_NOTIFICATION, normalizeCallerName, type CallerInfo } from "@trusted-ua/protocol";
 import { defaultMcpEndpoint, mcpInitializeResult, mcpToolListResult } from "./mcp-server.js";
+import { envValue } from "../env.js";
 
 /** How long a tools/call waits to connect to the broker before giving up. */
 const CONNECT_TIMEOUT_MS = 3_000;
@@ -70,11 +71,11 @@ export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
   const env = opts.env ?? process.env;
   /** Who is calling: filled from initialize's clientInfo. */
   const caller: CallerInfo = { name: normalizeCallerName(undefined), pid: process.pid, ppid: process.ppid };
-  const hostChild = env[HOST_CHILD_ENV];
+  const hostChild = envValue("HOST_CHILD", env);
   if (hostChild) caller.hostChild = hostChild;
   // Started by the host for a sidebar session on an external ACP agent:
   // the broker runs this connection's calls for that session.
-  const parentSession = env[PARENT_SESSION_ENV];
+  const parentSession = envValue("PARENT_SESSION", env);
   if (parentSession) caller.parentSession = parentSession;
 
   let socket: net.Socket | undefined;
@@ -96,6 +97,8 @@ export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
         // Identify the caller first: the broker names this connection's
         // caller session from it (older brokers drop unknown notifications).
         s.write(`${JSON.stringify({ jsonrpc: "2.0", method: MCP_CALLER_NOTIFICATION, params: caller })}\n`);
+        // A v0.4.0 broker only knows the old name; a new one takes it as a repeat.
+        s.write(`${JSON.stringify({ jsonrpc: "2.0", method: LEGACY_MCP_CALLER_NOTIFICATION, params: caller })}\n`);
         let buf = "";
         s.setEncoding("utf8");
         s.on("data", (chunk: string) => {

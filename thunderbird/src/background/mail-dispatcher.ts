@@ -19,8 +19,8 @@
  * never change the tool result.
  */
 import {
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
   type BrowserToolUpdateParams,
   type MailFolderRef,
   type MailMessageRef,
@@ -66,14 +66,14 @@ export interface MailToolContext {
 function reqInt(args: Record<string, unknown>, key: string): number {
   const v = args[key];
   if (typeof v !== "number" || !Number.isFinite(v)) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${key} must be a number`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${key} must be a number`);
   }
   return v;
 }
 function reqStr(args: Record<string, unknown>, key: string): string {
   const v = args[key];
   if (typeof v !== "string" || v.length === 0) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${key} must be a non-empty string`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${key} must be a non-empty string`);
   }
   return v;
 }
@@ -192,8 +192,8 @@ async function resolveTabId(explicit: number | undefined): Promise<number> {
   if (explicit !== undefined) return explicit;
   const resolved = await resolveContextTab();
   if (resolved) return resolved.tabId;
-  throw new PiBrowserProtocolError(
-    PI_BROWSER_ERROR.MAIL_NO_CONTEXT,
+  throw new TrustedUaProtocolError(
+    TRUSTED_UA_ERROR.MAIL_NO_CONTEXT,
     "no mail tab is open; select a folder or message first",
   );
 }
@@ -268,13 +268,13 @@ async function mailGetDisplayedMessages(args: Record<string, unknown>): Promise<
 function rethrowNotFound(err: unknown, messageId: number): never {
   const msg = err instanceof Error ? err.message : String(err);
   if (/not found|no longer/i.test(msg)) {
-    throw new PiBrowserProtocolError(
-      PI_BROWSER_ERROR.MAIL_MESSAGE_NOT_FOUND,
+    throw new TrustedUaProtocolError(
+      TRUSTED_UA_ERROR.MAIL_MESSAGE_NOT_FOUND,
       `message ${messageId} not found (numeric ids are transient — refresh the context)`,
     );
   }
-  if (err instanceof PiBrowserProtocolError) throw err;
-  throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, msg);
+  if (err instanceof TrustedUaProtocolError) throw err;
+  throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, msg);
 }
 
 async function mailGetMessage(args: Record<string, unknown>): Promise<MailMessageRef> {
@@ -403,11 +403,11 @@ const LIST_SORT: Record<SortKey, "date" | "subject" | "author"> = {
 function parseSort(args: Record<string, unknown>): { key: SortKey; order: SortOrder } {
   const key = optStr(args.sort) ?? "date";
   if (key !== "date" && key !== "subject" && key !== "from") {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `sort must be 'date', 'subject', or 'from'`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `sort must be 'date', 'subject', or 'from'`);
   }
   const order = optStr(args.order) ?? "desc";
   if (order !== "asc" && order !== "desc") {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `order must be 'asc' or 'desc'`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `order must be 'asc' or 'desc'`);
   }
   return { key, order };
 }
@@ -803,8 +803,8 @@ async function mailSearch(args: Record<string, unknown>, context: MailToolContex
   if (cursor) {
     const resolved = lookupCursor(cursor, sortKey, sortOrder);
     if (!resolved) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.MAIL_CURSOR_EXPIRED,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.MAIL_CURSOR_EXPIRED,
         "search cursor expired (the extension was reloaded or the cursor evicted); re-run mail_search for a fresh first page",
       );
     }
@@ -817,8 +817,8 @@ async function mailSearch(args: Record<string, unknown>, context: MailToolContex
         decoded.lastAccessed !== undefined && Date.now() - decoded.lastAccessed > CURSOR_TTL_MS;
       if (stale) {
         abortActiveSearch(decoded.active);
-        throw new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.MAIL_CURSOR_EXPIRED,
+        throw new TrustedUaProtocolError(
+          TRUSTED_UA_ERROR.MAIL_CURSOR_EXPIRED,
           "search cursor expired (the search was abandoned); re-run mail_search for a fresh first page",
         );
       }
@@ -900,8 +900,8 @@ async function mailSearch(args: Record<string, unknown>, context: MailToolContex
     const all = await listTags();
     const { keys, unknown } = resolveTagKeys(all, requestedTags);
     if (unknown.length > 0) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.PI_NOT_FOUND,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.PI_NOT_FOUND,
         `unknown tag(s): ${unknown.join(", ")} (see mail_list_tags)`,
       );
     }
@@ -964,7 +964,7 @@ async function mailSearch(args: Record<string, unknown>, context: MailToolContex
     return result;
   }
 
-  // Gloda full-text path — the search bar's own engine (piSearch experiment
+  // Gloda full-text path — the search bar's own engine (trustedUaSearch experiment
   // API). When the global index is enabled, a text query resolves through the
   // FTS3 index in sub-second time (vs the 45–100 s WDAPI literal-substring
   // scan) and returns the COMPLETE ranked result set at once: complete and
@@ -973,12 +973,12 @@ async function mailSearch(args: Record<string, unknown>, context: MailToolContex
   // Term semantics: words are AND-combined (FTS3), quoted spans are phrases.
   // Hits are standard MessageHeaders (session-global `id`), converted in the
   // experiment by the extension's messageManager.
-  const piSearch = (browser as { piSearch?: { searchMessages?: (text: string, options?: { limit?: number; andTerms?: boolean }) => Promise<browser.mailTypes.MessageHeader[]> } }).piSearch;
-  if (typeof queryInfo.fullText === "string" && typeof piSearch?.searchMessages === "function") {
+  const trustedUaSearch = (browser as { trustedUaSearch?: { searchMessages?: (text: string, options?: { limit?: number; andTerms?: boolean }) => Promise<browser.mailTypes.MessageHeader[]> } }).trustedUaSearch;
+  if (typeof queryInfo.fullText === "string" && typeof trustedUaSearch?.searchMessages === "function") {
     const gT0 = Date.now();
     const glodaLimit = Math.min(Math.max(limit, 1), 1000);
     mailLog(`mailSearch gloda start: text=${JSON.stringify(queryInfo.fullText)} limit=${glodaLimit}`);
-    const hits = await piSearch.searchMessages(String(queryInfo.fullText), { limit: glodaLimit });
+    const hits = await trustedUaSearch.searchMessages(String(queryInfo.fullText), { limit: glodaLimit });
     mailLog(`mailSearch gloda: ${Date.now() - gT0}ms, ${hits.length} hit(s)`);
     const seen = new Set<number>();
     const refs: MailMessageRef[] = [];
@@ -1123,13 +1123,13 @@ async function mailGetAttachment(args: Record<string, unknown>): Promise<MailToo
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/not found|no longer/i.test(msg)) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.MAIL_ATTACHMENT_NOT_FOUND,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.MAIL_ATTACHMENT_NOT_FOUND,
         `attachment ${partName} not found on message ${id}`,
       );
     }
-    if (err instanceof PiBrowserProtocolError) throw err;
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, msg);
+    if (err instanceof TrustedUaProtocolError) throw err;
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, msg);
   }
 
   const truncated = file.size > maxBytes;
@@ -1183,7 +1183,7 @@ async function mailListTags(): Promise<unknown> {
 /**
  * mail_debug_query — DIAGNOSTIC raw WDAPI query runner.
  *
- * Gated behind the manifest `piDebug` flag (dev builds only; the repo manifest
+ * Gated behind the manifest `trustedUaDebug` flag (dev builds only; the repo manifest
  * sets it, production installs would not). Runs
  * `browser.messages.query()` directly with wall-clock timing, and when the
  * query returns a messageListId (`returnMessageListId: true`) optionally
@@ -1206,14 +1206,14 @@ function sleepMs(ms: number): Promise<void> {
 
 async function mailDebugQuery(args: Record<string, unknown>): Promise<MailToolResult> {
   const manifest = browser.runtime.getManifest() as unknown as Record<string, unknown>;
-  if (manifest.piDebug !== true) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "mail_debug_query requires a piDebug build (manifest flag)");
+  if (manifest.trustedUaDebug !== true) {
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "mail_debug_query requires a trustedUaDebug build (manifest flag)");
   }
   const raw = (args.query ?? {}) as Record<string, unknown>;
   const query: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) if (DEBUG_QUERY_KEYS.has(k)) query[k] = v;
   if (Object.keys(query).length === 0) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "mail_debug_query: empty query — pass at least one WDAPI queryInfo key");
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "mail_debug_query: empty query — pass at least one WDAPI queryInfo key");
   }
   const pollReq = args.poll as { intervalMs?: number; maxMs?: number } | undefined;
   const interval = Math.max(250, Math.min(Number(pollReq?.intervalMs ?? 2000), 10_000));
@@ -1292,7 +1292,7 @@ export async function dispatchMailTool(
     case "mail_debug_query":
       return mailDebugQuery(args);
     default:
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown mail tool: ${tool}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown mail tool: ${tool}`);
   }
 }
 

@@ -11,7 +11,7 @@
  *  - Recipients are mailbox strings; the body is HTML. Compose fields are the
  *    user's own content (not untrusted email), so they are safe to fill in.
  */
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 
 export type ComposeToolResult = Record<string, unknown>;
 
@@ -27,7 +27,7 @@ function optStr(args: Record<string, unknown>, key: string): string | undefined 
 function reqInt(args: Record<string, unknown>, key: string): number {
   const v = args[key];
   if (typeof v !== "number" || !Number.isFinite(v)) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${key} must be a number`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${key} must be a number`);
   }
   return v;
 }
@@ -35,7 +35,7 @@ function reqInt(args: Record<string, unknown>, key: string): number {
 function reqStr(args: Record<string, unknown>, key: string): string {
   const v = args[key];
   if (typeof v !== "string" || v.length === 0) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${key} must be a non-empty string`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${key} must be a non-empty string`);
   }
   return v;
 }
@@ -191,6 +191,6 @@ export async function dispatchComposeTool(
     case "compose_add_attachment":
       return composeAddAttachment(args);
     default:
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown compose tool: ${tool}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown compose tool: ${tool}`);
   }
 }

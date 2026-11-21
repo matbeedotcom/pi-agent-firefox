@@ -18,7 +18,7 @@ import { PermissionStore } from "../src/permission-store.js";
 import {
   CLIENT_METHODS,
   PERMISSION_WITHDRAWN_METHOD,
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   type CallerInfo,
   type RequestPermissionRequest,
 } from "@trusted-ua/protocol";
@@ -68,7 +68,7 @@ function setup(opts: { permissionTimeoutMs?: number; store?: PermissionStore; wi
         );
         return;
       }
-      if (method === X_PI_BROWSER.tool) {
+      if (method === X_TRUSTED_UA.tool) {
         const p = params as { sessionId: string; tool: string };
         app.tools.push({ sessionId: p.sessionId, tool: p.tool });
         a.transport.respond(id, { content: [{ type: "text", text: `${application}:${p.tool}` }] });
@@ -106,7 +106,7 @@ function callAs(rig: Rig, sessionId: string, caller: CallerInfo, tool: string) {
 }
 
 const meta = (req: RequestPermissionRequest) =>
-  ((req._meta as { piBrowser?: Record<string, unknown> } | undefined)?.piBrowser ?? {}) as {
+  ((req._meta as { trustedUa?: Record<string, unknown> } | undefined)?.trustedUa ?? {}) as {
     tool?: string;
     caller?: { name: string; version?: string };
     callerApproval?: boolean;

@@ -430,7 +430,7 @@ const tick = () => new Promise((r) => setTimeout(r, 25));
 
   const cleared = await call({ type: "pi:console", clear: true });
   assert.equal(cleared.data.cleared, true);
-  assert.ok(postedMessages.some((m) => m.__piBrowserConsoleClear === true), "clear reached the MAIN helper");
+  assert.ok(postedMessages.some((m) => m.__trustedUaConsoleClear === true), "clear reached the MAIN helper");
   await tick();
   const after = await call({ type: "pi:console" });
   assert.equal(after.data.messages.length, 0, `buffer cleared: ${JSON.stringify(after.data)}`);

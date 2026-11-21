@@ -21,12 +21,12 @@ import {
   AGENT_METHODS,
   PROTOCOL_VERSION,
   buildAgentHelloMeta,
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
 } from "@trusted-ua/protocol";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const scenariosDir = path.join(findRepoRoot(), "tests/skills-host/scenarios");
-const CLIENT_METHODS_XPI = { permission_prompted: X_PI_BROWSER.permission_prompted };
+const CLIENT_METHODS_XPI = { permission_prompted: X_TRUSTED_UA.permission_prompted };
 const scenarioFiles = readdirSync(scenariosDir)
   .filter((f) => f.endsWith(".json"))
   .sort();
@@ -146,7 +146,7 @@ test("fake-host process: browser tool round-trip with a delayed bridge (bridge-d
   const client = new FrameClient(proc);
   const toolCalls: Array<{ tool: string; url?: string }> = [];
   client.onHostRequest = (method, params, id) => {
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { tool: string; arguments?: { url?: string } };
       toolCalls.push({ tool: p.tool, url: p.arguments?.url });
       client.respond(id, { content: [{ type: "text", text: "navigated" }] });
@@ -178,7 +178,7 @@ test("fake-host process: full skills happy path over native framing (happy-plan-
   const client = new FrameClient(proc);
   const results: unknown[] = [];
   client.onHostRequest = (method, params, id) => {
-    if (method === X_PI_BROWSER.skills_context) {
+    if (method === X_TRUSTED_UA.skills_context) {
       const p = params as { contextRef: string; fields?: string[] };
       const context: Record<string, unknown> = {
         draft: "Planning a hike next weekend",
@@ -189,7 +189,7 @@ test("fake-host process: full skills happy path over native framing (happy-plan-
       client.respond(id, { contextRef: p.contextRef, context: payload, bytes: JSON.stringify(payload).length });
       return;
     }
-    if (method === X_PI_BROWSER.skills_result) {
+    if (method === X_TRUSTED_UA.skills_result) {
       results.push(params);
       client.respond(id, { delivered: true });
       return;
@@ -208,14 +208,14 @@ test("fake-host process: full skills happy path over native framing (happy-plan-
       prompt: [{ type: "text", text: "REVIEW" }],
     }, 20_000);
 
-    const plan = (await client.request(X_PI_BROWSER.skills_plan, { source, url: "http://127.0.0.1:9/fixture-basic.html" })) as {
+    const plan = (await client.request(X_TRUSTED_UA.skills_plan, { source, url: "http://127.0.0.1:9/fixture-basic.html" })) as {
       status: string;
       plan?: { planVersion: number; rules: unknown[] };
     };
     assert.equal(plan.status, "ok");
     assert.ok(plan.plan && plan.plan.rules.length >= 1, "grant + adapter armed at least one rule");
 
-    const event = (await client.request(X_PI_BROWSER.skills_event, {
+    const event = (await client.request(X_TRUSTED_UA.skills_event, {
       event: {
         version: 1,
         eventId: "evt-proc-1",
@@ -301,7 +301,7 @@ test("fake-host process: catalog reload via trigger file picks up a new package 
   const client = new FrameClient(proc);
 
   const source = { application: "firefox", connectionEpoch: "epoch-r1", documentGeneration: "gen-r1", tabId: 1, frameId: 0 };
-  const plan = () => client.request(X_PI_BROWSER.skills_plan, { source, url: "http://127.0.0.1:9/fixture-basic.html" }) as Promise<{
+  const plan = () => client.request(X_TRUSTED_UA.skills_plan, { source, url: "http://127.0.0.1:9/fixture-basic.html" }) as Promise<{
     status: string;
     plan?: { planVersion: number; rules: { skillKey: string }[] };
   }>;

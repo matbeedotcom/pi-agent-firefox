@@ -8,7 +8,7 @@
  *   - records uncaught window errors, unhandled promise rejections and
  *     failed resource loads (capture-phase `error`),
  *   - exposes a ring buffer on window.__PI_BROWSER_CONSOLE__ that the
- *     content script reads (directly, or via the __piBrowserConsoleRead
+ *     content script reads (directly, or via the __trustedUaConsoleRead
  *     round-trip as a fallback).
  *
  * Deliberately scoped per PRODUCT.md §35: this is page-load-onwards
@@ -98,16 +98,16 @@ interface ConsoleEntry {
     //    case; structured-clone messages always work).
     window.addEventListener("message", ((e: MessageEvent) => {
       const d = e.data as
-        | { __piBrowserConsoleRead?: boolean; id?: number; __piBrowserConsoleClear?: boolean }
+        | { __trustedUaConsoleRead?: boolean; id?: number; __trustedUaConsoleClear?: boolean }
         | null;
       if (!d) return;
-      if (d.__piBrowserConsoleClear === true) {
+      if (d.__trustedUaConsoleClear === true) {
         messages.length = 0;
         dropped = 0;
       }
-      if (d.__piBrowserConsoleRead === true && typeof d.id === "number") {
+      if (d.__trustedUaConsoleRead === true && typeof d.id === "number") {
         try {
-          window.postMessage({ __piBrowserConsoleData: true, id: d.id, messages: [...messages], dropped }, "*");
+          window.postMessage({ __trustedUaConsoleData: true, id: d.id, messages: [...messages], dropped }, "*");
         } catch {
           /* document gone */
         }

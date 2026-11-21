@@ -35,10 +35,10 @@ test("agent selector: no choice with an older host or pi alone", () => {
   assert.equal(agentChoices({ defaultAgent: "pi", agents: [{ id: "pi", name: "pi", available: true }] }, undefined).show, false);
 });
 
-test("fetchAgents: the host's answer, or undefined from a host without x-pi-browser/agents", async () => {
+test("fetchAgents: the host's answer, or undefined from a host without x-trusted-ua/agents", async () => {
   assert.deepEqual(await fetchAgents(async <T>() => HOST as T), HOST);
   const old = async <T>(): Promise<T> => {
-    throw { code: JSONRPC_ERROR.METHOD_NOT_FOUND, message: "unknown method: x-pi-browser/agents" };
+    throw { code: JSONRPC_ERROR.METHOD_NOT_FOUND, message: "unknown method: x-trusted-ua/agents" };
   };
   assert.equal(await fetchAgents(old), undefined);
   await assert.rejects(fetchAgents(async () => { throw new Error("port closed"); }));
@@ -48,7 +48,7 @@ test("session list carries the agent label for non-pi sessions", () => {
   const store = new SessionStore("test");
   store.upsertFromList([
     { sessionId: "p1", cwd: "/w", updatedAt: "2026-11-20T10:00:00Z", title: "pi chat" },
-    { sessionId: "c1", cwd: "/w", updatedAt: "2026-11-20T11:00:00Z", title: "codex chat", _meta: { piBrowser: { agent: { id: "codex", name: "Codex" } } } },
+    { sessionId: "c1", cwd: "/w", updatedAt: "2026-11-20T11:00:00Z", title: "codex chat", _meta: { trustedUa: { agent: { id: "codex", name: "Codex" } } } },
   ] as never);
   const snap = store.snapshot().sessions;
   assert.deepEqual(snap.find((s) => s.sessionId === "c1")?.agent, { id: "codex", name: "Codex" });
@@ -89,7 +89,7 @@ test("an agent's own permission request is labelled with the agent and shows the
       { optionId: "always", name: "Allow always", kind: "allow_always" },
       { optionId: "reject", name: "Reject", kind: "reject_once" },
     ],
-    _meta: { piBrowser: { agent: { id: "codex", name: "Codex" } } },
+    _meta: { trustedUa: { agent: { id: "codex", name: "Codex" } } },
   } as unknown as RequestPermissionRequest;
   const text = describePermissionRequest(request);
   assert.equal(text.title, "Codex wants to run a command");

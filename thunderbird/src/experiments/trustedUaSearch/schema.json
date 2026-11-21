@@ -1,6 +1,6 @@
 [
   {
-    "namespace": "piSearch",
+    "namespace": "trustedUaSearch",
     "description": "Full-text message search over Thunderbird's Gloda global index (the search bar's engine), for the mail_search tool.",
     "functions": [
       {

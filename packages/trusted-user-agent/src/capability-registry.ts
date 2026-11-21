@@ -9,8 +9,8 @@
  */
 import {
   AGENT_CAPABILITIES,
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
   capabilitiesProvideTool,
   type AcpTransportLike,
   type AgentApplication,
@@ -31,7 +31,7 @@ export class CapabilityRegistry {
   /**
    * Broker hook: fired with the new union after any register/remove that
    * changes the client set, so the host can push
-   * x-pi-browser/capabilities_changed to every connected client (their UIs
+   * x-trusted-ua/capabilities_changed to every connected client (their UIs
    * update the "capabilities:" line in near-real-time).
    */
   onChange?: (capabilities: AgentCapability[]) => void;
@@ -105,8 +105,8 @@ export class CapabilityRegistry {
       if (owner && client.clientId === owner.clientId) continue;
       if (capabilitiesProvideTool(client.capabilities, toolName)) return client;
     }
-    throw new PiBrowserProtocolError(
-      PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+    throw new TrustedUaProtocolError(
+      TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
       `no connected client provides tool: ${toolName}`,
       { tool: toolName },
     );

@@ -79,11 +79,11 @@ function fixture() {
       unregisterWindowListener() { unregistered = true; },
     } }) },
   };
-  runInNewContext(readFileSync(new URL("../../src/experiments/piPane/implementation.js", import.meta.url), "utf8"), sandbox);
-  const api = new sandbox.piPane().getAPI({
+  runInNewContext(readFileSync(new URL("../../src/experiments/trustedUaPane/implementation.js", import.meta.url), "utf8"), sandbox);
+  const api = new sandbox.trustedUaPane().getAPI({
     extension: { id: "pi", tabManager: { wrapTab: (tab: unknown) => tab } },
     callOnClose(value: unknown) { cleanup = value; },
-  }).piPane;
+  }).trustedUaPane;
   api.toggle = async (id: number) => { calls.push(`toggle:${id}`); const tab: any = allTabs.find(t => t.id === id); tab.open = !tab.open; };
   api.open = async (id: number) => { calls.push(`open:${id}`); (allTabs.find(t => t.id === id) as any).open = true; };
   api.close = (id: number) => { calls.push(`close:${id}`); (allTabs.find(t => t.id === id) as any).open = false; };
@@ -101,7 +101,7 @@ test("Space button toggles the mail pane, suppresses tab opening and reflects st
   assert.deepEqual(f.calls, ["toggle:1"]);
   assert.equal(nativeClicks, 0);
   assert.equal(f.win.button.attrs.get("aria-pressed"), "true");
-  assert.equal(f.win.button.classes.has("pi-pane-active"), true);
+  assert.equal(f.win.button.classes.has("tua-pane-active"), true);
   f.win.menu.dispatch("command");
   await settle();
   assert.deepEqual(f.calls, ["toggle:1", "toggle:1"]);

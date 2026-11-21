@@ -4,7 +4,7 @@
   "name": "Pi Thunderbird",
   "version": "0.4.0",
 
-  "piDebug": true,
+  "trustedUaDebug": true,
 
   "description": "Pi Agent for Thunderbird: multi-session ACP chat with mail tools over Native Messaging",
 
@@ -34,32 +34,32 @@
   },
 
   "experiment_apis": {
-    "piSearch": {
-      "schema": "experiments/piSearch/schema.json",
+    "trustedUaSearch": {
+      "schema": "experiments/trustedUaSearch/schema.json",
       "parent": {
         "scopes": [
           "addon_parent"
         ],
         "paths": [
           [
-            "piSearch"
+            "trustedUaSearch"
           ]
         ],
-        "script": "experiments/piSearch/implementation.js"
+        "script": "experiments/trustedUaSearch/implementation.js"
       }
     },
-    "piPane": {
-      "schema": "experiments/piPane/schema.json",
+    "trustedUaPane": {
+      "schema": "experiments/trustedUaPane/schema.json",
       "parent": {
         "scopes": [
           "addon_parent"
         ],
         "paths": [
           [
-            "piPane"
+            "trustedUaPane"
           ]
         ],
-        "script": "experiments/piPane/implementation.js"
+        "script": "experiments/trustedUaPane/implementation.js"
       }
     }
   },

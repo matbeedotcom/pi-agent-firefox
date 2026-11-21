@@ -12,9 +12,9 @@
  */
 import {
   BROWSER_DOWNLOAD_TIMEOUT_MS,
-  PI_BROWSER_ERROR,
+  TRUSTED_UA_ERROR,
   isCallerSessionId,
-  PiBrowserProtocolError,
+  TrustedUaProtocolError,
   getBrowserTool,
   type BrowserToolCallParams,
 } from "@trusted-ua/protocol";
@@ -36,7 +36,7 @@ function textResult(payload: unknown) {
 
 function imageResult(dataUrl: string, mimeType: string, via?: string) {
   const match = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
-  if (!match) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "bad capture data URL");
+  if (!match) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "bad capture data URL");
   const content: Array<Record<string, unknown>> = [{ type: "image", data: match[2], mimeType: match[1] }];
   // A short note records which capture API produced the image (useful for
   // diagnosing which path works in a given browser build).
@@ -105,21 +105,21 @@ export class ToolDispatcher {
    */
   async bindSessionTab(sessionId: string, tabId: unknown): Promise<{ tabId: number; url: string; title: string }> {
     if (typeof tabId !== "number" || !Number.isInteger(tabId) || tabId <= 0) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "bind_tab requires a tabId number");
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "bind_tab requires a tabId number");
     }
     let tab: browser.tabs.Tab;
     try {
       tab = await browser.tabs.get(tabId);
     } catch {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
     }
     // A tab serves one session: release it from any other binding first.
     const previous = this.store.sessionForRef(tabId);
     // An external MCP caller never takes a tab away from the user's own Pi
     // chat session (the reverse is fine: the user's session wins).
     if (previous && previous !== sessionId && isCallerSessionId(sessionId) && !isCallerSessionId(previous)) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.INTERNAL,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.INTERNAL,
         `tab ${tabId} is in use by a Pi chat session in the sidebar — bind another tab, or open one with browser_open_tab`,
       );
     }
@@ -156,7 +156,7 @@ export class ToolDispatcher {
   private async openTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
     const url = args?.url;
     if (typeof url !== "string" || !url.trim()) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_open_tab requires a url string");
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "browser_open_tab requires a url string");
     }
     return textResult(await this.openAgentTab(sessionId, url.trim(), this.readyTimeoutMs(args?.timeoutMs)));
   }
@@ -185,16 +185,16 @@ export class ToolDispatcher {
       try {
         tab = await browser.tabs.get(tabId);
       } catch {
-        throw new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.BROWSER_TAB_CLOSED,
+        throw new TrustedUaProtocolError(
+          TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED,
           `tab ${tabId} was closed before it finished loading`,
         );
       }
       if (tab.status === "loading") sawLoading = true;
       if (tab.status === "complete" && (sawLoading || tab.url === expectedUrl)) return;
       if (Date.now() >= deadline) {
-        throw new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT,
+        throw new TrustedUaProtocolError(
+          TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT,
           `tab did not finish loading within ${timeoutMs} ms (status: ${tab.status ?? "unknown"}, url: ${tab.url ?? "unknown"})`,
         );
       }
@@ -214,11 +214,11 @@ export class ToolDispatcher {
   private async closeTab(sessionId: string, args?: Record<string, unknown>): Promise<unknown> {
     const tabId = args?.tabId;
     if (typeof tabId !== "number" || !Number.isInteger(tabId) || tabId <= 0) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_close_tab requires a tabId number");
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "browser_close_tab requires a tabId number");
     }
     if (!this.replTabs.has(sessionId, tabId)) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
         `tab ${tabId} is not owned by this session's REPL — the bound tab is released by unbinding in the sidebar`,
       );
     }
@@ -252,7 +252,7 @@ export class ToolDispatcher {
     });
   }
 
-  /** Entry point for x-pi-browser/tool requests from the host. */
+  /** Entry point for x-trusted-ua/tool requests from the host. */
   async handleToolCall(params: BrowserToolCallParams): Promise<unknown> {
     const activity: BrowserActivity = {
       id: crypto.randomUUID(), title: params.tool, status: "in_progress", input: params.arguments,
@@ -278,7 +278,7 @@ export class ToolDispatcher {
     const { sessionId, tool, arguments: args } = params;
     const def = getBrowserTool(tool);
     if (!def) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${tool}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${tool}`);
     }
 
     // Tab-lifecycle tools are useful (and must work) with NO bound tab —
@@ -297,8 +297,8 @@ export class ToolDispatcher {
     const binding = this.store.getBinding(sessionId);
     const tabId = binding ? bindingRefId(binding) : undefined;
     if (tabId === undefined) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.BROWSER_NOT_BOUND,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.BROWSER_NOT_BOUND,
         isCallerSessionId(sessionId)
           ? "no Firefox tab is bound to this connection yet — call browser_list_tabs and browser_bind_tab (or browser_open_tab) first"
           : `session ${sessionId} has no bound Firefox tab`,
@@ -309,8 +309,8 @@ export class ToolDispatcher {
     try {
       tab = await browser.tabs.get(tabId);
     } catch {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.BROWSER_TAB_CLOSED,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED,
         `bound tab ${tabId} no longer exists`,
       );
     }
@@ -453,7 +453,7 @@ export class ToolDispatcher {
       case "browser_close_tab":
         return this.closeTab(sessionId, args);
       default:
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `no handler for ${tool}`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `no handler for ${tool}`);
     }
   }
 
@@ -469,8 +469,8 @@ export class ToolDispatcher {
     const frames = await this.listFrames(tabId);
     if (typeof frame === "number") {
       if (frames.some((f) => f.frameId === frame)) return frame;
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.BROWSER_FRAME_NOT_FOUND,
         `frame ${frame} not found in this tab (it may have navigated away)`,
         { frames },
       );
@@ -479,14 +479,14 @@ export class ToolDispatcher {
       const needle = frame.toLowerCase();
       const hit = frames.find((f) => f.url.toLowerCase().includes(needle));
       if (hit) return hit.frameId;
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.BROWSER_FRAME_NOT_FOUND,
         `no frame URL contains "${frame}" in this tab`,
         { frames },
       );
     }
-    throw new PiBrowserProtocolError(
-      PI_BROWSER_ERROR.INTERNAL,
+    throw new TrustedUaProtocolError(
+      TRUSTED_UA_ERROR.INTERNAL,
       "frame must be a frameId number or a URL substring string",
     );
   }
@@ -497,7 +497,7 @@ export class ToolDispatcher {
       return (frames ?? []).map((f) => ({ frameId: f.frameId, url: (f.url ?? "").slice(0, 300) }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `could not list frames of tab ${tabId}: ${message}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `could not list frames of tab ${tabId}: ${message}`);
     }
   }
 
@@ -515,12 +515,12 @@ export class ToolDispatcher {
   private async download(tab: browser.tabs.Tab, args: Record<string, unknown> | undefined, timeoutMs: number): Promise<unknown> {
     const url = typeof args?.url === "string" ? args.url.trim() : "";
     if (!/^https?:\/\//i.test(url)) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser_download requires an absolute http(s) URL");
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "browser_download requires an absolute http(s) URL");
     }
     let maxBytes = DOWNLOAD_MAX_BYTES_DEFAULT;
     if (args?.maxBytes !== undefined) {
       if (typeof args.maxBytes !== "number" || !Number.isFinite(args.maxBytes) || args.maxBytes <= 0) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "maxBytes must be a positive number");
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "maxBytes must be a positive number");
       }
       maxBytes = Math.min(Math.floor(args.maxBytes), DOWNLOAD_MAX_BYTES_CAP);
     }
@@ -537,14 +537,14 @@ export class ToolDispatcher {
         });
       } catch (err) {
         if (controller.signal.aborted) {
-          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT, `download timed out after ${timeoutMs} ms: ${url}`);
+          throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT, `download timed out after ${timeoutMs} ms: ${url}`);
         }
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `download failed: ${errMessage(err)}: ${url}`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `download failed: ${errMessage(err)}: ${url}`);
       }
       if (!response.ok) {
         await response.body?.cancel().catch(() => {});
-        throw new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.INTERNAL,
+        throw new TrustedUaProtocolError(
+          TRUSTED_UA_ERROR.INTERNAL,
           `download failed: HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""} for ${url}`,
         );
       }
@@ -558,11 +558,11 @@ export class ToolDispatcher {
       try {
         bytes = await readBoundedBody(response, maxBytes, url);
       } catch (err) {
-        if (err instanceof PiBrowserProtocolError) throw err;
+        if (err instanceof TrustedUaProtocolError) throw err;
         if (controller.signal.aborted) {
-          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT, `download timed out after ${timeoutMs} ms: ${url}`);
+          throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT, `download timed out after ${timeoutMs} ms: ${url}`);
         }
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `download failed: ${errMessage(err)}: ${url}`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `download failed: ${errMessage(err)}: ${url}`);
       }
 
       const mimeType = (response.headers.get("content-type") ?? "").split(";")[0].trim();
@@ -585,8 +585,8 @@ export class ToolDispatcher {
     // Only absolute http(s)/file URLs: no javascript:, data:, or scheme-less
     // values (tabs.update would happily navigate to relative junk).
     if (!/^(https?|file):\/\//i.test(url)) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.INTERNAL,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.INTERNAL,
         "browser_navigate requires an absolute http(s) or file URL",
       );
     }
@@ -651,10 +651,10 @@ export class ToolDispatcher {
     }
     const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
     if (lastErr && !isVisibilityError(lastErr)) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `screenshot failed: ${message}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `screenshot failed: ${message}`);
     }
-    throw new PiBrowserProtocolError(
-      PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+    throw new TrustedUaProtocolError(
+      TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
       `cannot capture tab ${tab.id}: tried captureTab and captureVisibleTab ` +
         "(the tab was activated and its window focused before each attempt): " + message,
     );
@@ -707,39 +707,39 @@ export class ToolDispatcher {
           } catch (injectErr) {
             const im = injectErr instanceof Error ? injectErr.message : String(injectErr);
             if (frameId !== undefined && /frame/i.test(im)) {
-              throw new PiBrowserProtocolError(
-                PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND,
+              throw new TrustedUaProtocolError(
+                TRUSTED_UA_ERROR.BROWSER_FRAME_NOT_FOUND,
                 `frame ${frameId} is no longer available: ${im}`,
               );
             }
-            throw new PiBrowserProtocolError(
-              PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+            throw new TrustedUaProtocolError(
+              TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
               `cannot access this page (${tab.url}): ${im}`,
             );
           }
         }
         if (frameId !== undefined) {
-          throw new PiBrowserProtocolError(
-            PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND,
+          throw new TrustedUaProtocolError(
+            TRUSTED_UA_ERROR.BROWSER_FRAME_NOT_FOUND,
             `no content script in frame ${frameId} of ${tab.url ?? "this page"} — the frame may have navigated away; re-run browser_get_dom for fresh frame ids`,
           );
         }
-        throw new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+        throw new TrustedUaProtocolError(
+          TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
           `content script unavailable on ${tab.url ?? "privileged page"}`,
         );
       }
-      if (err instanceof PiBrowserProtocolError) throw err;
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT, message);
+      if (err instanceof TrustedUaProtocolError) throw err;
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT, message);
     });
 
     const result = reply as ContentResult | undefined;
     if (!result) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, `no reply from content script on ${tab.url}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED, `no reply from content script on ${tab.url}`);
     }
     if (!result.ok) {
-      const code = (result.error?.code as PiBrowserErrorCodeString) ?? PI_BROWSER_ERROR.INTERNAL;
-      throw new PiBrowserProtocolError(code, result.error?.message ?? "content script error", result.error?.data);
+      const code = (result.error?.code as TrustedUaErrorCodeString) ?? TRUSTED_UA_ERROR.INTERNAL;
+      throw new TrustedUaProtocolError(code, result.error?.message ?? "content script error", result.error?.data);
     }
     return result;
   }
@@ -752,7 +752,7 @@ export class ToolDispatcher {
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(
-        () => reject(new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT, `content script timed out: ${msg.type}`)),
+        () => reject(new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT, `content script timed out: ${msg.type}`)),
         timeoutMs,
       );
       browser.tabs
@@ -771,7 +771,7 @@ export class ToolDispatcher {
   }
 }
 
-type PiBrowserErrorCodeString =
+type TrustedUaErrorCodeString =
   | "BROWSER_TAB_CLOSED"
   | "BROWSER_PERMISSION_DENIED"
   | "BROWSER_ELEMENT_STALE"
@@ -786,9 +786,9 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? (err.name ? `${err.name}: ${err.message}` : err.message) : String(err);
 }
 
-function downloadTooLarge(knownSize: number, maxBytes: number, url: string): PiBrowserProtocolError {
-  return new PiBrowserProtocolError(
-    PI_BROWSER_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
+function downloadTooLarge(knownSize: number, maxBytes: number, url: string): TrustedUaProtocolError {
+  return new TrustedUaProtocolError(
+    TRUSTED_UA_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
     `download exceeds maxBytes (${maxBytes} bytes): ${url}${Number.isFinite(knownSize) ? ` — the server declared ${knownSize} bytes; retry with a larger maxBytes (cap ${DOWNLOAD_MAX_BYTES_CAP})` : ""}`,
     { maxBytes, knownSize },
   );

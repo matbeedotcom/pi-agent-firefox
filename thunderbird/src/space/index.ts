@@ -13,7 +13,7 @@ import {
   type PermissionConfigResult,
   type PermissionSetResult,
 } from "@trusted-ua/protocol";
-import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData, mountPermissionSettings, type PermissionSettingsApi, describePermissionRequest, loadAgentChoice, saveAgentChoice, planText, planStatus, PLAN_CARD_ID, type PlanEntryLike, mountNewSessionPanel } from "@trusted-ua/webext";
+import { applyTrustedUaTheme, MarkdownView, renderMarkdownInto, type TrustedUaTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData, mountPermissionSettings, type PermissionSettingsApi, describePermissionRequest, loadAgentChoice, saveAgentChoice, planText, planStatus, PLAN_CARD_ID, type PlanEntryLike, mountNewSessionPanel } from "@trusted-ua/webext";
 import type {
   AgentsResult,
   AgentCapability,
@@ -27,7 +27,7 @@ interface StatusInfo {
   state: string;
   detail?: string;
   agentInfo?: { name?: string; version?: string };
-  piBrowserMeta?: { version: string; protocolVersion: number; browserToolVersion: number; workspaceRoot?: string };
+  trustedUaMeta?: { version: string; protocolVersion: number; browserToolVersion: number; workspaceRoot?: string };
   /** Union of capabilities across ALL connected apps (live, plan §29). */
   capabilities?: AgentCapability[];
 }
@@ -51,7 +51,7 @@ interface UiState {
   lastSessionId?: string;
   spaceId?: number;
   /** Active browser theme (LWT colors); undefined when the API is unavailable. */
-  theme?: PiTheme;
+  theme?: TrustedUaTheme;
 }
 
 // ---------------------------------------------------------------------------
@@ -569,7 +569,7 @@ browser.runtime.onMessage.addListener((message: unknown) => {
   if (msg.type === "pi/state" && msg.state) {
     uiState = msg.state;
     activeSessionId = msg.state.activeSessionId;
-    applyPiTheme(msg.state.theme);
+    applyTrustedUaTheme(msg.state.theme);
     renderAll();
   } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update);
@@ -595,7 +595,7 @@ interface PermissionRequestUi {
   sessionId: string;
   toolCall: { toolCallId: string; title?: string; kind?: string; content?: unknown; rawInput?: unknown };
   options: PermissionOptionUi[];
-  _meta?: { piBrowser?: { tool?: string; agent?: { id: string; name: string } } };
+  _meta?: { trustedUa?: { tool?: string; agent?: { id: string; name: string } } };
 }
 
 function answerPermission(permId: string, optionId: string): void {
@@ -617,8 +617,8 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
       .catch(() => {});
     return;
   }
-  const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
-  if (request._meta?.piBrowser?.agent) {
+  const tool = request._meta?.trustedUa?.tool ?? request.toolCall.title ?? "an action";
+  if (request._meta?.trustedUa?.agent) {
     // The agent's own request (sidebar-acp-agents): its name, what it wants
     // to do (command, diff) and its own options.
     const text = describePermissionRequest(request as never);
@@ -694,7 +694,7 @@ function hidePermissionPrompt(): void {
 // builds the session.
 const newPanelEl = $<HTMLDivElement>("new-panel");
 const newSessionPanel = mountNewSessionPanel(newPanelEl, {
-  workspaceRoot: () => uiState.status.piBrowserMeta?.workspaceRoot,
+  workspaceRoot: () => uiState.status.trustedUaMeta?.workspaceRoot,
   suggestedCwd: () => uiState.sessions.find((s) => s.sessionId === activeSessionId)?.cwd,
   create: async (cwd, agent) => {
     await action<{ sessionId: string }>("new_session", { cwd, ...(agent ? { agent } : {}) });
@@ -816,7 +816,7 @@ void (async () => {
     const state = (await action<UiState>("get_state")) as UiState;
     uiState = state;
     activeSessionId = state.activeSessionId;
-    applyPiTheme(state.theme);
+    applyTrustedUaTheme(state.theme);
     renderAll();
   } catch {
     // background not ready yet; state will arrive via push

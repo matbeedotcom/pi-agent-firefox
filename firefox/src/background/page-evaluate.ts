@@ -1,4 +1,4 @@
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 import { isFunctionExpression, toJsonSafe } from "../content/shared.js";
 
 export interface EvaluateResult {
@@ -26,12 +26,12 @@ export async function evaluateInPage(
   timeoutMs: number,
 ): Promise<EvaluateResult> {
   if (typeof expression !== "string" || !expression.trim()) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "evaluate requires a non-empty expression string");
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "evaluate requires a non-empty expression string");
   }
   const api = browser.userScripts as unknown as UserScriptExecutor | undefined;
   if (!api?.execute) {
-    throw new PiBrowserProtocolError(
-      PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+    throw new TrustedUaProtocolError(
+      TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
       'Page evaluation requires Firefox 153+ and the user scripts permission. Approve the page evaluation permission request in the Pi sidebar.',
     );
   }
@@ -51,8 +51,8 @@ export async function evaluateInPage(
     const results = await Promise.race([
       api.execute({ target: { tabId, frameIds: [frameId] }, world: "MAIN", injectImmediately: true, js: [{ code }] }),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT,
+        timer = setTimeout(() => reject(new TrustedUaProtocolError(
+          TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT,
           "Page evaluation timed out; execution may still be running. Inspect the page before retrying side effects.",
         )), timeoutMs);
       }),

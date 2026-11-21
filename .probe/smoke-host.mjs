@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { PI_BROWSER } from "@trusted-ua/protocol";
+import { TRUSTED_UA } from "@trusted-ua/protocol";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const host = path.resolve(here, "../packages/trusted-user-agent/dist/native-host/main.js");
@@ -64,10 +64,10 @@ let failed = false;
 try {
   await sleep(1500); // let the host boot (model runtime init)
 
-  const ping = await request("x-pi-browser/ping", {});
+  const ping = await request("x-trusted-ua/ping", {});
   console.log("PING:", JSON.stringify(ping.result));
   if (ping.result?.pong !== true) throw new Error("pong missing");
-  if (ping.result.meta?.protocolVersion !== PI_BROWSER.protocolVersion) throw new Error(`protocolVersion mismatch (host ${ping.result.meta?.protocolVersion}, expected ${PI_BROWSER.protocolVersion})`);
+  if (ping.result.meta?.protocolVersion !== TRUSTED_UA.protocolVersion) throw new Error(`protocolVersion mismatch (host ${ping.result.meta?.protocolVersion}, expected ${TRUSTED_UA.protocolVersion})`);
 
   const init = await request("initialize", {
     protocolVersion: 1,
@@ -76,12 +76,12 @@ try {
   console.log("INIT capabilities:", JSON.stringify(init.result?.agentCapabilities));
   console.log("INIT _meta:", JSON.stringify(init.result?._meta));
   if (init.result?.agentCapabilities?.mcpCapabilities?.acp !== true) throw new Error("mcpCapabilities.acp missing");
-  if (init.result?._meta?.piBrowser?.version !== PI_BROWSER.version) throw new Error("piBrowser meta missing");
+  if (init.result?._meta?.trustedUa?.version !== TRUSTED_UA.version) throw new Error("trustedUa meta missing");
 
   // Wrong protocol version must be rejected with a structured code.
   const bad = await request("initialize", { protocolVersion: 42 }).catch((e) => e);
   console.log("BAD-PROTO error:", JSON.stringify(bad?.error));
-  if (bad?.error?.data?.piBrowserError !== "PROTOCOL_VERSION_MISMATCH") throw new Error("expected PROTOCOL_VERSION_MISMATCH");
+  if (bad?.error?.data?.trustedUaError !== "PROTOCOL_VERSION_MISMATCH") throw new Error("expected PROTOCOL_VERSION_MISMATCH");
 
   // session/new with the REAL Pi SDK backend (no LLM prompt; just session creation).
   const tmpCwd = path.join(tmpdir(), "pi-browser-smoke-cwd");

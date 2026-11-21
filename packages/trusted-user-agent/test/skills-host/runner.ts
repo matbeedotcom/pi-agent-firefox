@@ -54,12 +54,12 @@ import {
   AGENT_METHODS,
   CLIENT_METHODS,
   PERMISSION_ALLOW_ONCE,
-  PI_BROWSER_ERROR,
+  TRUSTED_UA_ERROR,
   PROTOCOL_VERSION,
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   buildAgentHelloMeta,
   toErrorObject,
-  type PiBrowserErrorCode,
+  type TrustedUaErrorCode,
 } from "@trusted-ua/protocol";
 
 export interface ScenarioStep {
@@ -248,7 +248,7 @@ export async function runScenario(scenario: Scenario, opts: { log?: Logger; pack
       touchSession: () => {},
       closeSession: () => {},
       // Failures keep their structured code: the fake client answers
-      // x-pi-browser/tool with respondError({code}), and the mock backend
+      // x-trusted-ua/tool with respondError({code}), and the mock backend
       // surfaces [CODE] in the tool_end message (same path as production).
       call: (o) => runBridgeTool(o.tool, o.args ?? {}),
     } satisfies BrowserToolBridge,
@@ -297,30 +297,30 @@ export async function runScenario(scenario: Scenario, opts: { log?: Logger; pack
   };
   const runBridgeTool = createScriptedBridge(scenario.bridge ?? {}, toolCalls);
   a.transport.onRequest = (method, params, id) => {
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { tool: string; arguments?: Record<string, unknown> };
       void runBridgeTool(p.tool, p.arguments ?? {})
         .then((result) => a.transport.respond(id, result))
         .catch((err) => {
           const e = err as Error & { code?: string };
-          // The structured PI code rides data.piBrowserError; the JSON-RPC
+          // The structured PI code rides data.trustedUaError; the JSON-RPC
           // code is its numeric mapping (see toErrorObject) — the host's
           // translateTransportError recovers it via codeFromErrorObject.
-          const code = (Object.values(PI_BROWSER_ERROR) as string[]).includes(e.code ?? "")
-            ? (e.code as PiBrowserErrorCode)
-            : PI_BROWSER_ERROR.INTERNAL;
+          const code = (Object.values(TRUSTED_UA_ERROR) as string[]).includes(e.code ?? "")
+            ? (e.code as TrustedUaErrorCode)
+            : TRUSTED_UA_ERROR.INTERNAL;
           a.transport.respondError(id, toErrorObject(code, e.message));
         });
       return;
     }
-    if (method === X_PI_BROWSER.skills_context) {
+    if (method === X_TRUSTED_UA.skills_context) {
       const p = params as { contextRef: string; fields?: string[] };
       const payload: Record<string, unknown> = {};
       for (const f of p.fields ?? Object.keys(context)) payload[f] = context[f] ?? null;
       a.transport.respond(id, { contextRef: p.contextRef, context: payload, bytes: JSON.stringify(payload).length });
       return;
     }
-    if (method === X_PI_BROWSER.skills_result) {
+    if (method === X_TRUSTED_UA.skills_result) {
       results.push(params);
       a.transport.respond(id, { delivered: true });
       return;
@@ -329,7 +329,7 @@ export async function runScenario(scenario: Scenario, opts: { log?: Logger; pack
       a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
       return;
     }
-    if (method === X_PI_BROWSER.permission_prompted) {
+    if (method === X_TRUSTED_UA.permission_prompted) {
       a.transport.respond(id, { ok: true });
       return;
     }

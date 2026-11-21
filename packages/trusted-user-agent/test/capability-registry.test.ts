@@ -10,9 +10,9 @@ import { CapabilityRegistry } from "../src/capability-registry.js";
 import { CapabilityToolProvider } from "../src/browser/provider.js";
 import { PermissionStore } from "../src/permission-store.js";
 import {
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
-  X_PI_BROWSER,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
+  X_TRUSTED_UA,
   toErrorObject,
   type AgentCapability,
   type JsonRpcErrorObject,
@@ -103,7 +103,7 @@ test("registry: resolveTarget prefers the owner, falls back to a peer", () => {
   // No provider (neither client has "mailModify") → structured error.
   assert.throws(
     () => reg.resolveTarget("ff", "mail_mark_read"),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
   );
 });
 
@@ -146,24 +146,24 @@ function setupTwoClients(): TwoClients {
       respond(id, { ok: true });
     };
   ffPair.a.transport.onRequest = (method, params, id) => {
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { tool: string; arguments: unknown };
       ffToolCalls.push({ tool: p.tool, args: p.arguments });
       ffPair.a.transport.respond(id, { content: [{ type: "text", text: "from-firefox" }] });
     } else if (method === "session/request_permission") {
       answerPermission(ffPermissionRequests, (i, r) => ffPair.a.transport.respond(i, r), id);
-    } else if (method === X_PI_BROWSER.permission_prompted) {
+    } else if (method === X_TRUSTED_UA.permission_prompted) {
       recordPromptedElsewhere(ffPromptedElsewhere, (i, r) => ffPair.a.transport.respond(i, r))(params, id);
     }
   };
   tbPair.a.transport.onRequest = (method, params, id) => {
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { tool: string; arguments: unknown };
       tbToolCalls.push({ tool: p.tool, args: p.arguments });
       tbPair.a.transport.respond(id, { content: [{ type: "text", text: "from-thunderbird" }] });
     } else if (method === "session/request_permission") {
       answerPermission(tbPermissionRequests, (i, r) => tbPair.a.transport.respond(i, r), id);
-    } else if (method === X_PI_BROWSER.permission_prompted) {
+    } else if (method === X_TRUSTED_UA.permission_prompted) {
       recordPromptedElsewhere(tbPromptedElsewhere, (i, r) => tbPair.a.transport.respond(i, r))(params, id);
     }
   };
@@ -250,8 +250,8 @@ test("provider (broker mode): error when no connected client provides the tool",
   reg.remove("tb");
   await assert.rejects(mail!.execute("tc1", {}, undefined as never), (err: unknown) => {
     return (
-      err instanceof PiBrowserProtocolError &&
-      err.code === PI_BROWSER_ERROR.MCP_UNAVAILABLE &&
+      err instanceof TrustedUaProtocolError &&
+      err.code === TRUSTED_UA_ERROR.MCP_UNAVAILABLE &&
       /no connected client provides/.test(err.message)
     );
   });
@@ -302,18 +302,18 @@ test("provider (broker mode): sensitive tool permission prompt goes to the execu
   let tbPermissionRequests = 0;
   const setupFfPair = setup.ff;
   setupFfPair.transport.onRequest = (method, _params, id) => {
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       setupFfPair.transport.respond(id, { content: [{ type: "image", data: "aGk=", mimeType: "image/png" }] });
     } else if (method === "session/request_permission") {
       ffPermissionRequests++;
       setupFfPair.transport.respond(id, { outcome: { outcome: "selected", optionId: "allow_once" } });
     } else {
-      setupFfPair.transport.respondError(id, toErrorObject(PI_BROWSER_ERROR.INTERNAL, "unexpected"));
+      setupFfPair.transport.respondError(id, toErrorObject(TRUSTED_UA_ERROR.INTERNAL, "unexpected"));
     }
   };
   tb.transport.onRequest = (method, _params, id) => {
     if (method === "session/request_permission") tbPermissionRequests++;
-    tb.transport.respondError(id, toErrorObject(PI_BROWSER_ERROR.INTERNAL, "prompt leaked to TB"));
+    tb.transport.respondError(id, toErrorObject(TRUSTED_UA_ERROR.INTERNAL, "prompt leaked to TB"));
   };
 
   const tools = provider.createTools({ id: "s4" }, "legacy", undefined, ["mail"], "tb");

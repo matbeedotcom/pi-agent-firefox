@@ -10,7 +10,7 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 import { dispatchComposeTool } from "../src/background/compose-dispatcher.js";
 
 // ---------------------------------------------------------------------------
@@ -212,7 +212,7 @@ test("compose_prepare_reply requires a numeric messageId", async () => {
   await assert.rejects(
     dispatchComposeTool("compose_prepare_reply", {}),
     (e: unknown) =>
-      e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.INTERNAL && /messageId/.test(e.message),
+      e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.INTERNAL && /messageId/.test(e.message),
   );
 });
 
@@ -257,7 +257,7 @@ test("no send path exists: compose_send is not a known tool", async () => {
   await assert.rejects(
     dispatchComposeTool("compose_send", {}),
     (e: unknown) =>
-      e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+      e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND,
   );
   // And the dispatcher never touches a send/save function even if present.
   (store.calls as Call[]).push({ fn: "__sentinel__", args: [] });

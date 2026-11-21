@@ -5,7 +5,7 @@
  * Owns exactly one persistent port. `browser.runtime.connectNative()`
  * handles the app's framing; this class implements the JSON-RPC/ACP layer:
  * outgoing requests, incoming session/update notifications, and incoming
- * host requests (x-pi-browser/tool, mcp/*) routed to registered handlers.
+ * host requests (x-trusted-ua/tool, mcp/*) routed to registered handlers.
  *
  * Application identity (client name + pi.agent.hello) is injected so the
  * same class serves both Mozilla applications.
@@ -13,10 +13,10 @@
 import {
   AGENT_METHODS,
   CLIENT_METHODS,
-  PI_AGENT,
-  PI_BROWSER,
+  TRUSTED_UA_HOST,
+  TRUSTED_UA,
   PROTOCOL_VERSION,
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   buildAgentHelloMeta,
   toErrorObject,
   type AgentApplication,
@@ -33,8 +33,8 @@ import {
   type JsonRpcErrorObject,
   type MessageMcpRequest,
   type MessageMcpResponse,
-  type PiAgentMeta,
-  type PiBrowserMeta,
+  type TrustedUaAgentMeta,
+  type TrustedUaMeta,
   type PermissionPromptedParams,
   type PermissionWithdrawnParams,
   type SessionEndedParams,
@@ -43,9 +43,13 @@ import {
   type SessionNotification,
 } from "@trusted-ua/protocol";
 import {
+  initializeResultIsLegacy,
+  normalizeIncoming,
+  toLegacy,
+  withLegacyAliases,
   PERMISSION_WITHDRAWN_METHOD,
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
   SESSION_ENDED_METHOD,
 } from "@trusted-ua/protocol";
 
@@ -54,7 +58,7 @@ export type HostStatus =
   | {
       state: "connected";
       agentInfo?: Implementation;
-      piBrowserMeta?: PiBrowserMeta;
+      trustedUaMeta?: TrustedUaMeta;
       /** Union of capabilities across ALL connected apps (live). */
       capabilities?: AgentCapability[];
     }
@@ -145,6 +149,12 @@ export class AcpClient {
   private connecting = false;
   /** True once any message has been received on the current port. */
   private heardFromHost = false;
+  /**
+   * The host speaks the v0.4.0 (pi-browser) dialect (openspec
+   * rename-trusted-user-agent D2): learned from its initialize answer;
+   * outgoing messages are then sent with the old names.
+   */
+  private legacyHost = false;
   private status: HostStatus = { state: "connecting" };
 
   constructor(
@@ -191,7 +201,7 @@ export class AcpClient {
     this.connecting = true;
     let port: browser.runtime.Port;
     try {
-      port = browser.runtime.connectNative(PI_AGENT.nativeHost);
+      port = browser.runtime.connectNative(TRUSTED_UA_HOST.nativeHost);
     } catch (err) {
       this.connecting = false;
       this.failConnection("not_installed", err instanceof Error ? err.message : String(err));
@@ -199,6 +209,7 @@ export class AcpClient {
     }
     this.connecting = false;
     this.heardFromHost = false;
+    this.legacyHost = false;
     // Assign the port BEFORE emitting the "connecting" status: status
     // listeners may immediately issue requests (initialize) against it.
     this.port = port;
@@ -248,9 +259,14 @@ export class AcpClient {
     }
   }
 
-  private onMessage(msg: unknown): void {
-    if (typeof msg !== "object" || msg === null) return;
+  private onMessage(raw: unknown): void {
+    if (typeof raw !== "object" || raw === null) return;
     this.heardFromHost = true;
+    const { message: msg, legacy } = normalizeIncoming(raw);
+    const r = raw as { id?: unknown; result?: unknown };
+    if (typeof r.id === "number" && r.result !== undefined && this.pending.get(r.id)?.method === AGENT_METHODS.initialize) {
+      this.legacyHost = legacy && initializeResultIsLegacy(r.result);
+    }
     const m = msg as { id?: unknown; method?: unknown; result?: unknown; error?: unknown; params?: unknown };
     if (typeof m.id === "number" && (m.result !== undefined || m.error !== undefined)) {
       const p = this.pending.get(m.id);
@@ -279,7 +295,7 @@ export class AcpClient {
       }
       return;
     }
-    if (method === X_PI_BROWSER.capabilities_changed) {
+    if (method === X_TRUSTED_UA.capabilities_changed) {
       try {
         this.handlers.onCapabilitiesChanged?.(params as CapabilitiesChangedParams);
       } catch (err) {
@@ -302,7 +318,7 @@ export class AcpClient {
   private async handleIncomingRequest(id: number, method: string, params: unknown): Promise<void> {
     try {
       let result: unknown;
-      if (method === X_PI_BROWSER.tool) {
+      if (method === X_TRUSTED_UA.tool) {
         const callParams = params as BrowserToolCallParams;
         if (callParams.toolCallId) this.toolCallUpdateSeq.set(callParams.toolCallId, 0);
         try {
@@ -318,7 +334,7 @@ export class AcpClient {
         result = await this.handlers.onMcpDisconnect(params as DisconnectMcpRequest);
       } else if (method === CLIENT_METHODS.session_request_permission) {
         result = await this.handlers.onRequestPermission(params as RequestPermissionRequest);
-      } else if (method === X_PI_BROWSER.permission_prompted) {
+      } else if (method === X_TRUSTED_UA.permission_prompted) {
         // Display-only cross-app heads-up; ack so the host's fire-and-forget
         // request settles even if no UI handler is registered.
         this.handlers.onPermissionPrompted?.(params as PermissionPromptedParams);
@@ -336,15 +352,15 @@ export class AcpClient {
       this.send({ jsonrpc: "2.0", id, result: result === undefined ? null : result });
     } catch (err) {
       const errorObject: JsonRpcErrorObject =
-        err instanceof PiBrowserProtocolError
+        err instanceof TrustedUaProtocolError
           ? err.toErrorObject()
-          : toErrorObject(PI_BROWSER_ERROR.INTERNAL, err instanceof Error ? err.message : String(err));
+          : toErrorObject(TRUSTED_UA_ERROR.INTERNAL, err instanceof Error ? err.message : String(err));
       this.send({ jsonrpc: "2.0", id, error: errorObject });
     }
   }
 
   /**
-   * Report incremental progress for an in-flight tool call (x-pi-browser/
+   * Report incremental progress for an in-flight tool call (x-trusted-ua/
    * tool_update). Fire-and-forget: an update never blocks, fails, or
    * extends the tool call — the host independently validates the session,
    * the active toolCallId, and the monotonic sequence. Out-of-order or
@@ -360,11 +376,11 @@ export class AcpClient {
         this.toolCallUpdateSeq.set(params.toolCallId, params.sequence);
       }
     }
-    this.send({ jsonrpc: "2.0", method: X_PI_BROWSER.tool_update, params });
+    this.send({ jsonrpc: "2.0", method: X_TRUSTED_UA.tool_update, params });
   }
 
   request<T = unknown>(method: string, params?: unknown, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<T> {
-    if (!this.port) return Promise.reject(new PiBrowserProtocolError(PI_BROWSER_ERROR.NATIVE_HOST_NOT_INSTALLED, "not connected to native host"));
+    if (!this.port) return Promise.reject(new TrustedUaProtocolError(TRUSTED_UA_ERROR.NATIVE_HOST_NOT_INSTALLED, "not connected to native host"));
     const id = ++this.nextId;
     return new Promise<T>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -393,7 +409,7 @@ export class AcpClient {
         return;
       }
       try {
-        port.postMessage({ jsonrpc: "2.0", id, method, ...(params !== undefined ? { params } : {}) });
+        port.postMessage(this.encode({ jsonrpc: "2.0", id, method, ...(params !== undefined ? { params } : {}) }));
       } catch (err) {
         this.pending.delete(id);
         if (timer) clearTimeout(timer);
@@ -402,9 +418,14 @@ export class AcpClient {
     });
   }
 
+  /** Outgoing message in the host's dialect. */
+  private encode(msg: unknown): unknown {
+    return this.legacyHost ? toLegacy(msg) : msg;
+  }
+
   private send(msg: unknown): void {
     try {
-      this.port?.postMessage(msg);
+      this.port?.postMessage(this.encode(msg));
     } catch (err) {
       console.error(`[pi-agent] postMessage failed`, err);
     }
@@ -434,38 +455,39 @@ export class AcpClient {
         clientCapabilities: {},
         clientInfo: { name: this.identity.clientName, version },
         // pi.agent.hello: declare application + capabilities (plan §24).
-        _meta: buildAgentHelloMeta({
+        // Both dialects: a v0.4.0 host reads `piAgent`, a new one `trustedUaAgent`.
+        _meta: withLegacyAliases(buildAgentHelloMeta({
           client: {
             application: this.identity.application,
             extensionId,
             version,
           },
           capabilities: this.identity.capabilities,
-        }),
+        })),
       },
       INITIALIZE_TIMEOUT_MS,
     );
     if (res.protocolVersion !== PROTOCOL_VERSION) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.PROTOCOL_VERSION_MISMATCH,
         `agent speaks ACP ${res.protocolVersion}, add-on supports ${PROTOCOL_VERSION}`,
       );
     }
-    const piMeta = res._meta as { piBrowser?: PiBrowserMeta; piAgent?: PiAgentMeta } | undefined;
-    const meta = piMeta?.piBrowser;
-    if (meta && meta.protocolVersion !== PI_BROWSER.protocolVersion) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH,
-        `piBrowser protocol ${meta.protocolVersion} != supported ${PI_BROWSER.protocolVersion}`,
+    const tuaMeta = res._meta as { trustedUa?: TrustedUaMeta; trustedUaAgent?: TrustedUaAgentMeta } | undefined;
+    const meta = tuaMeta?.trustedUa;
+    if (meta && meta.protocolVersion !== TRUSTED_UA.protocolVersion) {
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.PROTOCOL_VERSION_MISMATCH,
+        `trustedUa protocol ${meta.protocolVersion} != supported ${TRUSTED_UA.protocolVersion}`,
       );
     }
     this.setStatus({
       state: "connected",
       agentInfo: res.agentInfo ?? undefined,
-      piBrowserMeta: meta,
+      trustedUaMeta: meta,
       // Session tool surface (plan §29); live updates arrive via
-      // x-pi-browser/capabilities_changed. Legacy hosts omit it.
-      ...(piMeta?.piAgent?.connectedCapabilities ? { capabilities: piMeta.piAgent.connectedCapabilities } : {}),
+      // x-trusted-ua/capabilities_changed. Legacy hosts omit it.
+      ...(tuaMeta?.trustedUaAgent?.connectedCapabilities ? { capabilities: tuaMeta.trustedUaAgent.connectedCapabilities } : {}),
     });
     return res;
   }
@@ -475,7 +497,7 @@ export class AcpClient {
 export function notifyHost(client: AcpClient, params: BrowserNotifyParams): void {
   try {
     client
-      .request(X_PI_BROWSER.notify, params, 5_000)
+      .request(X_TRUSTED_UA.notify, params, 5_000)
       .catch(() => {
         /* notifications are best-effort */
       });
@@ -484,4 +506,4 @@ export function notifyHost(client: AcpClient, params: BrowserNotifyParams): void
   }
 }
 
-export { PI_BROWSER_ERROR, toErrorObject };
+export { TRUSTED_UA_ERROR, toErrorObject };

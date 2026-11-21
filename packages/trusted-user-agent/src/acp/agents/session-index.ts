@@ -10,7 +10,8 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { dataRoot } from "./registry.js";
+import { dataFile, readableDataFile } from "../../paths.js";
+
 
 export interface AgentSessionEntry {
   sessionId: string;
@@ -25,20 +26,25 @@ export interface AgentSessionEntry {
 const MAX_ENTRIES = 500;
 
 export function agentSessionsFilePath(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PI_BROWSER_AGENT_SESSIONS_FILE?.trim() || path.join(dataRoot(env), "agent-sessions.json");
+  return dataFile("agent-sessions.json", "AGENT_SESSIONS_FILE", env);
 }
 
 export class AgentSessionIndex {
   private entries: Map<string, AgentSessionEntry> | undefined;
 
-  constructor(private readonly file: string = agentSessionsFilePath()) {}
+  /** Read from here first time (the v0.4.0 file in ~/.pi/browser when the new one doesn't exist). */
+  private readonly readFrom: string;
+
+  constructor(private readonly file: string = agentSessionsFilePath(), readFrom?: string) {
+    this.readFrom = readFrom ?? (file === agentSessionsFilePath() ? readableDataFile("agent-sessions.json", "AGENT_SESSIONS_FILE") : file);
+  }
 
   private load(): Map<string, AgentSessionEntry> {
     if (this.entries) return this.entries;
     const map = new Map<string, AgentSessionEntry>();
-    if (existsSync(this.file)) {
+    if (existsSync(this.readFrom)) {
       try {
-        const parsed = JSON.parse(readFileSync(this.file, "utf8")) as { sessions?: unknown };
+        const parsed = JSON.parse(readFileSync(this.readFrom, "utf8")) as { sessions?: unknown };
         for (const e of Array.isArray(parsed.sessions) ? parsed.sessions : []) {
           const r = e as Partial<AgentSessionEntry>;
           if (typeof r.sessionId === "string" && typeof r.agent === "string" && typeof r.cwd === "string") {

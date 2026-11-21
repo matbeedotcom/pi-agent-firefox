@@ -7,13 +7,13 @@
  */
 import {
   AGENT_METHODS,
-  PI_BROWSER,
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
+  TRUSTED_UA,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
   PERMISSION_ALLOW_ALWAYS,
   PERMISSION_ALLOW_ONCE,
   PERMISSION_REJECT,
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   isCallerSessionId,
   type PermissionClearResult,
   type PermissionConfigResult,
@@ -25,7 +25,7 @@ import {
   type SessionUpdate,
 } from "@trusted-ua/protocol";
 import { ApprovalWindowController, isCallerPermissionRequest, fetchAgents } from "@trusted-ua/webext";
-import { AcpClient, SESSION_OPEN_TIMEOUT_MS, bindingRefId, fetchPiTheme, notifyHost, SessionStore, SkillsRuntime, type DocumentIdentity, type GateIdentity, type HostStatus, type PiTheme } from "@trusted-ua/webext";
+import { AcpClient, SESSION_OPEN_TIMEOUT_MS, bindingRefId, fetchTrustedUaTheme, notifyHost, SessionStore, SkillsRuntime, type DocumentIdentity, type GateIdentity, type HostStatus, type TrustedUaTheme } from "@trusted-ua/webext";
 import type { PagePlan } from "@trusted-ua/protocol";
 import { PromptRecovery } from "./prompt-recovery.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
@@ -103,7 +103,7 @@ const controlHandler: ControlHandler = (tool, args) => {
     case "pi_open_bound_tab":
       return handleAction("open_bound_tab", { sessionId: String(args.sessionId ?? "") });
     default:
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown control tool: ${tool}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown control tool: ${tool}`);
   }
 };
 
@@ -114,7 +114,7 @@ let activeSessionId: string | undefined;
 let initialized = false;
 let bootstrapInFlight = false;
 /** Active browser theme snapshot (browser.theme); undefined when unavailable. */
-let theme: PiTheme | undefined;
+let theme: TrustedUaTheme | undefined;
 
 // ---------------------------------------------------------------------------
 // Skills runtime (skills-runtime-design.md §2, §8, §13)
@@ -332,7 +332,7 @@ interface UiState {
   activeSessionId?: string;
   sessions: ReturnType<SessionStore["snapshot"]>["sessions"];
   lastSessionId?: string;
-  theme?: PiTheme;
+  theme?: TrustedUaTheme;
   /** Still-pending permission prompts (sidebar re-shows the modal from this). */
   permissionRequests: RequestPermissionRequest[];
 }
@@ -392,21 +392,21 @@ async function createSession(cwd: string, agent?: string): Promise<string> {
     const res = await client.request<{
       sessionId: string;
       configOptions?: unknown;
-      _meta?: { piBrowser?: { workspace?: string; agent?: { id: string; name: string } } };
+      _meta?: { trustedUa?: { workspace?: string; agent?: { id: string; name: string } } };
     }>(
       AGENT_METHODS.session_new,
       // An external ACP agent (Claude Code, Codex, ...) when chosen in the
       // new-session panel; without it the host creates a pi session.
-      { cwd, mcpServers, ...(agent ? { _meta: { piBrowser: { agent } } } : {}) },
+      { cwd, mcpServers, ...(agent ? { _meta: { trustedUa: { agent } } } : {}) },
       SESSION_OPEN_TIMEOUT_MS,
     );
     sessionId = res.sessionId;
     configOptions = res.configOptions;
-    agentRef = res._meta?.piBrowser?.agent;
+    agentRef = res._meta?.trustedUa?.agent;
     // The agent may provision a per-task workspace as the session cwd (when
     // the requested cwd was neutral). Record the real cwd so the UI shows
     // where the model's files land, not the fallback we sent.
-    effectiveCwd = res._meta?.piBrowser?.workspace ?? cwd;
+    effectiveCwd = res._meta?.trustedUa?.workspace ?? cwd;
   } catch (err) {
     decl.discard();
     throw err;
@@ -446,8 +446,8 @@ async function openExistingSession(sessionId: string, cwd: string, load: boolean
 
 async function sendPrompt(sessionId: string, text: string, automatic = false): Promise<void> {
   const view = store.get(sessionId);
-  if (!view) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
-  if (view.streaming) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, "session is busy");
+  if (!view) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+  if (view.streaming) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_BUSY, "session is busy");
   if (!automatic) recovery.begin(sessionId);
   store.setStreaming(sessionId, true);
   pushState();
@@ -468,10 +468,10 @@ async function sendPrompt(sessionId: string, text: string, automatic = false): P
 
 const client = new AcpClient(
   {
-    clientName: "pi-browser-firefox",
+    clientName: "trusted-ua-firefox",
     application: "firefox",
     capabilities: ["browser"],
-    extensionId: PI_BROWSER.extensionId,
+    extensionId: TRUSTED_UA.extensionId,
   },
   {
   onSessionUpdate(params: SessionNotification) {
@@ -674,7 +674,7 @@ browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =
       sendResponse({
         ok: false,
         error: {
-          ...(typeof rpc.code === "string" ? { piBrowserError: rpc.code } : {}),
+          ...(typeof rpc.code === "string" ? { trustedUaError: rpc.code } : {}),
           message: typeof rpc.message === "string" ? rpc.message : String(rpc),
         },
       });
@@ -691,14 +691,14 @@ async function handleSkillsAction(action: string, payload: ActionPayload, sender
   switch (action) {
     case "skills_plan": {
       const document = skillsDocument(sender);
-      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      if (!document) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       return skills.plan(document);
     }
     case "skills_arm": {
       const document = skillsDocument(sender);
-      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      if (!document) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       const event = String(payload.event ?? "");
-      if (!payload.identity || !payload.plan || !event) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_arm requires event, identity and plan");
+      if (!payload.identity || !payload.plan || !event) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "skills_arm requires event, identity and plan");
       return skills.arm({
         document,
         event,
@@ -710,47 +710,47 @@ async function handleSkillsAction(action: string, payload: ActionPayload, sender
     }
     case "skills_gesture": {
       const document = skillsDocument(sender);
-      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      if (!document) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       const phase = payload.phase === "click" || payload.phase === "keyboard" || payload.phase === "submit" ? payload.phase : undefined;
       const event = String(payload.event ?? "");
-      if (!phase || !payload.chainId || !event) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_gesture requires event, chainId and phase");
+      if (!phase || !payload.chainId || !event) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "skills_gesture requires event, chainId and phase");
       return { verdict: skills.gesture(document, event, { chainId: payload.chainId, phase }) };
     }
     case "skills_draft": {
       const document = skillsDocument(sender);
       const event = String(payload.event ?? "");
-      if (!document || !payload.identity || !event) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_draft requires event and identity");
+      if (!document || !payload.identity || !event) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "skills_draft requires event and identity");
       skills.draftChanged(document, event, payload.identity);
       return {};
     }
     case "skills_composition": {
       const document = skillsDocument(sender);
       const event = String(payload.event ?? "");
-      if (!document || !event) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      if (!document || !event) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       skills.compositionChanged(document, event, payload.composing === true);
       return {};
     }
     case "skills_authorize": {
       const document = skillsDocument(sender);
-      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      if (!document) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       const event = payload.event !== undefined ? String(payload.event) : undefined;
       return { authorized: skills.authorize(document, event) };
     }
     case "skills_cancel": {
       const interactionId = String(payload.interactionId ?? "");
-      if (!interactionId) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "skills_cancel requires interactionId");
+      if (!interactionId) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "skills_cancel requires interactionId");
       return skills.cancel(interactionId);
     }
     case "skills_state": {
       const document = skillsDocument(sender);
-      if (!document) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
+      if (!document) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       // Return the view DIRECTLY (consumers read `.state`); the separate
       // "pi/skills_state" push message is the one that wraps it in { view }.
       const view = skills.view(document);
       return view ?? null;
     }
     default:
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `unknown skills action: ${action}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `unknown skills action: ${action}`);
   }
 }
 
@@ -779,7 +779,7 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     case "skills_state":
       return handleSkillsAction(action, payload, sender);
     case "new_session": {
-      if (!client.connected) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.NATIVE_HOST_NOT_INSTALLED, "not connected to native host");
+      if (!client.connected) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.NATIVE_HOST_NOT_INSTALLED, "not connected to native host");
       const cwd = String(payload.cwd ?? "").trim() || processCwdLikeFallback();
       const agent = typeof payload.agent === "string" && payload.agent ? payload.agent : undefined;
       const sessionId = await createSession(cwd, agent);
@@ -793,7 +793,7 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     case "select_session": {
       const sessionId = String(payload.sessionId);
       const view = store.get(sessionId);
-      if (!view) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      if (!view) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
       if (!view.loaded) {
         await openExistingSession(sessionId, view.cwd, true);
       } else {
@@ -806,14 +806,14 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     case "load_session": {
       const sessionId = String(payload.sessionId);
       const view = store.get(sessionId);
-      if (!view) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      if (!view) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
       await openExistingSession(sessionId, view.cwd, true);
       return {};
     }
     case "prompt": {
       const sessionId = String(payload.sessionId);
       const text = String(payload.text ?? "");
-      if (!text.trim()) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "empty prompt");
+      if (!text.trim()) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "empty prompt");
       void sendPrompt(sessionId, text).catch((err) => console.warn("[pi-browser] prompt ended", err));
       return { accepted: true };
     }
@@ -847,7 +847,7 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     case "bind_current_tab": {
       const sessionId = String(payload.sessionId);
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "no active tab to bind");
+      if (!tab?.id) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "no active tab to bind");
       store.bind(sessionId, {
         ref: tab.id,
         refId: tab.id,
@@ -865,9 +865,9 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     }
     case "open_tab": {
       const sessionId = String(payload.sessionId);
-      if (!store.get(sessionId)) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      if (!store.get(sessionId)) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
       const url = String(payload.url ?? "").trim();
-      if (!url) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "pi_open_tab requires a url");
+      if (!url) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "pi_open_tab requires a url");
       // Agent-owned tab: created + bound in one step (works unbound — the
       // REPL's home-restore/ownership lifecycle applies, same as
       // browser_open_tab). The dispatcher owns the tab + binding state.
@@ -877,7 +877,7 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     }
     case "bind_tab": {
       const sessionId = String(payload.sessionId);
-      if (!store.get(sessionId)) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      if (!store.get(sessionId)) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
       // Same steal/bind/restore-point semantics as browser_bind_tab — the
       // dispatcher owns the tab + binding state.
       const result = await dispatcher.bindSessionTab(sessionId, payload.tabId);
@@ -886,7 +886,7 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     }
     case "list_tabs": {
       const sessionId = String(payload.sessionId);
-      if (!store.get(sessionId)) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
+      if (!store.get(sessionId)) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `unknown session: ${sessionId}`);
       const binding = store.getBinding(sessionId);
       const boundId = binding ? bindingRefId(binding) : undefined;
       const tabs = await browser.tabs.query({});
@@ -912,9 +912,9 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     case "open_bound_tab": {
       const sessionId = String(payload.sessionId);
       const binding = store.getBinding(sessionId);
-      if (!binding) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "session has no bound tab");
+      if (!binding) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "session has no bound tab");
       const tabId = bindingRefId(binding);
-      if (tabId === undefined) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "session binding has no tab");
+      if (tabId === undefined) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "session binding has no tab");
       await browser.tabs.update(tabId, { active: true });
       if (binding.windowId) await browser.windows.update(binding.windowId, { focused: true }).catch(() => {});
       return {};
@@ -926,12 +926,12 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     // Permission Configuration page (PRODUCT.md §55): the host is the
     // source of truth for the per-tool "always allow" state.
     case "permission_config": {
-      return client.request<PermissionConfigResult>(X_PI_BROWSER.permissions, {}, 10_000);
+      return client.request<PermissionConfigResult>(X_TRUSTED_UA.permissions, {}, 10_000);
     }
     case "permission_set": {
       const state = payload.state === "allow" || payload.state === "deny" || payload.state === "ask" ? payload.state : "ask";
       const res = await client.request<PermissionSetResult>(
-        X_PI_BROWSER.permission_set,
+        X_TRUSTED_UA.permission_set,
         permissionSetParams(payload as unknown as Record<string, unknown>, state),
         10_000,
       );
@@ -939,14 +939,14 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     }
     case "permission_clear": {
       const res = await client.request<PermissionClearResult>(
-        X_PI_BROWSER.permission_clear,
+        X_TRUSTED_UA.permission_clear,
         permissionClearParams(payload as unknown as Record<string, unknown>),
         10_000,
       );
       return res;
     }
     default:
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `unknown action: ${action}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `unknown action: ${action}`);
   }
 }
 
@@ -992,10 +992,10 @@ void (async () => {
   networkLog.start();
   // Read the active browser theme so the sidebar renders with it; re-read on
   // theme change and re-push state (the sidebar applies theme on every state).
-  theme = await fetchPiTheme();
+  theme = await fetchTrustedUaTheme();
   if (typeof browser.theme !== "undefined" && browser.theme?.onUpdated) {
     browser.theme.onUpdated.addListener(() => {
-      void fetchPiTheme().then((t) => {
+      void fetchTrustedUaTheme().then((t) => {
         theme = t;
         pushState();
       });
@@ -1008,7 +1008,7 @@ void (async () => {
 // Keep the MV3 event page alive and keep the link healthy: Firefox unloads
 // idle event pages, which would silently drop the Native Messaging port (and
 // with it the session). Two duties on one interval:
-//   - connected:  periodic liveness ping (doubles as the x-pi-browser/ping
+//   - connected:  periodic liveness ping (doubles as the x-trusted-ua/ping
 //     probe; the host refreshes the add-on heartbeat it uses for onboarding
 //     auto-detection in /pi-browser status|doctor)
 //   - NOT connected: ensureConnected() — auto-detects a host installed AFTER
@@ -1018,7 +1018,7 @@ void (async () => {
 //     state.
 setInterval(() => {
   if (client.connected && hostStatus.state === "connected") {
-    client.request(X_PI_BROWSER.ping, {}, 5_000).catch(() => {
+    client.request(X_TRUSTED_UA.ping, {}, 5_000).catch(() => {
       /* the port's onDisconnect handler deals with dropped links */
     });
   } else {
@@ -1026,7 +1026,7 @@ setInterval(() => {
   }
 }, 10_000);
 
-/** x-pi-browser/permission_set params from a settings action (tool, caller or externalAccess). */
+/** x-trusted-ua/permission_set params from a settings action (tool, caller or externalAccess). */
 function permissionSetParams(payload: Record<string, unknown>, state: "allow" | "deny" | "ask"): Record<string, unknown> {
   if (typeof payload.externalAccess === "boolean") return { externalAccess: payload.externalAccess };
   const caller = payload.caller as { application?: unknown; name?: unknown } | undefined;
@@ -1034,7 +1034,7 @@ function permissionSetParams(payload: Record<string, unknown>, state: "allow" | 
   return { tool: String(payload.tool ?? ""), state };
 }
 
-/** x-pi-browser/permission_clear params from a settings action (tool, caller, or all tools). */
+/** x-trusted-ua/permission_clear params from a settings action (tool, caller, or all tools). */
 function permissionClearParams(payload: Record<string, unknown>): Record<string, unknown> {
   const caller = payload.caller as { application?: unknown; name?: unknown } | undefined;
   if (caller && typeof caller.name === "string") return { caller: { application: caller.application, name: caller.name } };

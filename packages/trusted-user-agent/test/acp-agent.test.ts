@@ -21,7 +21,7 @@ import {
   PERMISSION_ALLOW_ONCE,
   codeFromErrorObject,
   PROTOCOL_VERSION,
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   buildAgentHelloMeta,
   type JsonRpcErrorObject,
   type SessionConfigOption,
@@ -83,7 +83,7 @@ function setup(workspaceRoot?: string): Harness {
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test("initialize: capabilities + piBrowser metadata", async () => {
+test("initialize: capabilities + trustedUa metadata", async () => {
   const h = setup();
   const res = (await h.request(AGENT_METHODS.initialize, {
     protocolVersion: PROTOCOL_VERSION,
@@ -91,7 +91,7 @@ test("initialize: capabilities + piBrowser metadata", async () => {
   })) as {
     protocolVersion: number;
     agentCapabilities: Record<string, unknown>;
-    _meta: { piBrowser: { protocolVersion: number; browserToolVersion: number } };
+    _meta: { trustedUa: { protocolVersion: number; browserToolVersion: number } };
     agentInfo: { name: string };
   };
   assert.equal(res.protocolVersion, PROTOCOL_VERSION);
@@ -104,8 +104,8 @@ test("initialize: capabilities + piBrowser metadata", async () => {
   assert.ok(caps.sessionCapabilities.resume);
   assert.ok(caps.sessionCapabilities.close);
   assert.equal(caps.mcpCapabilities.acp, true);
-  assert.equal(res._meta.piBrowser.protocolVersion, 3);
-  assert.equal(res._meta.piBrowser.browserToolVersion, 8);
+  assert.equal(res._meta.trustedUa.protocolVersion, 3);
+  assert.equal(res._meta.trustedUa.browserToolVersion, 8);
   assert.equal(res.agentInfo.name, "test-agent");
 });
 
@@ -124,9 +124,9 @@ test("initialize: pi.agent.hello (thunderbird, mail + compose) -> no browser too
       client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
       capabilities: ["mail", "compose", "attachments"],
     }),
-  })) as { _meta: { piAgent: { application: string; capabilities: string[] } } };
-  assert.equal(res._meta.piAgent.application, "thunderbird");
-  assert.deepEqual(res._meta.piAgent.capabilities, ["mail", "compose", "attachments"]);
+  })) as { _meta: { trustedUaAgent: { application: string; capabilities: string[] } } };
+  assert.equal(res._meta.trustedUaAgent.application, "thunderbird");
+  assert.deepEqual(res._meta.trustedUaAgent.capabilities, ["mail", "compose", "attachments"]);
   // A mail+compose client receives the read-only mail tools AND the draft-first
   // compose tools (12 + 6, incl. compose_add_attachment + mail_list_tags), and no browser tools.
   const s = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/m", mcpServers: [] })) as { sessionId: string };
@@ -181,7 +181,7 @@ test("initialize: connectedCapabilities is the union of ALL connected clients (b
   const capNotif = (pair: { a: Dispatcher }) => {
     const seen: unknown[] = [];
     pair.a.transport.onNotification = (m, p) => {
-      if (m === X_PI_BROWSER.capabilities_changed) seen.push(p);
+      if (m === X_TRUSTED_UA.capabilities_changed) seen.push(p);
     };
     return seen;
   };
@@ -196,9 +196,9 @@ test("initialize: connectedCapabilities is the union of ALL connected clients (b
       client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.1" },
       capabilities: ["browser"],
     }),
-  })) as { _meta: { piAgent: { capabilities: string[]; connectedCapabilities: string[] } } };
-  assert.deepEqual(ffRes._meta.piAgent.capabilities, ["browser"]);
-  assert.deepEqual(ffRes._meta.piAgent.connectedCapabilities, ["browser"]);
+  })) as { _meta: { trustedUaAgent: { capabilities: string[]; connectedCapabilities: string[] } } };
+  assert.deepEqual(ffRes._meta.trustedUaAgent.capabilities, ["browser"]);
+  assert.deepEqual(ffRes._meta.trustedUaAgent.connectedCapabilities, ["browser"]);
 
   // Thunderbird connects: its response already reflects the full union...
   const tbRes = (await tbPair.a.transport.request(AGENT_METHODS.initialize, {
@@ -208,8 +208,8 @@ test("initialize: connectedCapabilities is the union of ALL connected clients (b
       client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
       capabilities: ["mail", "compose", "attachments"],
     }),
-  })) as { _meta: { piAgent: { connectedCapabilities: string[] } } };
-  assert.deepEqual(tbRes._meta.piAgent.connectedCapabilities, ["browser", "mail", "compose", "attachments"]);
+  })) as { _meta: { trustedUaAgent: { connectedCapabilities: string[] } } };
+  assert.deepEqual(tbRes._meta.trustedUaAgent.connectedCapabilities, ["browser", "mail", "compose", "attachments"]);
   // ...and the already-connected Firefox client is told live (it may also
   // have seen the echo of its own registration; the LAST one must be the union).
   assert.ok(ffSeen.length >= 1, "Firefox received capabilities_changed");
@@ -262,9 +262,9 @@ test("initialize: legacy client (no hello) keeps browser tools; firefox hello de
       client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.1" },
       capabilities: ["browser"],
     }),
-  })) as { _meta: { piAgent: { application: string; capabilities: string[] } } };
-  assert.equal(res._meta.piAgent.application, "firefox");
-  assert.deepEqual(res._meta.piAgent.capabilities, ["browser"]);
+  })) as { _meta: { trustedUaAgent: { application: string; capabilities: string[] } } };
+  assert.equal(res._meta.trustedUaAgent.application, "firefox");
+  assert.deepEqual(res._meta.trustedUaAgent.capabilities, ["browser"]);
   const sFx = (await hFx.request(AGENT_METHODS.session_new, { cwd: "/proj/f", mcpServers: [] })) as { sessionId: string };
   assert.ok(hFx.lastCreateTools.length > 0, "firefox hello gets browser tools");
   await hFx.request(AGENT_METHODS.session_close, { sessionId: sFx.sessionId });
@@ -574,14 +574,14 @@ test("mail_search: streamed batches become tool_call_update notifications; final
       h.a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
       return;
     }
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { sessionId: string; tool: string; toolCallId: string };
       assert.equal(p.tool, "mail_search");
-      h.a.transport.notify(X_PI_BROWSER.tool_update, {
+      h.a.transport.notify(X_TRUSTED_UA.tool_update, {
         sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence: 1,
         update: { kind: "batch", result: { messages: [{ messageId: 1, subject: "Mozilla Add-ons: Pi Coding Agent Browser" }], nextCursor: "sc-1", complete: false, sortComplete: false, scanned: 25 } },
       });
-      h.a.transport.notify(X_PI_BROWSER.tool_update, {
+      h.a.transport.notify(X_TRUSTED_UA.tool_update, {
         sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence: 2,
         update: { kind: "progress", scanned: 900 },
       });
@@ -647,9 +647,9 @@ test("unknown ACP method -> METHOD_NOT_FOUND", async () => {
   assert.equal(err.code, JSONRPC_ERROR.METHOD_NOT_FOUND);
 });
 
-test("x-pi-browser/ping responds with integration metadata", async () => {
+test("x-trusted-ua/ping responds with integration metadata", async () => {
   const h = setup();
-  const res = (await h.request(X_PI_BROWSER.ping, {})) as { pong: boolean; meta: { protocolVersion: number } };
+  const res = (await h.request(X_TRUSTED_UA.ping, {})) as { pong: boolean; meta: { protocolVersion: number } };
   assert.equal(res.pong, true);
   assert.equal(res.meta.protocolVersion, 3);
 });
@@ -659,10 +659,10 @@ test("session/new: neutral cwd (\"/\") provisions a per-task workspace", async (
   const h = setup(workspaceRoot);
   const res = (await h.request(AGENT_METHODS.session_new, { cwd: "/", mcpServers: [] })) as {
     sessionId: string;
-    _meta?: { piBrowser?: { workspace?: string } };
+    _meta?: { trustedUa?: { workspace?: string } };
   };
-  const workspace = res._meta?.piBrowser?.workspace;
-  assert.ok(workspace, "_meta.piBrowser.workspace is reported");
+  const workspace = res._meta?.trustedUa?.workspace;
+  assert.ok(workspace, "_meta.trustedUa.workspace is reported");
   // The workspace lives under the configured root.
   assert.ok(workspace.startsWith(workspaceRoot + path.sep), `workspace ${workspace} under ${workspaceRoot}`);
   // The backend session's cwd is the provisioned workspace.
@@ -670,9 +670,9 @@ test("session/new: neutral cwd (\"/\") provisions a per-task workspace", async (
   assert.equal(sess.cwd, workspace);
   // A second neutral session gets its own, distinct workspace.
   const res2 = (await h.request(AGENT_METHODS.session_new, { cwd: "/", mcpServers: [] })) as {
-    _meta?: { piBrowser?: { workspace?: string } };
+    _meta?: { trustedUa?: { workspace?: string } };
   };
-  assert.notEqual(res2._meta?.piBrowser?.workspace, workspace);
+  assert.notEqual(res2._meta?.trustedUa?.workspace, workspace);
 });
 
 test("session/new: meaningful cwd is used as-is (no workspace provisioned)", async () => {
@@ -680,27 +680,27 @@ test("session/new: meaningful cwd is used as-is (no workspace provisioned)", asy
   const h = setup(workspaceRoot);
   const res = (await h.request(AGENT_METHODS.session_new, { cwd: "/proj/real", mcpServers: [] })) as {
     sessionId: string;
-    _meta?: { piBrowser?: { workspace?: string } };
+    _meta?: { trustedUa?: { workspace?: string } };
   };
   // The requested cwd is honored and reported back unchanged.
-  assert.equal(res._meta?.piBrowser?.workspace, "/proj/real");
+  assert.equal(res._meta?.trustedUa?.workspace, "/proj/real");
   const sess = h.backend.sessions.get(res.sessionId) as MockSession;
   assert.equal(sess.cwd, "/proj/real");
 });
 
 test("permissions: the settings page reads and sets external access and remembered callers", async () => {
   const h = setup();
-  let config = (await h.request(X_PI_BROWSER.permissions, {})) as {
+  let config = (await h.request(X_TRUSTED_UA.permissions, {})) as {
     externalAccess?: boolean;
     callers?: Array<{ application: string; name: string; state: string }>;
   };
   assert.equal(config.externalAccess, true, "on by default");
   assert.deepEqual(config.callers, []);
 
-  assert.deepEqual(await h.request(X_PI_BROWSER.permission_set, { externalAccess: false }), { externalAccess: false });
-  await h.request(X_PI_BROWSER.permission_set, { caller: { application: "firefox", name: "codex" }, state: "allow" });
-  await h.request(X_PI_BROWSER.permission_set, { caller: { application: "thunderbird", name: "codex" }, state: "deny" });
-  config = (await h.request(X_PI_BROWSER.permissions, {})) as typeof config;
+  assert.deepEqual(await h.request(X_TRUSTED_UA.permission_set, { externalAccess: false }), { externalAccess: false });
+  await h.request(X_TRUSTED_UA.permission_set, { caller: { application: "firefox", name: "codex" }, state: "allow" });
+  await h.request(X_TRUSTED_UA.permission_set, { caller: { application: "thunderbird", name: "codex" }, state: "deny" });
+  config = (await h.request(X_TRUSTED_UA.permissions, {})) as typeof config;
   assert.equal(config.externalAccess, false);
   assert.deepEqual(config.callers, [
     { application: "firefox", name: "codex", state: "allow" },
@@ -708,14 +708,61 @@ test("permissions: the settings page reads and sets external access and remember
   ]);
 
   // Revoke one app's decision; the other stays. Clear-all leaves callers alone.
-  await h.request(X_PI_BROWSER.permission_clear, { caller: { application: "firefox", name: "codex" } });
-  await h.request(X_PI_BROWSER.permission_clear, {});
-  config = (await h.request(X_PI_BROWSER.permissions, {})) as typeof config;
+  await h.request(X_TRUSTED_UA.permission_clear, { caller: { application: "firefox", name: "codex" } });
+  await h.request(X_TRUSTED_UA.permission_clear, {});
+  config = (await h.request(X_TRUSTED_UA.permissions, {})) as typeof config;
   assert.deepEqual(config.callers, [{ application: "thunderbird", name: "codex", state: "deny" }]);
 
   // Tool rows still work as before.
-  assert.deepEqual(await h.request(X_PI_BROWSER.permission_set, { tool: "mail_search", state: "allow" }), {
+  assert.deepEqual(await h.request(X_TRUSTED_UA.permission_set, { tool: "mail_search", state: "allow" }), {
     tool: "mail_search",
     state: "allow",
   });
+});
+
+// ---------------------------------------------------------------------------
+// v0.4.0 (pi-browser) dialect (openspec rename-trusted-user-agent D2)
+// ---------------------------------------------------------------------------
+
+test("a v0.4.0 add-on (old names only) initializes, pings, and gets old names back", async () => {
+  const { createJsonRpcDispatcher } = await import("../src/native-host/transport.js");
+  const sent: Array<Record<string, any>> = [];
+  const host = createJsonRpcDispatcher((m) => sent.push(m as Record<string, any>), { log: quiet });
+  const provider = new CapabilityToolProvider(host.transport, quiet, undefined, {
+    permissionStore: new PermissionStore({ filePath: path.join(mkdtempSync(path.join(tmpdir(), "pi-legacy-")), "permissions.json") }),
+  });
+  new AcpAgent({ backend: new MockBackend(), provider, transport: host.transport, log: quiet, agentInfo: { name: "t", version: "0" } });
+  const reply = async (id: number) => {
+    for (let i = 0; i < 200; i++) {
+      const r = sent.find((m) => m.id === id && (m.result !== undefined || m.error !== undefined));
+      if (r) return r;
+      await new Promise((res) => setTimeout(res, 5));
+    }
+    throw new Error(`no reply for ${id}`);
+  };
+  host.deliverMessage({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {},
+      clientInfo: { name: "pi-browser-firefox", version: "0.4.0" },
+      _meta: { piAgent: { type: "pi.agent.hello", client: { application: "firefox", extensionId: "x", version: "0.4.0" }, capabilities: ["browser"] } },
+    },
+  });
+  const init = await reply(1);
+  assert.ok(init.result._meta.piBrowser, "initialize answers with _meta.piBrowser");
+  assert.equal(init.result._meta.piBrowser.protocolVersion, 3);
+  assert.equal(init.result._meta.piAgent.application, "firefox");
+  assert.equal(init.result._meta.trustedUa, undefined);
+
+  host.deliverMessage({ jsonrpc: "2.0", id: 2, method: "x-pi-browser/ping", params: {} });
+  const pong = await reply(2);
+  assert.equal(pong.result.pong, true);
+  assert.ok(pong.result.meta, "ping answered under the old method name");
+
+  // Host → client requests use the old prefix too.
+  void host.transport.request("x-trusted-ua/tool", { tool: "browser_get_page" }, 50).catch(() => undefined);
+  assert.equal(sent.at(-1)?.method, "x-pi-browser/tool");
 });

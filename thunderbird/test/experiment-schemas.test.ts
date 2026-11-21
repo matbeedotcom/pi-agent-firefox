@@ -3,9 +3,9 @@
  * WebExtension schema format Thunderbird's loader accepts: a JSON ARRAY of
  * namespace entries, `[{ "namespace": "<name>", "functions": [...] }]`.
  *
- * piSearch shipped (through v0.2.1) as `{ "piSearch": { scopes, paths,
+ * trustedUaSearch shipped (through v0.2.1) as `{ "trustedUaSearch": { scopes, paths,
  * functions } }` — the manifest's experiment_apis layout, not a schema.
- * Thunderbird skipped it silently: `browser.piSearch` was undefined on
+ * Thunderbird skipped it silently: `browser.trustedUaSearch` was undefined on
  * every version, and mail_search's full-text path quietly fell back to
  * messages.query instead of the Gloda engine. Only a live check noticed.
  */
@@ -38,7 +38,7 @@ for (const [name, decl] of experiments) {
       // addon_parent implementations are reached over IPC: every call is async.
       assert.equal(fn.async, true, `${name}.${String(fn.name)} must be declared "async": true`);
       // Without a parameters array the call fails with an opaque
-      // "InvalidStateError: An exception was thrown" (piSearch.status did).
+      // "InvalidStateError: An exception was thrown" (trustedUaSearch.status did).
       assert.ok(Array.isArray(fn.parameters), `${name}.${String(fn.name)} needs a "parameters" array (use [] for none)`);
       for (const param of (fn.parameters as Array<Record<string, unknown>>)) {
         if (param.type !== "object" || !param.properties) continue;

@@ -30,6 +30,7 @@ import type {
   CallerPermissionState,
   PermissionToolState,
 } from "@trusted-ua/protocol";
+import { dataFile, readableDataFile } from "./paths.js";
 
 export interface PermissionStoreOptions {
   /**
@@ -53,14 +54,20 @@ interface PermissionFileV1 {
   tools: Record<string, boolean>;
 }
 
+/** Where decisions are saved (TRUSTED_UA_PERMISSIONS_FILE overrides). */
 export function defaultPermissionFilePath(): string {
-  return process.env.PI_BROWSER_PERMISSIONS_FILE
-    ? process.env.PI_BROWSER_PERMISSIONS_FILE
-    : join(homedir(), ".pi", "browser", "permissions.json");
+  return dataFile("permissions.json", "PERMISSIONS_FILE");
+}
+
+/** Where saved decisions are read from: the saved file, else the v0.4.0 one in ~/.pi/browser. */
+export function defaultPermissionReadPath(): string {
+  return readableDataFile("permissions.json", "PERMISSIONS_FILE");
 }
 
 export class PermissionStore {
   private readonly filePath: string;
+  /** Read from here when it differs from filePath (v0.4.0 file not migrated yet). */
+  private readonly readPath: string;
   /** Only non-default decisions are kept; absence = "ask". */
   private readonly tools = new Map<string, "allow" | "deny">();
   /** Remembered caller decisions: "<app>\u0000<name>" → allow | deny. */
@@ -70,6 +77,7 @@ export class PermissionStore {
 
   constructor(options: PermissionStoreOptions = {}) {
     this.filePath = options.filePath ?? defaultPermissionFilePath();
+    this.readPath = options.filePath ?? defaultPermissionReadPath();
   }
 
   /** The backing file (tests, diagnostics). */
@@ -81,8 +89,8 @@ export class PermissionStore {
     if (this.loaded) return;
     this.loaded = true;
     try {
-      if (!existsSync(this.filePath)) return;
-      const raw = JSON.parse(readFileSync(this.filePath, "utf8")) as
+      if (!existsSync(this.readPath)) return;
+      const raw = JSON.parse(readFileSync(this.readPath, "utf8")) as
         | Partial<PermissionFileV2>
         | Partial<PermissionFileV1>;
       if (typeof raw.tools !== "object" || raw.tools === null) return;

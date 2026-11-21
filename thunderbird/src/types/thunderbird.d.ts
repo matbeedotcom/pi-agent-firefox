@@ -363,11 +363,11 @@ declare namespace browser.accounts {
 }
 
 /**
- * browser.piPane — a custom Experiment API (manifest `experiment_apis`) that
+ * browser.trustedUaPane — a custom Experiment API (manifest `experiment_apis`) that
  * injects the Pi side panel as a native 4th column in about:3pane. Privileged
- * (addon_parent); available to the background only. See experiments/piPane/.
+ * (addon_parent); available to the background only. See experiments/trustedUaPane/.
  */
-declare namespace browser.piPane {
+declare namespace browser.trustedUaPane {
   /** Bind the Pi Space button to the docked pane in existing and new windows. */
   function registerSpaceButton(spaceName: string): Promise<void>;
   interface PaneState {

@@ -4,7 +4,7 @@
  *   ACP prompt (probe, mock backend)
  *     → broker routes mail_search to the LIVE Thunderbird client
  *       → real WDAPI scan of the real mailbox
- *         → x-pi-browser/tool_update batches → session/update → probe
+ *         → x-trusted-ua/tool_update batches → session/update → probe
  *
  * What it measures (the "where is the latency" question):
  *   - prompt → tool_call → FIRST batch (time-to-first-result)

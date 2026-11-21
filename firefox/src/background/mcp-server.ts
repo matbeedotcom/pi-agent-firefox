@@ -5,14 +5,14 @@
  * declares an ACP-transport MCP server in session/new/resume/load, then
  * answers the agent's mcp/connect, mcp/message, and mcp/disconnect over the
  * existing ACP channel. The MCP surface (tools/list, tools/call) is the same
- * regardless of transport, so migrating away from x-pi-browser/tool changes
+ * regardless of transport, so migrating away from x-trusted-ua/tool changes
  * only the wire path.
  */
 import {
   BROWSER_TOOLS,
   CONTROL_TOOLS,
   MCP_PROTOCOL_VERSION,
-  PI_BROWSER,
+  TRUSTED_UA,
   isControlTool,
   type ConnectMcpRequest,
   type ConnectMcpResponse,
@@ -20,7 +20,7 @@ import {
   type MessageMcpRequest,
   type MessageMcpResponse,
 } from "@trusted-ua/protocol";
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 import type { ToolDispatcher } from "./tool-dispatcher.js";
 
 /**
@@ -84,8 +84,8 @@ export class McpServer {
   async handleConnect(req: ConnectMcpRequest): Promise<ConnectMcpResponse> {
     const sessionId = this.serverSessions.get(req.serverId);
     if (!sessionId) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
         `unknown MCP server id: ${req.serverId}`,
       );
     }
@@ -97,7 +97,7 @@ export class McpServer {
   async handleMessage(req: MessageMcpRequest): Promise<MessageMcpResponse> {
     const conn = this.connections.get(req.connectionId);
     if (!conn) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, `unknown connection: ${req.connectionId}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_UNAVAILABLE, `unknown connection: ${req.connectionId}`);
     }
     switch (req.method) {
       case "initialize": {
@@ -105,7 +105,7 @@ export class McpServer {
         return {
           protocolVersion: params.protocolVersion ?? MCP_PROTOCOL_VERSION,
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "pi-browser-firefox", version: PI_BROWSER.version },
+          serverInfo: { name: "trusted-ua-firefox", version: TRUSTED_UA.version },
         };
       }
       case "notifications/initialized":
@@ -122,15 +122,15 @@ export class McpServer {
       case "tools/call": {
         const params = (req.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
         if (!conn.initialized) {
-          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, "MCP session not initialized");
+          throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_UNAVAILABLE, "MCP session not initialized");
         }
         if (!params.name) {
-          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, "tools/call missing name");
+          throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, "tools/call missing name");
         }
         if (isControlTool(params.name)) {
           if (!this.control) {
-            throw new PiBrowserProtocolError(
-              PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+            throw new TrustedUaProtocolError(
+              TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND,
               `control tool not available on this server: ${params.name}`,
             );
           }
@@ -144,7 +144,7 @@ export class McpServer {
         })) as MessageMcpResponse;
       }
       default:
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, `unknown MCP method: ${req.method}`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_UNAVAILABLE, `unknown MCP method: ${req.method}`);
     }
   }
 

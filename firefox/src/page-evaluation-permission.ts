@@ -9,7 +9,7 @@ export async function requestBrowserToolPermission(
   request: RequestPermissionRequest,
   prompt: (request: RequestPermissionRequest) => Promise<RequestPermissionResponse>,
 ): Promise<RequestPermissionResponse> {
-  const tool = (request._meta?.piBrowser as { tool?: string } | undefined)?.tool;
+  const tool = (request._meta?.trustedUa as { tool?: string } | undefined)?.tool;
   if (tool !== "browser_evaluate") return prompt(request);
   const permission = { permissions: ["userScripts" as const] };
   if (await browser.permissions.contains(permission)) {

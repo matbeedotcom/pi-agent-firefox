@@ -19,8 +19,8 @@ import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
   REPL_TOOLS,
   isReplTool,
 } from "@trusted-ua/protocol";
@@ -28,6 +28,7 @@ import { REPL_TOOL_SCHEMAS } from "../browser/schemas.js";
 import type { ToolSpec, BackendToolResult } from "../acp/backend.js";
 import type { NormalizedToolResult } from "../browser/provider.js";
 import { ReplRuntime, ReplCellError, type ReplCallOutcome } from "./runtime.js";
+import { replRoot } from "../paths.js";
 
 export type ReplToolExecutor = (
   sessionId: string,
@@ -97,7 +98,7 @@ export function unwrapToolResult(result: NormalizedToolResult): unknown {
       .filter((c) => c.type === "text")
       .map((c) => (c as { text: string }).text)
       .join("\n");
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, text || "browser tool failed");
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, text || "browser tool failed");
   }
   // Firefox screenshots include a text note naming the capture API. That
   // metadata must not hide the image from the worker's screenshot primitive.
@@ -135,9 +136,7 @@ export class ReplProvider {
 
   get root(): string {
     return (
-      this.opts.workspaceRoot ??
-      process.env.PI_BROWSER_REPL_DIR ??
-      path.join(os.homedir(), ".pi", "browser-repl")
+      this.opts.workspaceRoot ?? replRoot()
     );
   }
 
@@ -159,11 +158,11 @@ export class ReplProvider {
       execute: async (_toolCallId, args, signal) => {
         const sessionId = idRef.id;
         if (!sessionId) {
-          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "javascript tool invoked before session id assigned");
+          throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "javascript tool invoked before session id assigned");
         }
         const code = (args as { code?: unknown }).code;
         if (typeof code !== "string" || code.trim() === "") {
-          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "javascript tool requires a non-empty code string");
+          throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "javascript tool requires a non-empty code string");
         }
         const rawTimeout = (args as { timeoutMs?: unknown }).timeoutMs;
         const timeoutMs = typeof rawTimeout === "number" ? rawTimeout : DEFAULT_TIMEOUT_MS;
@@ -185,7 +184,7 @@ export class ReplProvider {
             for (const img of error.result.images) {
               content.push({ type: "image", data: img.data, mimeType: img.mimeType });
             }
-            return { content, details: { piBrowser: true, repl: true, aborted: true } };
+            return { content, details: { trustedUa: true, repl: true, aborted: true } };
           }
           throw error;
         }
@@ -199,7 +198,7 @@ export class ReplProvider {
         }
         return {
           content: content.length ? content : [{ type: "text", text: "(no output)" }],
-          details: { piBrowser: true, repl: true, ...(outcome.outputFile ? { outputFile: outcome.outputFile } : {}) },
+          details: { trustedUa: true, repl: true, ...(outcome.outputFile ? { outputFile: outcome.outputFile } : {}) },
         };
       },
     };

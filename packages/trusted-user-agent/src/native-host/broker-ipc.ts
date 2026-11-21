@@ -26,9 +26,10 @@ import net from "node:net";
 import os from "node:os";
 import { Duplex } from "node:stream";
 import path from "node:path";
-import { PI_BROKER } from "@trusted-ua/protocol";
+import { TRUSTED_UA_BROKER } from "@trusted-ua/protocol";
 import { encodeFrame, FrameDecoder } from "./framing.js";
 import type { Logger } from "../logger.js";
+import { runDir } from "../paths.js";
 
 /**
  * The listening endpoint for `file` in run dir `dir`.
@@ -43,7 +44,7 @@ export function ipcEndpoint(dir: string, file: string, platform: NodeJS.Platform
   if (platform !== "win32") return path.join(dir, file);
   const key = path.win32.resolve(dir).toLowerCase();
   const hash = createHash("sha256").update(key).digest("hex").slice(0, 16);
-  return String.raw`\\.\pipe\pi-agent-` + `${hash}-${file.replace(/\.sock$/, "")}`;
+  return String.raw`\\.\pipe\trusted-ua-` + `${hash}-${file.replace(/\.sock$/, "")}`;
 }
 
 /** True for a Windows named-pipe endpoint (no file to chmod or unlink). */
@@ -53,11 +54,11 @@ export function isNamedPipe(endpoint: string): boolean {
 
 /** Paths for the broker IPC (env override for tests). */
 export function brokerPaths(homeDir: string = os.homedir()): { dir: string; socket: string; state: string } {
-  const dir = process.env.PI_BROWSER_BROKER_DIR || path.join(homeDir, ".pi", PI_BROKER.runDir);
+  const dir = runDir(process.env, homeDir);
   return {
     dir,
-    socket: ipcEndpoint(dir, PI_BROKER.socketFile),
-    state: path.join(dir, PI_BROKER.stateFile),
+    socket: ipcEndpoint(dir, TRUSTED_UA_BROKER.socketFile),
+    state: path.join(dir, TRUSTED_UA_BROKER.stateFile),
   };
 }
 
@@ -191,7 +192,7 @@ export async function startBrokerServer(opts: StartBrokerServerOptions): Promise
     token,
     socket: paths.socket,
     startedAt: Date.now(),
-    version: PI_BROKER.version,
+    version: TRUSTED_UA_BROKER.version,
   };
   writeFileSync(paths.state, JSON.stringify(state), { mode: 0o600 });
 
@@ -219,8 +220,8 @@ export async function startBrokerServer(opts: StartBrokerServerOptions): Promise
           } catch {
             msg = undefined;
           }
-          if (msg?.type === PI_BROKER.handshake && typeof msg.token === "string" && msg.token === token) {
-            socket.write(encodeFrame({ type: PI_BROKER.handshakeAck, version: PI_BROKER.version }));
+          if (msg?.type === TRUSTED_UA_BROKER.handshake && typeof msg.token === "string" && msg.token === token) {
+            socket.write(encodeFrame({ type: TRUSTED_UA_BROKER.handshakeAck, version: TRUSTED_UA_BROKER.version }));
             // Hand the pre-ack trailing bytes to the channel (re-framed there).
             const rest = decoder.drain();
             if (rest.length > 0) chan.push(rest);
@@ -289,7 +290,7 @@ export async function tryRelayAttach(log: Logger, timeoutMs = 2_000): Promise<Re
   try {
     await connectWithTimeout(socket, paths.socket, timeoutMs);
     socket.write(
-      encodeFrame({ type: PI_BROKER.handshake, token: state.token, version: PI_BROKER.version }),
+      encodeFrame({ type: TRUSTED_UA_BROKER.handshake, token: state.token, version: TRUSTED_UA_BROKER.version }),
     );
     const { remainder } = await readHandshakeAck(socket, timeoutMs);
     log.debug("relay: attached to broker");
@@ -340,7 +341,7 @@ async function readHandshakeAck(socket: net.Socket, timeoutMs: number): Promise<
         settled = true;
         clearTimeout(timer);
         socket.removeListener("data", onData);
-        if (msg?.type !== PI_BROKER.handshakeAck) {
+        if (msg?.type !== TRUSTED_UA_BROKER.handshakeAck) {
           socket.destroy();
           reject(new Error("broker handshake ack mismatch"));
           return;

@@ -18,14 +18,14 @@
     {
       "side": "client",
       "type": "extended",
-      "method": "x-pi-browser/skills_status",
+      "method": "x-trusted-ua/skills_status",
       "params": {},
       "repeat": 10
     },
     {
       "side": "client",
       "type": "extended",
-      "method": "x-pi-browser/skills_plan",
+      "method": "x-trusted-ua/skills_plan",
       "params": {
         "source": {
           "application": "firefox",
@@ -41,7 +41,7 @@
     {
       "side": "client",
       "type": "extended",
-      "method": "x-pi-browser/skills_cancel",
+      "method": "x-trusted-ua/skills_cancel",
       "params": {
         "interactionId": "int-none"
       },

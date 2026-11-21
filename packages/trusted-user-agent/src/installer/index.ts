@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PI_AGENT, PI_AGENT_ID, PI_BROWSER_META, PI_AGENT_META } from "@trusted-ua/protocol";
+import { TRUSTED_UA_HOST, PI_AGENT_ID, TRUSTED_UA_META, TRUSTED_UA_AGENT_META } from "@trusted-ua/protocol";
 import { AgentRegistry } from "../acp/agents/registry.js";
 import { ADDON_HEARTBEAT_FRESH_MS, readClientHeartbeat } from "../client-heartbeat.js";
 import { brokerPaths, isPidAlive, readBrokerState } from "../native-host/broker-ipc.js";
@@ -22,6 +22,8 @@ import {
   uninstallHost,
   type InstallTargets,
 } from "./platforms.js";
+import { readableDataFile } from "../paths.js";
+import { envValue } from "../env.js";
 
 export type InstallerCommand = "install" | "status" | "doctor" | "uninstall" | "mcp";
 
@@ -160,8 +162,7 @@ export function buildEnv(ctx: InstallerContext = {}): { env: InstallerEnv; targe
    */
 export function agentLines(homeDir: string, processEnv: NodeJS.ProcessEnv): string[] {
     try {
-      const root = processEnv.PI_BROWSER_DATA_ROOT?.trim() || path.join(homeDir, ".pi", "browser");
-      const file = processEnv.PI_BROWSER_AGENTS_FILE?.trim() || path.join(root, "agents.json");
+      const file = readableDataFile("agents.json", "AGENTS_FILE", processEnv, homeDir);
       const res = new AgentRegistry({ env: processEnv, file }).list();
       const lines = res.agents
         .filter((a) => a.id !== PI_AGENT_ID)
@@ -204,7 +205,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
   // Registering writes absolute paths into the package: refuse a root that
   // npm or the OS may delete (npx cache, temp dir).
   const registers = command === "install" || (command === "mcp" && sub === "install");
-  const allowTemporary = ctx.allowTemporary || process.env.PI_BROWSER_ALLOW_TEMPORARY_ROOT === "1";
+  const allowTemporary = ctx.allowTemporary || envValue("ALLOW_TEMPORARY_ROOT") === "1";
   const tempReason = registers && !allowTemporary ? temporaryRootReason(pkgRoot) : undefined;
   if (tempReason) {
     const refusal = temporaryRootRefusal(pkgRoot, tempReason);
@@ -219,7 +220,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
       }
       const report = await installHost({ env, pkgRoot, mainJs, apps }, targets);
       for (const l of report.lines) note(l);
-      note(`installed ${PI_AGENT.nativeHost} (integration v${PI_BROWSER_META.version}, protocol v${PI_BROWSER_META.protocolVersion})`);
+      note(`installed ${TRUSTED_UA_HOST.nativeHost} (integration v${TRUSTED_UA_META.version}, protocol v${TRUSTED_UA_META.protocolVersion})`);
       for (const app of apps) note(`next: ${addonLoadHint(app)}`);
       note("if the add-on is already loaded, no reload is needed — it auto-detects the host within ~10s");
       return { ok: true, lines };
@@ -265,7 +266,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
     case "uninstall": {
       const removed = await uninstallHost(env, pkgRoot, targets, apps);
       for (const l of removed) note(l);
-      note(`uninstalled ${PI_AGENT.nativeHost} (package files kept; pi remove to drop the package)`);
+      note(`uninstalled ${TRUSTED_UA_HOST.nativeHost} (package files kept; pi remove to drop the package)`);
       return { ok: true, lines };
     }
     case "mcp": {
@@ -285,7 +286,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
 }
 
 /**
- * Spawn the installed launcher and exchange one framed x-pi-browser/ping.
+ * Spawn the installed launcher and exchange one framed x-trusted-ua/ping.
  * This verifies: manifest path is executable, the host boots, and framing
  * + JSON-RPC work end-to-end.
  */
@@ -324,7 +325,7 @@ export async function probeHost(
         })
       : spawn(launcher, [], { stdio: ["pipe", "pipe", "pipe"] });
     const timer = setTimeout(() => {
-      lines.push("probe: timed out waiting for x-pi-browser/ping");
+      lines.push("probe: timed out waiting for x-trusted-ua/ping");
       finish(false);
     }, timeoutMs);
 
@@ -377,12 +378,12 @@ export async function probeHost(
 
     // Give the process a moment to boot, then ping.
     setTimeout(() => {
-      send({ jsonrpc: "2.0", id: 1, method: "x-pi-browser/ping", params: { clientVersion: PI_BROWSER_META.version } });
+      send({ jsonrpc: "2.0", id: 1, method: "x-trusted-ua/ping", params: { clientVersion: TRUSTED_UA_META.version } });
     }, 1500);
   });
 }
 
-export { PI_BROWSER_META };
+export { TRUSTED_UA_META };
 
 /** Read the package version (for version-mismatch diagnostics). */
 export function packageVersion(pkgRoot: string): string {

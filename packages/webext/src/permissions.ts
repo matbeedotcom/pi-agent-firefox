@@ -9,7 +9,7 @@
  *   Deny            refuse the tool without asking
  *   Always approve  allow the tool without asking
  *
- * The data comes from the host (x-pi-browser/permissions|set|clear) through
+ * The data comes from the host (x-trusted-ua/permissions|set|clear) through
  * the app-specific `api` callbacks; this module is pure DOM.
  *
  * Rendered inside each app's settings overlay (#settings-body container).

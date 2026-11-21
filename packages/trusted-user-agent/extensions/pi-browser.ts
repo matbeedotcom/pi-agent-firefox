@@ -17,7 +17,7 @@
  *                           gemini, vscode, or all
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { PI_BROWSER } from "@trusted-ua/protocol";
+import { TRUSTED_UA } from "@trusted-ua/protocol";
 
 const VALID_COMMANDS = new Set(["install", "status", "doctor", "uninstall", "mcp"]);
 const VALID_MCP_SUBS = new Set(["install", "status", "uninstall"]);
@@ -31,7 +31,7 @@ export default function (pi: ExtensionAPI) {
       const [command = "status", mcpSub, mcpClient] = (args ?? "").trim().split(/\s+/).filter(Boolean);
       if (!VALID_COMMANDS.has(command)) {
         ctx.ui.notify(
-          `/pi-browser [install|status|doctor|uninstall|mcp [install|status|uninstall] [client]] — register, check, probe, remove, or configure the ${PI_BROWSER.nativeHost} Firefox integration`,
+          `/pi-browser [install|status|doctor|uninstall|mcp [install|status|uninstall] [client]] — register, check, probe, remove, or configure the ${TRUSTED_UA.nativeHost} Firefox integration`,
           "warning",
         );
         return;

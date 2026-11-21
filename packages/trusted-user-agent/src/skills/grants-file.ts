@@ -32,13 +32,13 @@ import path from "node:path";
 import { SKILL_CAPABILITIES, type SkillCapability } from "@trusted-ua/protocol";
 import type { Logger } from "../logger.js";
 import type { SkillGrant } from "./planner.js";
+import { readableDataFile } from "../paths.js";
 
 const MAX_GRANTS_FILE_BYTES = 64 * 1024;
 const MAX_GRANTS = 256;
 
 export function skillsGrantsPath(): string {
-  const dataRoot = process.env.PI_BROWSER_DATA_ROOT?.trim() || path.join(homedir(), ".pi", "browser");
-  return path.join(dataRoot, "skills-grants.json");
+  return readableDataFile("skills-grants.json");
 }
 
 function parseCapabilities(value: unknown): SkillCapability[] {

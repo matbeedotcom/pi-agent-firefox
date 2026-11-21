@@ -25,7 +25,7 @@
     {
       "side": "client",
       "type": "extended",
-      "method": "x-pi-browser/skills_plan",
+      "method": "x-trusted-ua/skills_plan",
       "params": {
         "source": {
           "application": "firefox",
@@ -43,7 +43,7 @@
     {
       "side": "client",
       "type": "extended",
-      "method": "x-pi-browser/skills_event",
+      "method": "x-trusted-ua/skills_event",
       "params": {
         "event": {
           "version": 1,

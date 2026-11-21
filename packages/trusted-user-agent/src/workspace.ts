@@ -16,6 +16,7 @@ import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { workspacesRoot } from "./paths.js";
 
 export interface TaskWorkspaceOptions {
   /** Root for per-task workspaces (default ~/.pi/workspaces, env PI_BROWSER_WORKSPACE_DIR). */
@@ -37,7 +38,7 @@ export class TaskWorkspace {
   readonly root: string;
 
   constructor(opts: TaskWorkspaceOptions = {}) {
-    this.root = opts.root ?? process.env.PI_BROWSER_WORKSPACE_DIR ?? path.join(os.homedir(), ".pi", "workspaces");
+    this.root = opts.root ?? workspacesRoot();
   }
 
   /**

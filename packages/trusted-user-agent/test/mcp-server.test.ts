@@ -108,7 +108,7 @@ test("mcp server: initialize handshake + tools/list surface", async () => {
     capabilities: {},
     clientInfo: { name: "test", version: "0" },
   })) as { protocolVersion: string; serverInfo: { name: string } };
-  assert.equal(init.serverInfo.name, "pi-browser");
+  assert.equal(init.serverInfo.name, "trusted-ua");
   assert.equal(typeof init.protocolVersion, "string");
   client.notify("notifications/initialized");
 
@@ -246,14 +246,14 @@ async function callerServer(
   return { handle, seen, closed };
 }
 
-test("mcp server: each connection is its own caller session, named by pi-browser/caller", async () => {
+test("mcp server: each connection is its own caller session, named by trusted-ua/caller", async () => {
   const { handle, seen, closed } = await callerServer({ instanceId: "inst-1" });
   const a = new MiniMcpClient(handle.socketPath);
   const b = new MiniMcpClient(handle.socketPath);
   try {
     await Promise.all([a.ready(), b.ready()]);
-    a.notify("pi-browser/caller", { name: "codex", version: "0.9", pid: 4242 });
-    b.notify("pi-browser/caller", { name: "claude-code" });
+    a.notify("trusted-ua/caller", { name: "codex", version: "0.9", pid: 4242 });
+    b.notify("trusted-ua/caller", { name: "claude-code" });
     await a.request("tools/call", { name: "browser_get_page", arguments: {} });
     await b.request("tools/call", { name: "mail_search", arguments: {} });
     await a.request("tools/call", { name: "browser_get_dom", arguments: {} });
@@ -299,9 +299,9 @@ test("mcp server: host children (matching marker or broker parent pid) keep last
   const stale = new MiniMcpClient(handle.socketPath);
   try {
     await Promise.all([marker.ready(), child.ready(), stale.ready()]);
-    marker.notify("pi-browser/caller", { name: "pi", hostChild: "inst-2" });
-    child.notify("pi-browser/caller", { name: "pi", ppid: 777 });
-    stale.notify("pi-browser/caller", { name: "pi", hostChild: "inst-OLD" });
+    marker.notify("trusted-ua/caller", { name: "pi", hostChild: "inst-2" });
+    child.notify("trusted-ua/caller", { name: "pi", ppid: 777 });
+    stale.notify("trusted-ua/caller", { name: "pi", hostChild: "inst-OLD" });
     await marker.request("tools/call", { name: "browser_get_page", arguments: {} });
     await child.request("tools/call", { name: "browser_get_page", arguments: {} });
     await stale.request("tools/call", { name: "browser_get_page", arguments: {} });
@@ -328,12 +328,12 @@ test("mcp server: an agent session's bridge (host child + parentSession) runs fo
   const gone = new MiniMcpClient(handle.socketPath);
   try {
     await Promise.all([a.ready(), b.ready(), forged.ready(), gone.ready()]);
-    a.notify("pi-browser/caller", { name: "claude-code", hostChild: "inst-3", parentSession: "tok-A" });
-    b.notify("pi-browser/caller", { name: "codex", hostChild: "inst-3", parentSession: "tok-B" });
+    a.notify("trusted-ua/caller", { name: "claude-code", hostChild: "inst-3", parentSession: "tok-A" });
+    b.notify("trusted-ua/caller", { name: "codex", hostChild: "inst-3", parentSession: "tok-B" });
     // Not started by this broker: the reported token is ignored.
-    forged.notify("pi-browser/caller", { name: "evil", parentSession: "tok-A" });
+    forged.notify("trusted-ua/caller", { name: "evil", parentSession: "tok-A" });
     // A host child whose session closed: refused, never routed elsewhere.
-    gone.notify("pi-browser/caller", { name: "codex", hostChild: "inst-3", parentSession: "tok-CLOSED" });
+    gone.notify("trusted-ua/caller", { name: "codex", hostChild: "inst-3", parentSession: "tok-CLOSED" });
     await a.request("tools/call", { name: "browser_get_page", arguments: {} });
     await b.request("tools/call", { name: "browser_get_page", arguments: {} });
     await forged.request("tools/call", { name: "browser_get_page", arguments: {} });

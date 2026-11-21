@@ -164,12 +164,12 @@ async function prompt(params) {
     const o = res?.outcome;
     reply = `permission: ${o?.outcome === "selected" ? o.optionId : o?.outcome ?? "?"}`;
   } else if (text.startsWith("env")) {
-    const server = (s.mcpServers ?? []).find((m) => m.name === "pi-browser");
+    const server = (s.mcpServers ?? []).find((m) => m.name === "trusted-ua" || m.name === "pi-browser");
     reply = `env: ${JSON.stringify(Object.fromEntries((server?.env ?? []).map((e) => [e.name, e.value])))}`;
   } else if (text.startsWith("tool ")) {
     const [, name, ...rest] = text.split(" ");
-    const server = (s.mcpServers ?? []).find((m) => m.name === "pi-browser");
-    reply = server ? await callMcpTool(server, name, rest.length ? JSON.parse(rest.join(" ")) : {}) : "no pi-browser server";
+    const server = (s.mcpServers ?? []).find((m) => m.name === "trusted-ua" || m.name === "pi-browser");
+    reply = server ? await callMcpTool(server, name, rest.length ? JSON.parse(rest.join(" ")) : {}) : "no trusted-ua server";
   } else {
     reply = `echo: ${text}`;
   }

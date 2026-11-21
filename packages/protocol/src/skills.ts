@@ -500,7 +500,7 @@ export type SkillEventSource = SkillEvent["source"];
 // ACP protocol surface (skills-runtime-design.md §2, §7)
 //
 // Application messages ride the existing ACP transport under the negotiated
-// x-pi-browser/ namespace (X_PI_BROWSER.skills_*). Standard prompt traffic
+// x-trusted-ua/ namespace (X_TRUSTED_UA.skills_*). Standard prompt traffic
 // stays separate; neither ACP nor MCP is the scheduler.
 // ---------------------------------------------------------------------------
 

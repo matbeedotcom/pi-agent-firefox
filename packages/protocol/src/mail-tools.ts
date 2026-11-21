@@ -3,7 +3,7 @@
  *
  * These schemas are transport-independent: the same names, arguments, and
  * results are used whether tools are invoked over the private
- * x-pi-browser/tool compatibility transport or over MCP. The Thunderbird
+ * x-trusted-ua/tool compatibility transport or over MCP. The Thunderbird
  * side implements the tools; the Pi side registers them as agent tools.
  *
  * Safety model (plan §8, §14, §21):
@@ -202,7 +202,7 @@ export const MAIL_TOOLS: readonly MailToolDef[] = [
   {
     name: "mail_debug_query",
     description:
-      "DIAGNOSTIC ONLY (piDebug builds): run a raw browser.messages.query() with timing, and optionally poll a returned messageListId page-by-page. " +
+      "DIAGNOSTIC ONLY (trustedUaDebug builds): run a raw browser.messages.query() with timing, and optionally poll a returned messageListId page-by-page. " +
       "Use for profiling search latency, not for normal mail tasks — prefer mail_search.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,

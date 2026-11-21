@@ -1,6 +1,6 @@
 [
   {
-    "namespace": "piPane",
+    "namespace": "trustedUaPane",
     "description": "Native 4th-pane plumbing for the Pi side panel in Thunderbird's about:3pane. Manipulates only Thunderbird's native UI; all ACP/session/mail logic lives in the normal extension background.",
     "functions": [
       {

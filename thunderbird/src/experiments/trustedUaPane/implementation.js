@@ -1,6 +1,6 @@
-/* piPane Experiment — parent scope (addon_parent).
+/* trustedUaPane Experiment — parent scope (addon_parent).
  *
- * Native pane plumbing ONLY. Injects a 4th grid column (#piPane) into the
+ * Native pane plumbing ONLY. Injects a 4th grid column (#trustedUaPane) into the
  * about:3pane document beside the message pane, hosting the extension's shared
  * sidepanel UI (space/index.html). It patches the existing about:3pane CSS grid
  * (named areas) rather than overlaying the email, so the message list keeps its
@@ -24,12 +24,12 @@
 (function (exports) {
   // Keep Thunderbird's Space registration (keyboard navigation and overflow),
   // but route its primary activation to the mail pane instead of a content tab.
-  class PiSpaceToggle {
+  class TrustedUaSpaceToggle {
     constructor(context, pane) {
       this.context = context;
       this.pane = pane;
       this.windows = new Map();
-      this.listenerId = context.extension.id + ":pi-pane-toggle";
+      this.listenerId = context.extension.id + ":tua-pane-toggle";
       this.support = ChromeUtils.importESModule("resource:///modules/ExtensionSupport.sys.mjs").ExtensionSupport;
     }
 
@@ -52,7 +52,7 @@
       state.observer.observe(win.document.documentElement, { childList: true, subtree: true });
       win.addEventListener("TabSelect", state.sync);
       const style = win.document.createElementNS("http://www.w3.org/1999/xhtml", "style");
-      style.textContent = ".spaces-toolbar-button.pi-pane-active { background-color: var(--selected-item-color); color: var(--selected-item-text-color); }";
+      style.textContent = ".spaces-toolbar-button.tua-pane-active { background-color: var(--selected-item-color); color: var(--selected-item-text-color); }";
       win.document.documentElement.appendChild(style);
       state.style = style;
       this.sync(win, state);
@@ -62,7 +62,7 @@
       const tab = win.document.getElementById("tabmail")?.currentTabInfo;
       if (tab?.mode.name === "mail3PaneTab") state.lastMail = tab;
       const open = tab?.mode.name === "mail3PaneTab" &&
-        !!tab.chromeBrowser?.contentDocument?.getElementById("piPane");
+        !!tab.chromeBrowser?.contentDocument?.getElementById("trustedUaPane");
       for (const [id, event] of [[this.buttonId, "click"], [this.buttonId + "-menuitem", "command"]]) {
         const button = win.document.getElementById(id);
         if (!button) continue;
@@ -72,13 +72,13 @@
             e.preventDefault();
             e.stopImmediatePropagation();
             win.gSpacesToolbar.setFocusButton(win.document.getElementById(this.buttonId));
-            this.activate(win, state).catch(error => console.error("[piPane] toolbar toggle failed", error));
+            this.activate(win, state).catch(error => console.error("[trustedUaPane] toolbar toggle failed", error));
           };
           button.addEventListener(event, activate, true);
           state.bindings.set(button, { event, activate });
         }
         button.setAttribute("aria-pressed", String(!!open));
-        button.classList.toggle("pi-pane-active", !!open);
+        button.classList.toggle("tua-pane-active", !!open);
       }
     }
 
@@ -117,7 +117,7 @@
       for (const [button, { event, activate }] of state.bindings) {
         button.removeEventListener(event, activate, true);
         button.removeAttribute("aria-pressed");
-        button.classList.remove("pi-pane-active");
+        button.classList.remove("tua-pane-active");
       }
       state.style.remove();
       this.windows.delete(win);
@@ -137,12 +137,12 @@
     }
   }
 
-  class PiPane extends ExtensionCommon.ExtensionAPI {
+  class TrustedUaPane extends ExtensionCommon.ExtensionAPI {
     getAPI(context) {
-      const PANE_ID = "piPane";
-      const SPLITTER_ID = "piPaneSplitter";
-      const STYLE_ID = "piPaneStyle";
-      const OPEN_CLASS = "pi-pane-open";
+      const PANE_ID = "trustedUaPane";
+      const SPLITTER_ID = "trustedUaPaneSplitter";
+      const STYLE_ID = "trustedUaPaneStyle";
+      const OPEN_CLASS = "tua-pane-open";
       const GRID_CONTAINER_ID = "paneLayout";
       const HTML_NS = "http://www.w3.org/1999/xhtml";
       // about:3pane is HTML-rooted with XUL as a prefixed namespace (see
@@ -154,22 +154,22 @@
       const DEFAULT_WIDTH = 320;
 
       const GRID_CSS = [
-        "#paneLayout.pi-pane-open { --pi-pane-width: " + DEFAULT_WIDTH + "px; }",
-        "#piPane { grid-area: piPane; border: none; margin: 0; min-width: 0; min-height: 0; width: 100%; height: 100%; }",
-        "#piPaneSplitter { grid-area: piPaneSplitter; border: none; border-left: 1px solid var(--splitter-bg, #cfd3da); width: 1px; min-width: 1px; margin: 0; }",
-        "#paneLayout.pi-pane-open.layout-classic { grid-template: " +
+        "#paneLayout.tua-pane-open { --tua-pane-width: " + DEFAULT_WIDTH + "px; }",
+        "#trustedUaPane { grid-area: trustedUaPane; border: none; margin: 0; min-width: 0; min-height: 0; width: 100%; height: 100%; }",
+        "#trustedUaPaneSplitter { grid-area: trustedUaPaneSplitter; border: none; border-left: 1px solid var(--splitter-bg, #cfd3da); width: 1px; min-width: 1px; margin: 0; }",
+        "#paneLayout.tua-pane-open.layout-classic { grid-template: " +
           '"folders folderPaneSplitter threads threads threads" minmax(auto, 1fr) ' +
           '"folders folderPaneSplitter messagePaneSplitter messagePaneSplitter messagePaneSplitter" min-content ' +
-          '"folders folderPaneSplitter message piPaneSplitter piPane" minmax(auto, var(--messagePaneSplitter-height)) ' +
-          "/ minmax(auto, var(--folderPaneSplitter-width)) min-content minmax(auto, 1fr) min-content var(--pi-pane-width); }",
-        "#paneLayout.pi-pane-open.layout-vertical { grid-template: " +
-          '"folders folderPaneSplitter threads messagePaneSplitter message piPaneSplitter piPane" auto ' +
-          "/ minmax(auto, var(--folderPaneSplitter-width)) min-content minmax(auto, 1fr) min-content minmax(auto, var(--messagePaneSplitter-width)) min-content var(--pi-pane-width); }",
-        "#paneLayout.pi-pane-open.layout-wide { grid-template: " +
+          '"folders folderPaneSplitter message trustedUaPaneSplitter trustedUaPane" minmax(auto, var(--messagePaneSplitter-height)) ' +
+          "/ minmax(auto, var(--folderPaneSplitter-width)) min-content minmax(auto, 1fr) min-content var(--tua-pane-width); }",
+        "#paneLayout.tua-pane-open.layout-vertical { grid-template: " +
+          '"folders folderPaneSplitter threads messagePaneSplitter message trustedUaPaneSplitter trustedUaPane" auto ' +
+          "/ minmax(auto, var(--folderPaneSplitter-width)) min-content minmax(auto, 1fr) min-content minmax(auto, var(--messagePaneSplitter-width)) min-content var(--tua-pane-width); }",
+        "#paneLayout.tua-pane-open.layout-wide { grid-template: " +
           '"folders folderPaneSplitter threads threads threads" minmax(auto, 1fr) ' +
           '"messagePaneSplitter messagePaneSplitter messagePaneSplitter messagePaneSplitter messagePaneSplitter" min-content ' +
-          '"message message message piPaneSplitter piPane" minmax(auto, var(--messagePaneSplitter-height)) ' +
-          "/ minmax(auto, var(--folderPaneSplitter-width)) min-content minmax(auto, 1fr) min-content var(--pi-pane-width); }",
+          '"message message message trustedUaPaneSplitter trustedUaPane" minmax(auto, var(--messagePaneSplitter-height)) ' +
+          "/ minmax(auto, var(--folderPaneSplitter-width)) min-content minmax(auto, 1fr) min-content var(--tua-pane-width); }",
       ].join("\n");
 
       // Wrap an error in a WebExtension context.Error so the API layer forwards
@@ -177,7 +177,7 @@
       function err(phase, e) {
         const detail = e && e.message ? e.message : String(e);
         const top = e && e.stack ? String(e.stack).split("\n").slice(0, 2).join(" ") : "";
-        const msg = "piPane " + phase + ": " + detail + (top ? " | " + top : "");
+        const msg = "trustedUaPane " + phase + ": " + detail + (top ? " | " + top : "");
         try {
           return new context.Error(msg);
         } catch (_c) {
@@ -283,13 +283,13 @@
         try {
           ExtensionParent.apiManager.emit("extension-browser-inserted", pane);
         } catch (e) {
-          console.warn("[piPane] extension-browser-inserted err: " + e);
+          console.warn("[trustedUaPane] extension-browser-inserted err: " + e);
         }
         try {
           MailE10SUtils.loadURI(pane, url);
-          console.info("[piPane] loaded extension-view pane: " + url);
+          console.info("[trustedUaPane] loaded extension-view pane: " + url);
         } catch (e) {
-          console.warn("[piPane] MailE10SUtils.loadURI err: " + e);
+          console.warn("[trustedUaPane] MailE10SUtils.loadURI err: " + e);
         }
 
         // DIAGNOSTIC: did the pane page load?
@@ -298,9 +298,9 @@
             const cw = pane.contentWindow;
             const t = cw && cw.document ? cw.document.title : "?";
             const h = cw && cw.location ? cw.location.href : "?";
-            console.info("[piPane] load-check: contentWindow=" + (cw ? "obj" : String(cw)) + " title=" + t + " href=" + h);
+            console.info("[trustedUaPane] load-check: contentWindow=" + (cw ? "obj" : String(cw)) + " title=" + t + " href=" + h);
           } catch (e) {
-            console.info("[piPane] load-check err: " + e);
+            console.info("[trustedUaPane] load-check err: " + e);
           }
         }, 2000);
       }
@@ -323,7 +323,7 @@
         const ap = getAbout3Pane(tabId);
         if (!ap) return;
         gridContainer(ap.doc).style.setProperty(
-          "--pi-pane-width",
+          "--tua-pane-width",
           Math.max(MIN_WIDTH, Math.round(width)) + "px",
         );
       }
@@ -333,7 +333,7 @@
         // No bare DOM globals in the privileged parent scope: use the window we
         // pulled from the tab (ap.win) for getComputedStyle.
         const el = gridContainer(ap.doc);
-        const val = ap.win.getComputedStyle(el).getPropertyValue("--pi-pane-width").trim();
+        const val = ap.win.getComputedStyle(el).getPropertyValue("--tua-pane-width").trim();
         const n = parseInt(val, 10);
         return Number.isFinite(n) ? n : undefined;
       }
@@ -346,7 +346,7 @@
       }
 
       const api = {
-        piPane: {
+        trustedUaPane: {
           registerSpaceButton(spaceName) {
             toolbar.register(spaceName);
           },
@@ -397,10 +397,10 @@
           },
         },
       };
-      const toolbar = new PiSpaceToggle(context, api.piPane);
+      const toolbar = new TrustedUaSpaceToggle(context, api.trustedUaPane);
       context.callOnClose(toolbar);
       return api;
     }
   }
-  exports.piPane = PiPane;
+  exports.trustedUaPane = TrustedUaPane;
 })(this);

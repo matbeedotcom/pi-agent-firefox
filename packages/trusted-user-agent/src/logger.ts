@@ -7,6 +7,7 @@
  */
 import { createWriteStream, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { envValue } from "./env.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -59,7 +60,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
 }
 
 function envLevel(): LogLevel | undefined {
-  const v = (process.env.PI_BROWSER_LOG_LEVEL ?? "").toLowerCase();
+  const v = (envValue("LOG_LEVEL") ?? "").toLowerCase();
   return v === "debug" || v === "info" || v === "warn" || v === "error" ? v : undefined;
 }
 

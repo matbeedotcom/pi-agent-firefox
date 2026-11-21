@@ -14,7 +14,7 @@ import {
 
 /**
  * Ask the host which agents a new session can use. Undefined when the host
- * predates `x-pi-browser/agents` (the panel then shows no choice).
+ * predates `x-trusted-ua/agents` (the panel then shows no choice).
  */
 export async function fetchAgents(
   request: <T>(method: string, params?: unknown, timeoutMs?: number) => Promise<T>,

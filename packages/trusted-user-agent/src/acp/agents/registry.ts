@@ -26,6 +26,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { PI_AGENT_ID, type AgentInfo, type AgentsResult } from "@trusted-ua/protocol";
+import { readableDataFile } from "../../paths.js";
 
 /** Default idle timeout before an agent process is stopped (D2a). */
 export const DEFAULT_IDLE_TIMEOUT_MINUTES = 15;
@@ -69,14 +70,12 @@ export const BUILTIN_AGENTS: readonly AgentSpec[] = [
 
 const GENERIC_LOGIN_HINT = "log in with the agent's own CLI";
 
-/** Data root shared with the other host files (PI_BROWSER_DATA_ROOT honored). */
-export function dataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PI_BROWSER_DATA_ROOT?.trim() || path.join(homedir(), ".pi", "browser");
-}
-
-/** Where agents.json lives (PI_BROWSER_AGENTS_FILE overrides, for tests). */
-export function agentsFilePath(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PI_BROWSER_AGENTS_FILE?.trim() || path.join(dataRoot(env), "agents.json");
+/**
+ * Where agents.json is read from (TRUSTED_UA_AGENTS_FILE overrides): the data
+ * root, else the v0.4.0 file in ~/.pi/browser.
+ */
+export function agentsFilePath(env: NodeJS.ProcessEnv = process.env, homeDir?: string): string {
+  return readableDataFile("agents.json", "AGENTS_FILE", env, homeDir);
 }
 
 export interface RegistryOptions {
@@ -215,7 +214,7 @@ export class AgentRegistry {
     return this.load().specs.find((s) => s.id === id)?.name ?? id;
   }
 
-  /** Answer for x-pi-browser/agents: pi first, then the external agents. */
+  /** Answer for x-trusted-ua/agents: pi first, then the external agents. */
   list(): AgentsResult {
     const { specs, error } = this.load();
     const agents: AgentInfo[] = [{ id: PI_AGENT_ID, name: "pi", available: true }];

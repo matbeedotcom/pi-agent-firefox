@@ -27,9 +27,9 @@ import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   HOST_CHILD_ENV,
-  PI_BROWSER_ERROR,
-  PI_BROWSER_META,
-  PiBrowserProtocolError,
+  TRUSTED_UA_ERROR,
+  TRUSTED_UA_META,
+  TrustedUaProtocolError,
   SESSION_ENDED_METHOD,
   isCallerSessionId,
   type SessionEndedParams,
@@ -69,6 +69,8 @@ import {
 import { startMcpBrowserServer, type McpBrowserServerHandle } from "./mcp-server.js";
 import { runRelay } from "./relay.js";
 import type { Logger } from "../logger.js";
+import { logsDir, runDir as brokerRunDir } from "../paths.js";
+import { setEnvBoth, piAgentDir, envValue } from "../env.js";
 
 const require = createRequire(import.meta.url);
 
@@ -89,7 +91,7 @@ const require = createRequire(import.meta.url);
 function loadMockSkillsConfig(
   log: Logger,
 ): { grants: { skillKey: string; revision: string; capabilities: SkillGrant["capabilities"]; mode?: "advisory" | "review-before-submit" }[]; job: ScriptedJob } | undefined {
-  const raw = process.env.PI_BROWSER_SKILLS_CONFIG?.trim();
+  const raw = envValue("SKILLS_CONFIG")?.trim();
   if (!raw) return undefined;
   let parsed: unknown;
   try {
@@ -123,10 +125,10 @@ function loadMockSkillsConfig(
  * to file (stderr stays on).
  */
 function resolveLogPath(): string | undefined {
-  const env = process.env.PI_BROWSER_LOG_FILE;
+  const env = envValue("LOG_FILE");
   if (env === "off" || env === "none") return undefined;
   if (env === undefined || env === "") {
-    return join(homedir(), ".pi", "browser", "logs", `host-${process.pid}.log`);
+    return join(logsDir(), `host-${process.pid}.log`);
   }
   return env;
 }
@@ -295,12 +297,12 @@ async function main(): Promise<void> {
   // value the stdio bridge reports to tell host children from external
   // callers (openspec external-mcp-callers D3). A stale id never matches.
   const instanceId = randomUUID();
-  process.env[HOST_CHILD_ENV] = instanceId;
-  const backendKind = process.env.PI_BROWSER_BACKEND ?? "pi";
+  setEnvBoth("HOST_CHILD", instanceId);
+  const backendKind = envValue("BACKEND") ?? "pi";
   const backend =
-    backendKind === "mock" ? new MockBackend(process.env.PI_BROWSER_MOCK_SCRIPT) : new PiSdkBackend({
+    backendKind === "mock" ? new MockBackend(envValue("MOCK_SCRIPT")) : new PiSdkBackend({
       log,
-      ...(process.env.PI_BROWSER_AGENT_DIR ? { agentDir: process.env.PI_BROWSER_AGENT_DIR } : {}),
+      ...(piAgentDir() ? { agentDir: piAgentDir() } : {}),
     });
   log.info(`backend: ${backendKind}`);
   // Only the broker prunes: relays exit within milliseconds of startup.
@@ -327,8 +329,8 @@ async function main(): Promise<void> {
     instanceId,
     permissionTimeoutMs: () => provider.promptTimeoutMs,
     // Test seam (e2e): check idle agents more often than once a minute.
-    ...(Number(process.env.PI_BROWSER_AGENT_IDLE_CHECK_MS) > 0
-      ? { idleCheckMs: Number(process.env.PI_BROWSER_AGENT_IDLE_CHECK_MS) }
+    ...(Number(envValue("AGENT_IDLE_CHECK_MS")) > 0
+      ? { idleCheckMs: Number(envValue("AGENT_IDLE_CHECK_MS")) }
       : {}),
   });
   const toolBridge: BrowserToolBridge = {
@@ -366,7 +368,7 @@ async function main(): Promise<void> {
     call: (o) => {
       if (o.caller) {
         if (!o.sessionId || !isCallerSessionId(o.sessionId)) {
-          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "caller calls need a caller session id (mcp:<uuid>)");
+          throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "caller calls need a caller session id (mcp:<uuid>)");
         }
         if (!callerSessions.has(o.sessionId)) {
           callerSessions.add(o.sessionId);
@@ -383,8 +385,8 @@ async function main(): Promise<void> {
       const sid = o.sessionId ?? lastActiveBridgeSession;
       const ctx = sid ? bridgeSessions.get(sid) : undefined;
       if (!sid || !ctx) {
-        throw new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.SESSION_NOT_FOUND,
+        throw new TrustedUaProtocolError(
+          TRUSTED_UA_ERROR.SESSION_NOT_FOUND,
           "no active ACP session to route the bridge tool call to",
         );
       }
@@ -544,7 +546,7 @@ async function main(): Promise<void> {
   // broker-only (a relay never reaches this point), one writer per run dir.
   if (skillsRuntime && brokerServer) {
     try {
-      const runDir = process.env.PI_BROWSER_BROKER_DIR?.trim() || join(homedir(), ".pi", "run");
+      const runDir = brokerRunDir();
       skillsEventLog = createSkillsEventLog(log, join(runDir, "skills-events.jsonl"));
     } catch (err) {
       // Non-fatal: live runs stay observable through the host log only.
@@ -578,7 +580,7 @@ async function main(): Promise<void> {
   });
 
   log.info(
-    `host ready (pi ${piVersion()}, integration v${PI_BROWSER_META.version} proto=${PI_BROWSER_META.protocolVersion}, mode=broker)`,
+    `host ready (pi ${piVersion()}, integration v${TRUSTED_UA_META.version} proto=${TRUSTED_UA_META.protocolVersion}, mode=broker)`,
   );
 }
 

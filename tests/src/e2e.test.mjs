@@ -8,7 +8,7 @@
  *
  *   - ACP: initialize / session/* (new, list, resume, load, prompt, cancel,
  *     close, set_config_option), session/update notifications
- *   - x-pi-browser/* : ping / tool / notify  (host -> client direction)
+ *   - x-trusted-ua/* : ping / tool / notify  (host -> client direction)
  *   - mcp/* : the REAL Firefox-side McpServer class (firefox/dist-tests)
  *     fronts the MCP-over-ACP path, backed by a fake in-memory tab set.
  *
@@ -29,10 +29,10 @@ import { fileURLToPath } from "node:url";
 
 import {
   AGENT_METHODS,
-  PI_BROWSER,
-  PI_BROWSER_META,
-  PI_BROWSER_ERROR,
-  X_PI_BROWSER,
+  TRUSTED_UA,
+  TRUSTED_UA_META,
+  TRUSTED_UA_ERROR,
+  X_TRUSTED_UA,
   BROWSER_TOOLS,
   CONTROL_TOOLS,
   isStructuredErrorObject,
@@ -145,11 +145,11 @@ class FakeTabs {
       case "browser_bind_tab": {
         const tabId = Number(args.tabId);
         if (!Number.isInteger(tabId) || tabId <= 0) {
-          throw toErrorObject(PI_BROWSER_ERROR.INTERNAL, "bind_tab requires a tabId number");
+          throw toErrorObject(TRUSTED_UA_ERROR.INTERNAL, "bind_tab requires a tabId number");
         }
         const boundTab = this.tabs.get(tabId);
         if (!boundTab || boundTab.closed) {
-          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
+          throw toErrorObject(TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
         }
         // A tab serves one session: release it from any other binding first.
         for (const [sid, bid] of this.bindings) {
@@ -168,10 +168,10 @@ class FakeTabs {
     }
     const lookup = this.tabFor(sessionId);
     if (lookup.state === "unbound") {
-      throw toErrorObject(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, `session ${sessionId} has no bound tab`);
+      throw toErrorObject(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, `session ${sessionId} has no bound tab`);
     }
     if (lookup.state === "closed") {
-      throw toErrorObject(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `bound tab no longer exists for session ${sessionId}`);
+      throw toErrorObject(TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED, `bound tab no longer exists for session ${sessionId}`);
     }
     const tab = lookup.tab;
     switch (tool) {
@@ -196,7 +196,7 @@ class FakeTabs {
         const el = tab.dom.find((d) => d.ref === args.ref);
         if (!el) {
           throw toErrorObject(
-            PI_BROWSER_ERROR.BROWSER_ELEMENT_STALE,
+            TRUSTED_UA_ERROR.BROWSER_ELEMENT_STALE,
             `element reference ${args.ref} is stale (page changed or element removed)`,
           );
         }
@@ -232,7 +232,7 @@ class FakeTabs {
         });
       case "browser_navigate": {
         if (typeof args.url !== "string" || !/^(https?|file):\/\//i.test(args.url)) {
-          throw toErrorObject(PI_BROWSER_ERROR.INTERNAL, "browser_navigate requires an absolute http(s) or file URL");
+          throw toErrorObject(TRUSTED_UA_ERROR.INTERNAL, "browser_navigate requires an absolute http(s) or file URL");
         }
         tab.url = args.url;
         return text({ navigatingTo: tab.url });
@@ -286,7 +286,7 @@ class FakeTabs {
       case "browser_close_tab": {
         const tabId = Number(args.tabId);
         if (!this.replOwned.has(tabId)) {
-          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, `tab ${tabId} is not owned by this session's REPL`);
+          throw toErrorObject(TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED, `tab ${tabId} is not owned by this session's REPL`);
         }
         this.replOwned.delete(tabId);
         this.closeTab(tabId);
@@ -298,7 +298,7 @@ class FakeTabs {
         return text({ closed: tabId });
       }
       default:
-        throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${tool}`);
+        throw toErrorObject(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${tool}`);
     }
   }
 }
@@ -366,14 +366,14 @@ function makeFakeControl(tabs, hostRef) {
       }
       case "pi_bind_current_tab": {
         if (tabs.activeTabId === undefined) {
-          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "no active tab to bind");
+          throw toErrorObject(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "no active tab to bind");
         }
         tabs.bind(ref(args.sessionId), tabs.activeTabId);
         return { tabId: tabs.activeTabId };
       }
       case "pi_open_tab": {
         const url = String(args.url ?? "").trim();
-        if (!url) throw toErrorObject(PI_BROWSER_ERROR.INTERNAL, "pi_open_tab requires a url");
+        if (!url) throw toErrorObject(TRUSTED_UA_ERROR.INTERNAL, "pi_open_tab requires a url");
         const { tabId } = tabs.openTab(ref(args.sessionId), url);
         state.lastOpen = tabId;
         return { tabId, url };
@@ -382,11 +382,11 @@ function makeFakeControl(tabs, hostRef) {
         const raw = ref(args.tabId); // "tab" sentinel resolves here too
         const tabId = typeof raw === "number" ? raw : Number(raw);
         if (!Number.isInteger(tabId) || tabId <= 0) {
-          throw toErrorObject(PI_BROWSER_ERROR.INTERNAL, "pi_bind_tab requires a tabId number");
+          throw toErrorObject(TRUSTED_UA_ERROR.INTERNAL, "pi_bind_tab requires a tabId number");
         }
         const tab = tabs.tabs.get(tabId);
         if (!tab || tab.closed) {
-          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
+          throw toErrorObject(TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED, `tab ${tabId} no longer exists`);
         }
         for (const [sid, bid] of tabs.bindings) {
           if (bid === tabId && sid !== ref(args.sessionId)) tabs.unbind(sid);
@@ -411,13 +411,13 @@ function makeFakeControl(tabs, hostRef) {
         const sessionId = ref(args.sessionId);
         const tabId = tabs.bindings.get(sessionId);
         if (!tabId) {
-          throw toErrorObject(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, `session ${sessionId} has no bound tab`);
+          throw toErrorObject(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, `session ${sessionId} has no bound tab`);
         }
         tabs.focusTab(tabId);
         return { focused: tabId };
       }
       default:
-        throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown control tool: ${tool}`);
+        throw toErrorObject(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown control tool: ${tool}`);
     }
   };
   return { handler, state };
@@ -426,8 +426,8 @@ function makeFakeControl(tabs, hostRef) {
 function makeFakeFirefox(tabs, control) {
   const mcpServer = new McpServer({ handleToolCall: (params) => Promise.resolve(tabs.dispatch(params)) }, control);
   const attach = (host) => {
-    host.on(X_PI_BROWSER.tool, (params) => tabs.dispatch(params));
-    host.on(X_PI_BROWSER.notify, (params) => {
+    host.on(X_TRUSTED_UA.tool, (params) => tabs.dispatch(params));
+    host.on(X_TRUSTED_UA.notify, (params) => {
       tabs.notifyLog.push(params);
     });
     host.on("mcp/connect", async (params) => await mcpServer.handleConnect(params));
@@ -515,8 +515,8 @@ async function initialize(host) {
     clientCapabilities: { loadSession: true },
     clientInfo: { name: "pi-browser-firefox", version: "0.1.1" },
     _meta: {
-      piAgent: {
-        type: "pi.agent.hello",
+      trustedUaAgent: {
+        type: "trusted-ua.hello",
         client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.1" },
         capabilities: ["browser"],
       },
@@ -556,7 +556,7 @@ test("auto-detection: host writes the add-on heartbeat only for the add-on ident
 
     // The keepalive ping refreshes it.
     await sleep(25);
-    await host.request(X_PI_BROWSER.ping, {}, 5_000);
+    await host.request(X_TRUSTED_UA.ping, {}, 5_000);
     const hb2 = JSON.parse(readFileSync(hbFile, "utf8"));
     assert.ok(hb2.ts >= hb.ts, "ping refreshed the heartbeat ts");
   } finally {
@@ -564,21 +564,21 @@ test("auto-detection: host writes the add-on heartbeat only for the add-on ident
   }
 });
 
-test("initialize: capabilities + piBrowser metadata; version mismatch is structured", async () => {
+test("initialize: capabilities + trustedUa metadata; version mismatch is structured", async () => {
   const host = spawnHost();
   try {
     const res = await initialize(host);
     assert.equal(res.agentCapabilities?.loadSession, true);
     assert.equal(res.agentInfo?.name, "pi-coding-agent");
-    const meta = res._meta?.piBrowser ?? res.piBrowser;
-    assert.ok(meta, "piBrowser metadata present");
-    assert.equal(meta.protocolVersion, PI_BROWSER_META.protocolVersion);
-    assert.equal(meta.browserToolVersion, PI_BROWSER_META.browserToolVersion);
+    const meta = res._meta?.trustedUa ?? res.trustedUa;
+    assert.ok(meta, "trustedUa metadata present");
+    assert.equal(meta.protocolVersion, TRUSTED_UA_META.protocolVersion);
+    assert.equal(meta.browserToolVersion, TRUSTED_UA_META.browserToolVersion);
 
     // The host echoes the pi.agent.hello it accepted (plan §24): the fake
     // Firefox above declared application=firefox, capabilities=[browser].
-    const agentMeta = res._meta?.piAgent;
-    assert.ok(agentMeta, "piAgent metadata present");
+    const agentMeta = res._meta?.trustedUaAgent;
+    assert.ok(agentMeta, "trustedUaAgent metadata present");
     assert.equal(agentMeta.application, "firefox");
     assert.deepEqual(agentMeta.capabilities, ["browser"]);
 
@@ -590,7 +590,7 @@ test("initialize: capabilities + piBrowser metadata; version mismatch is structu
           clientCapabilities: {},
           clientInfo: { name: "fake", version: "0" },
         }),
-        (err) => structuredCode(err) === PI_BROWSER_ERROR.PROTOCOL_VERSION_MISMATCH,
+        (err) => structuredCode(err) === TRUSTED_UA_ERROR.PROTOCOL_VERSION_MISMATCH,
       );
     } finally {
       await shutdown(bad);
@@ -661,7 +661,7 @@ test("session: list, resume, load replay, set_config_option, cancel, close", asy
     // An already-open session cannot be resumed (SESSION_BUSY).
     await assert.rejects(
       host.request(AGENT_METHODS.session_resume, { sessionId: created.sessionId, cwd: "/work/app" }),
-      (err) => structuredCode(err) === PI_BROWSER_ERROR.SESSION_BUSY || /already open/i.test(JSON.stringify(err)),
+      (err) => structuredCode(err) === TRUSTED_UA_ERROR.SESSION_BUSY || /already open/i.test(JSON.stringify(err)),
     );
 
     // Close, then resume: reopens the same session from the backend.
@@ -1038,7 +1038,7 @@ test("browser tools (MCP-over-ACP): agent-driven calls through the real add-on M
   }
 });
 
-test("x-pi-browser/notify is accepted and does not break the channel", async () => {
+test("x-trusted-ua/notify is accepted and does not break the channel", async () => {
   const tabs = new FakeTabs();
   const fakeFirefox = makeFakeFirefox(tabs);
   const host = spawnHost();
@@ -1047,20 +1047,20 @@ test("x-pi-browser/notify is accepted and does not break the channel", async () 
     await initialize(host);
     host.sendRaw({
       jsonrpc: "2.0",
-      method: X_PI_BROWSER.notify,
+      method: X_TRUSTED_UA.notify,
       params: { sessionId: "s1", event: "tab_closed", data: { tabId: 1 } },
     });
     host.sendRaw({
       jsonrpc: "2.0",
-      method: X_PI_BROWSER.notify,
+      method: X_TRUSTED_UA.notify,
       params: { sessionId: "s1", event: "tab_navigated", data: { tabId: 1 } },
     });
     await sleep(100);
     assert.ok(host.alive, "host alive after notifications");
-    const ping = await host.request(X_PI_BROWSER.ping, {});
+    const ping = await host.request(X_TRUSTED_UA.ping, {});
     assert.equal(ping.pong, true);
-    assert.equal(ping.meta.protocolVersion, PI_BROWSER_META.protocolVersion);
-    assert.equal(ping.meta.browserToolVersion, PI_BROWSER_META.browserToolVersion);
+    assert.equal(ping.meta.protocolVersion, TRUSTED_UA_META.protocolVersion);
+    assert.equal(ping.meta.browserToolVersion, TRUSTED_UA_META.browserToolVersion);
     assert.equal(ping.backendReady, true);
   } finally {
     await shutdown(host);
@@ -1436,8 +1436,8 @@ async function initializeThunderbird(host) {
     clientCapabilities: { loadSession: true },
     clientInfo: { name: "pi-thunderbird", version: "0.1.1" },
     _meta: {
-      piAgent: {
-        type: "pi.agent.hello",
+      trustedUaAgent: {
+        type: "trusted-ua.hello",
         client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
         // T1: pure chat interface — no tools (plan §28: mail/compose arrive later).
         capabilities: [],
@@ -1463,8 +1463,8 @@ test("thunderbird client: hello accepted, no tools registered, chat streams + ca
     const res = await initializeThunderbird(host);
 
     // The host echoes the Thunderbird hello it accepted (plan §24).
-    const agentMeta = res._meta?.piAgent;
-    assert.ok(agentMeta, "piAgent metadata present");
+    const agentMeta = res._meta?.trustedUaAgent;
+    assert.ok(agentMeta, "trustedUaAgent metadata present");
     assert.equal(agentMeta.application, "thunderbird");
     assert.deepEqual(agentMeta.capabilities, []);
 
@@ -1515,7 +1515,7 @@ test("thunderbird client: hello accepted, no tools registered, chat streams + ca
 // T2: Thunderbird mail capability provider
 //
 // The real Thunderbird add-on now declares capabilities ["mail","attachments"]
-// and serves the ten read-only mail tools over the legacy x-pi-browser/tool
+// and serves the ten read-only mail tools over the legacy x-trusted-ua/tool
 // transport. This drives the REAL built host exactly like that add-on does:
 // the hello is accepted and echoed, the host registers the mail tools (not the
 // browser tools), and a scripted agent mail-tool call round-trips over the
@@ -1571,7 +1571,7 @@ class FakeMail {
         result = { folders: this.context.selectedFolders };
         break;
       default:
-        throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown mail tool: ${tool}`);
+        throw toErrorObject(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown mail tool: ${tool}`);
     }
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
@@ -1589,7 +1589,7 @@ test("thunderbird mail client: hello accepted, mail tools registered, mail tool 
   const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
   try {
     // Client-side mail dispatcher, as the add-on's onToolCall installs one.
-    host.on(X_PI_BROWSER.tool, (params) => mail.dispatch(params));
+    host.on(X_TRUSTED_UA.tool, (params) => mail.dispatch(params));
     // Mail tools are approval-gated: the fake user approves, and each prompt
     // is recorded so the test can assert the permission flow fired.
     const permLog = [];
@@ -1603,15 +1603,15 @@ test("thunderbird mail client: hello accepted, mail tools registered, mail tool 
       clientCapabilities: { loadSession: true },
       clientInfo: { name: "pi-thunderbird", version: "0.1.1" },
       _meta: {
-        piAgent: {
-          type: "pi.agent.hello",
+        trustedUaAgent: {
+          type: "trusted-ua.hello",
           client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
           capabilities: ["mail", "attachments"],
         },
       },
     });
     // The host echoes the mail capabilities it accepted.
-    assert.deepEqual(res._meta?.piAgent?.capabilities, ["mail", "attachments"]);
+    assert.deepEqual(res._meta?.trustedUaAgent?.capabilities, ["mail", "attachments"]);
 
     // Session with no mcpServers (the add-on uses the legacy transport).
     const created = await host.request(AGENT_METHODS.session_new, { cwd: "/home/user" });
@@ -1641,7 +1641,7 @@ test("thunderbird mail client: hello accepted, mail tools registered, mail tool 
     // The approval gate fired for the mail tool before it executed.
     assert.equal(permLog.length, 1, "one permission prompt for the mail tool");
     assert.equal(
-      permLog[0]?._meta?.piBrowser?.tool,
+      permLog[0]?._meta?.trustedUa?.tool,
       "mail_get_context",
       "prompt named the mail tool",
     );
@@ -1684,7 +1684,7 @@ class FakeT4T6 {
       case "mail_move":
         return { content: [{ type: "text", text: JSON.stringify({ count: args.messageIds?.length ?? 0, folderId: args.folderId }) }] };
       default:
-        throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool: ${tool}`);
+        throw toErrorObject(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool: ${tool}`);
     }
   }
 }
@@ -1703,7 +1703,7 @@ test("thunderbird T4/T6 client: mailModify + contacts tools registered and round
   ]);
   const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script });
   try {
-    host.on(X_PI_BROWSER.tool, (params) => t46.dispatch(params));
+    host.on(X_TRUSTED_UA.tool, (params) => t46.dispatch(params));
     // Approval-gated tools: the fake user approves; record each prompt.
     const permLog = [];
     host.on("session/request_permission", (params) => {
@@ -1716,14 +1716,14 @@ test("thunderbird T4/T6 client: mailModify + contacts tools registered and round
       clientCapabilities: { loadSession: true },
       clientInfo: { name: "pi-thunderbird", version: "0.1.1" },
       _meta: {
-        piAgent: {
-          type: "pi.agent.hello",
+        trustedUaAgent: {
+          type: "trusted-ua.hello",
           client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
           capabilities: ["mail", "attachments", "compose", "mailModify", "contacts"],
         },
       },
     });
-    const caps = res._meta?.piAgent?.capabilities ?? [];
+    const caps = res._meta?.trustedUaAgent?.capabilities ?? [];
     assert.ok(caps.includes("mailModify"), "mailModify capability echoed");
     assert.ok(caps.includes("contacts"), "contacts capability echoed");
 
@@ -1748,7 +1748,7 @@ test("thunderbird T4/T6 client: mailModify + contacts tools registered and round
     assert.ok(outs.includes("Sarah Doe"), "contacts_search returned the fake contact");
     assert.ok(outs.includes("archived"), "mail_archive returned a result");
     // Both tools were approval-gated before execution.
-    const promptedTools = permLog.map((p) => p?._meta?.piBrowser?.tool);
+    const promptedTools = permLog.map((p) => p?._meta?.trustedUa?.tool);
     assert.ok(promptedTools.includes("contacts_search"), "contacts_search prompted for approval");
     assert.ok(promptedTools.includes("mail_archive"), "mail_archive prompted for approval");
 
@@ -1877,7 +1877,7 @@ test("javascript REPL (primitives): snapshot/goto/interact/tabs/checkpoint throu
     { match: "repl-checkpoint", toolCalls: [{ toolName: "javascript", args: { code: "await checkpoint('state-1', { n: 1 }); 'saved'" } }] },
   ]);
   // Neutral cwd: the session gets a provisioned task workspace; the REPL
-  // binds to it, so checkpoints land there (reported in _meta.piBrowser.workspace).
+  // binds to it, so checkpoints land there (reported in _meta.trustedUa.workspace).
   const host = spawnHost({ PI_BROWSER_MOCK_SCRIPT: script, PI_BROWSER_REPL_DIR: replDir, PI_BROWSER_WORKSPACE_DIR: wsDir });
   fakeFirefox.attach(host);
   try {
@@ -1930,7 +1930,7 @@ test("javascript REPL (primitives): snapshot/goto/interact/tabs/checkpoint throu
     // P2.7: checkpoint lands in the session workspace (0600).
     outs = await runCell("repl-checkpoint");
     assert.ok(outs.includes("saved"), `checkpoint cell: ${outs}`);
-    const ws = s._meta?.piBrowser?.workspace;
+    const ws = s._meta?.trustedUa?.workspace;
     assert.ok(ws, "session_new reports the provisioned task workspace");
     const cp = path.join(ws, "state-1");
     const fs = await import("node:fs");
@@ -1961,7 +1961,7 @@ test("javascript REPL (fs): workspace-scoped filesystem, escapes rejected", asyn
     const tab = tabs.addTab("http://a.test/fs", "REPL FS Page");
     const s = await host.request(AGENT_METHODS.session_new, { cwd: "/" });
     tabs.bind(s.sessionId, tab);
-    const ws = s._meta?.piBrowser?.workspace;
+    const ws = s._meta?.trustedUa?.workspace;
     assert.ok(ws && ws.startsWith(wsDir), `session workspace under PI_BROWSER_WORKSPACE_DIR: ${ws}`);
 
     const runCell = async (name) => {
@@ -2035,7 +2035,7 @@ test("javascript REPL (hardening): rebind mid-cell, ACP cancel, two-session isol
     tabs.closeTab(tabA);
     host.sendRaw({
       jsonrpc: "2.0",
-      method: X_PI_BROWSER.notify,
+      method: X_TRUSTED_UA.notify,
       params: { sessionId: s.sessionId, event: "tab_closed", data: { tabId: tabA } },
     });
     await p;
@@ -2149,7 +2149,7 @@ test("javascript REPL: rebind (binding_changed) -> next cell starts with the not
     tabs.bind(s.sessionId, tabB);
     host.sendRaw({
       jsonrpc: "2.0",
-      method: X_PI_BROWSER.notify,
+      method: X_TRUSTED_UA.notify,
       params: { sessionId: s.sessionId, event: "binding_changed", data: { tabId: tabB } },
     });
 

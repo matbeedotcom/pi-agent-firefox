@@ -5,7 +5,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-import { BROWSER_TOOLS, CONTROL_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { BROWSER_TOOLS, CONTROL_TOOLS, TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 import { AcpClient, SessionStore, bindingOwner, bindingRefId } from "@trusted-ua/webext";
 import { ToolDispatcher } from "../src/background/tool-dispatcher.js";
 import { ReplTabs } from "../src/background/repl-tabs.js";
@@ -278,7 +278,7 @@ test("ToolDispatcher: unbound session -> BROWSER_NOT_BOUND", async () => {
   const d = new ToolDispatcher(store);
   await assert.rejects(
     d.handleToolCall({ sessionId: "nope", tool: "browser_get_page", arguments: {} }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_NOT_BOUND,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_NOT_BOUND,
   );
 });
 
@@ -292,7 +292,7 @@ test("ToolDispatcher: closed tab -> BROWSER_TAB_CLOSED (never another tab)", asy
   const d = new ToolDispatcher(store);
   await assert.rejects(
     d.handleToolCall({ sessionId: "s1", tool: "browser_click", arguments: { ref: "el-1" } }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_TAB_CLOSED,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED,
   );
 });
 
@@ -304,7 +304,7 @@ test("ToolDispatcher: unknown tool -> MCP_TOOL_NOT_FOUND", async () => {
   const d = new ToolDispatcher(store);
   await assert.rejects(
     d.handleToolCall({ sessionId: "s1", tool: "browser_explode", arguments: {} }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND,
   );
 });
 
@@ -338,7 +338,7 @@ test("ToolDispatcher: stale element ref surfaces BROWSER_ELEMENT_STALE", async (
   const d = new ToolDispatcher(store);
   await assert.rejects(
     d.handleToolCall({ sessionId: "s1", tool: "browser_click", arguments: { ref: "el-9" } }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_ELEMENT_STALE,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_ELEMENT_STALE,
   );
   delete (globalThis as { __contentReply?: unknown }).__contentReply;
 });
@@ -400,7 +400,7 @@ test("ToolDispatcher: screenshot that stays invisible raises structured BROWSER_
   await assert.rejects(
     d.handleToolCall({ sessionId: "s1", tool: "browser_screenshot", arguments: {} }),
     (err: unknown) =>
-      err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+      err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
   );
   delete (globalThis as { __captureFail?: number }).__captureFail;
 });
@@ -563,8 +563,8 @@ test("ToolDispatcher: unknown frame rejects with BROWSER_FRAME_NOT_FOUND and the
   await assert.rejects(
     d.handleToolCall({ sessionId: "s1", tool: "browser_click", arguments: { ref: "el-1", frame: "nope" } }),
     (err: unknown) => {
-      assert.ok(err instanceof PiBrowserProtocolError);
-      assert.equal(err.code, PI_BROWSER_ERROR.BROWSER_FRAME_NOT_FOUND);
+      assert.ok(err instanceof TrustedUaProtocolError);
+      assert.equal(err.code, TRUSTED_UA_ERROR.BROWSER_FRAME_NOT_FOUND);
       const frames = (err.data as { frames: Array<{ frameId: number; url: string }> }).frames;
       assert.equal(frames.length, 2);
       return true;
@@ -630,7 +630,7 @@ test("ToolDispatcher: browser_navigate rejects non-http(s)/file URLs", async () 
   for (const url of ["javascript:alert(1)", "/relative", "data:text/html,x", ""] as const) {
     await assert.rejects(
       d.handleToolCall({ sessionId: "s1", tool: "browser_navigate", arguments: { url } }),
-      (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.INTERNAL,
+      (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.INTERNAL,
       `url ${JSON.stringify(url)} must be rejected`,
     );
   }
@@ -675,7 +675,7 @@ test("ToolDispatcher: browser_navigate times out when the tab never settles", as
       tool: "browser_navigate",
       arguments: { url: "http://x.test/next", timeoutMs: 200 },
     }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT,
   );
 });
 
@@ -689,7 +689,7 @@ test("ToolDispatcher: browser_navigate reports a tab closed while loading", asyn
   const d = new ToolDispatcher(store);
   await assert.rejects(
     d.handleToolCall({ sessionId: "s1", tool: "browser_navigate", arguments: { url: "http://x.test/next" } }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_TAB_CLOSED,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED,
   );
 });
 
@@ -803,7 +803,7 @@ test("ToolDispatcher: browser_download rejects oversized files (BROWSER_DOWNLOAD
         arguments: { url: "https://cdn.example.com/big.mp4", maxBytes: 100 },
         timeoutMs: 1000,
       }),
-      (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
+      (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
     );
     // A declared content-length over the cap is rejected before streaming.
     globalThis.fetch = (async () =>
@@ -815,7 +815,7 @@ test("ToolDispatcher: browser_download rejects oversized files (BROWSER_DOWNLOAD
         arguments: { url: "https://cdn.example.com/big.mp4", maxBytes: 1000 },
         timeoutMs: 1000,
       }),
-      (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
+      (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_DOWNLOAD_TOO_LARGE,
     );
   } finally {
     globalThis.fetch = realFetch;
@@ -838,12 +838,12 @@ test("ToolDispatcher: browser_download surfaces HTTP failures and rejects non-ht
         arguments: { url: "https://cdn.example.com/missing.png" },
         timeoutMs: 1000,
       }),
-      (err: unknown) => err instanceof PiBrowserProtocolError && /HTTP 404/.test(err.message),
+      (err: unknown) => err instanceof TrustedUaProtocolError && /HTTP 404/.test(err.message),
     );
     for (const url of ["javascript:alert(1)", "ftp://x/file", "/relative", ""] as const) {
       await assert.rejects(
         d.handleToolCall({ sessionId: "s1", tool: "browser_download", arguments: { url }, timeoutMs: 1000 }),
-        (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.INTERNAL,
+        (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.INTERNAL,
         `url ${JSON.stringify(url)} must be rejected`,
       );
     }
@@ -860,7 +860,7 @@ test("ToolDispatcher: browser_download surfaces HTTP failures and rejects non-ht
         arguments: { url: "https://cdn.example.com/x.png", maxBytes: -5 },
         timeoutMs: 1000,
       }),
-      (err: unknown) => err instanceof PiBrowserProtocolError && /maxBytes/.test(err.message),
+      (err: unknown) => err instanceof TrustedUaProtocolError && /maxBytes/.test(err.message),
     );
     assert.equal(fetches, 0, "no fetch for an invalid maxBytes");
   } finally {
@@ -963,7 +963,7 @@ test("ToolDispatcher: browser_close_tab rejects non-REPL tabs (close-unbound-tab
   const d = new ToolDispatcher(store);
   await assert.rejects(
     d.handleToolCall({ sessionId: "s1", tool: "browser_close_tab", arguments: { tabId: 11 } }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
   );
   assert.equal((globalThis as { __removedTabs?: number[] }).__removedTabs?.length, 0, "user tab never closed");
 });
@@ -1079,7 +1079,7 @@ test("McpServer: connect with unknown serverId fails; declared server connects",
     controlCalls.push({ tool, args });
     if (tool === "pi_get_state") return { status: { state: "connected" }, sessions: [{ sessionId: "session-1" }] };
     if (tool === "pi_cancel") {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, "unknown session: s404");
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, "unknown session: s404");
     }
     return { ok: true };
   };
@@ -1087,7 +1087,7 @@ test("McpServer: connect with unknown serverId fails; declared server connects",
 
   await assert.rejects(
     server.handleConnect({ serverId: "nope" }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
   );
 
   const serverId = server.declareFor("session-1");
@@ -1100,7 +1100,7 @@ test("McpServer: connect with unknown serverId fails; declared server connects",
     serverInfo: { name: string };
   };
   assert.equal(init.protocolVersion, "2025-06-18");
-  assert.equal(init.serverInfo.name, "pi-browser-firefox");
+  assert.equal(init.serverInfo.name, "trusted-ua-firefox");
 
   await server.handleMessage({ connectionId: conn.connectionId, method: "notifications/initialized" });
 
@@ -1146,13 +1146,13 @@ test("McpServer: connect with unknown serverId fails; declared server connects",
       method: "tools/call",
       params: { name: "pi_cancel", arguments: { sessionId: "s404" } },
     }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.SESSION_NOT_FOUND,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.SESSION_NOT_FOUND,
   );
 
   await server.handleDisconnect({ connectionId: conn.connectionId });
   await assert.rejects(
     server.handleMessage({ connectionId: conn.connectionId, method: "tools/list" }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
   );
 });
 
@@ -1171,7 +1171,7 @@ test("McpServer: control tools are rejected without a control handler", async ()
       method: "tools/call",
       params: { name: "pi_get_state", arguments: {} },
     }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND,
   );
 });
 
@@ -1285,8 +1285,8 @@ test("ToolDispatcher: a caller session with no tab is told how to bind one", asy
   await assert.rejects(
     d.handleToolCall({ sessionId: "mcp:abc", tool: "browser_get_page", arguments: {} }),
     (err: unknown) =>
-      err instanceof PiBrowserProtocolError &&
-      err.code === PI_BROWSER_ERROR.BROWSER_NOT_BOUND &&
+      err instanceof TrustedUaProtocolError &&
+      err.code === TRUSTED_UA_ERROR.BROWSER_NOT_BOUND &&
       /browser_bind_tab/.test(err.message),
   );
 });
@@ -1306,4 +1306,73 @@ test("ToolDispatcher: a caller session cannot take a tab from the user's chat se
   await d.bindSessionTab("chat-1", 8);
   assert.equal(store.getBinding("mcp:abc"), undefined);
   assert.deepEqual(store.boundSessionIds().sort(), ["chat-1"]);
+});
+
+// ---------------------------------------------------------------------------
+// AcpClient against a v0.4.0 host (openspec rename-trusted-user-agent D2)
+// ---------------------------------------------------------------------------
+
+test("AcpClient: works with a v0.4.0 host — hello under both names, old names afterwards", async () => {
+  const { PROTOCOL_VERSION, X_TRUSTED_UA } = await import("@trusted-ua/protocol");
+  const rt = stub.runtime as any;
+  rt.mode = "ok";
+  const tick = (ms = 5) => new Promise<void>((r) => setTimeout(r, ms));
+  const statuses: string[] = [];
+  const toolCalls: unknown[] = [];
+  let connectedMeta: unknown;
+  const client = new AcpClient(
+    { clientName: "trusted-ua-firefox", application: "firefox", capabilities: ["browser"], extensionId: "pi-agent-firefox@matbee.com" },
+    {
+      onSessionUpdate() {},
+      onToolCall: async (p) => {
+        toolCalls.push(p);
+        return { content: [] };
+      },
+      onMcpConnect: async () => ({ connectionId: "c" }) as never,
+      onMcpMessage: async () => ({}) as never,
+      onMcpDisconnect: async () => {},
+      onStatus: (s) => {
+        statuses.push(s.state);
+        if (s.state === "connected") connectedMeta = s.trustedUaMeta;
+      },
+      onRequestPermission: async () => ({ outcome: { outcome: "cancelled" } }) as never,
+    },
+  );
+  client.start();
+  const port = rt.lastPort;
+  const sent: Array<Record<string, any>> = [];
+  port.postMessage = (m: Record<string, any>) => sent.push(m);
+  const fromHost = (m: unknown) => port.listeners.message.forEach((fn: (x: unknown) => void) => fn(m));
+  try {
+    const init = client.initialize();
+    await tick();
+    const hello = sent[0];
+    assert.equal(hello.method, "initialize");
+    assert.equal(hello.params._meta.piAgent.type, "pi.agent.hello", "old host reads piAgent");
+    assert.equal(hello.params._meta.trustedUaAgent.type, "trusted-ua.hello", "new host reads trustedUaAgent");
+    fromHost({
+      jsonrpc: "2.0",
+      id: hello.id,
+      result: {
+        protocolVersion: PROTOCOL_VERSION,
+        agentInfo: { name: "pi-coding-agent", version: "1.5.2" },
+        _meta: { piBrowser: { version: "0.4.0", protocolVersion: 3, browserToolVersion: 8 }, piAgent: { capabilities: ["browser"] } },
+      },
+    });
+    await init;
+    assert.equal(statuses.at(-1), "connected");
+    assert.equal((connectedMeta as { version?: string } | undefined)?.version, "0.4.0", "old _meta.piBrowser read as trustedUa");
+
+    void client.request(X_TRUSTED_UA.ping, {}, 50).catch(() => undefined);
+    await tick();
+    assert.equal(sent.at(-1)?.method, "x-pi-browser/ping", "requests use the old prefix");
+
+    fromHost({ jsonrpc: "2.0", id: 7, method: "x-pi-browser/tool", params: { tool: "browser_list_tabs", args: {}, sessionId: "s" } });
+    await tick(20);
+    assert.equal(toolCalls.length, 1, "old-prefixed tool call reaches the handler");
+    assert.equal(sent.at(-1)?.id, 7);
+  } finally {
+    client.stop();
+    rt.mode = "fail";
+  }
 });

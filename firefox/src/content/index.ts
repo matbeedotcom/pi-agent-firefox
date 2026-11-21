@@ -1341,7 +1341,7 @@ function readConsole(
   const page = (window as unknown as { __PI_BROWSER_CONSOLE__?: { messages?: unknown; dropped?: unknown } }).__PI_BROWSER_CONSOLE__;
   if (page && Array.isArray(page.messages)) {
     const result = deliver(page.messages as ConsoleMessageEntry[], typeof page.dropped === "number" ? page.dropped : 0);
-    if (doClear) window.postMessage({ __piBrowserConsoleClear: true }, "*");
+    if (doClear) window.postMessage({ __trustedUaConsoleClear: true }, "*");
     return Promise.resolve(result);
   }
 
@@ -1349,8 +1349,8 @@ function readConsole(
     const id = ++consoleReadSeq;
     let settled = false;
     const onMessage = (e: MessageEvent) => {
-      const d = e.data as { __piBrowserConsoleData?: boolean; id?: number; messages?: unknown; dropped?: unknown } | null;
-      if (!d || d.__piBrowserConsoleData !== true || d.id !== id) return;
+      const d = e.data as { __trustedUaConsoleData?: boolean; id?: number; messages?: unknown; dropped?: unknown } | null;
+      if (!d || d.__trustedUaConsoleData !== true || d.id !== id) return;
       settled = true;
       window.removeEventListener("message", onMessage);
       clearTimeout(timer);
@@ -1369,10 +1369,10 @@ function readConsole(
       }
     }, 3000);
     window.addEventListener("message", onMessage);
-    window.postMessage({ __piBrowserConsoleRead: true, id }, "*");
+    window.postMessage({ __trustedUaConsoleRead: true, id }, "*");
     // Sent AFTER the read request: the helper answers the read with the
     // pre-clear copy, then empties the buffer.
-    if (doClear) window.postMessage({ __piBrowserConsoleClear: true }, "*");
+    if (doClear) window.postMessage({ __trustedUaConsoleClear: true }, "*");
   });
 }
 

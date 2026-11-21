@@ -66,7 +66,7 @@ async function handleSkillsCommand(bridge: SkillsBridge, args: string, ctx: Exte
 }
 
 export function createSkillsExtensionFactory(): (pi: ExtensionAPI) => void {
-  return function piSkillsExtension(pi: ExtensionAPI) {
+  return function trustedUaSkillsExtension(pi: ExtensionAPI) {
     // The host installs the bridge once per process, before any session
     // spawns, so capturing it at load time is stable for the session's life.
     const bridge = getSkillsBridge();

@@ -3,7 +3,7 @@
  * Space and pane (one implementation, three mounts).
  *
  * Working directory: defaults to a fresh per-task workspace under the host's
- * workspace root (~/.pi/workspaces, sent in initialize _meta.piBrowser
+ * workspace root (~/.pi/workspaces, sent in initialize _meta.trustedUa
  * .workspaceRoot). Creating with an empty cwd is what tells the host to
  * provision one, so the default needs no path from the UI. Clicking the
  * directory switches to a text field for a project path, with a link back to

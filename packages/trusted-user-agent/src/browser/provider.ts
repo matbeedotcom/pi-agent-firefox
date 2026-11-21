@@ -3,7 +3,7 @@
  *
  *   BrowserToolTransport.call(sessionId, tool, args)
  *
- *   - LegacyBrowserCallbackTransport: private x-pi-browser/tool JSON-RPC
+ *   - LegacyBrowserCallbackTransport: private x-trusted-ua/tool JSON-RPC
  *     namespace over the Native Messaging connection (the working MVP
  *     transport).
  *   - NativeMcpOverAcpTransport: MCP-over-ACP (mcp/connect, mcp/message,
@@ -28,9 +28,9 @@ import {
   MAIL_TOOL_TIMEOUT_MS,
   codeFromErrorObject,
   isStructuredErrorObject,
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
-  X_PI_BROWSER,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
+  X_TRUSTED_UA,
   buildPermissionRequest,
   buildCallerApprovalRequest,
   applicationForTool,
@@ -73,6 +73,7 @@ export { MCP_PROTOCOL_VERSION } from "@trusted-ua/protocol";
 import { TransportClosedError, TransportTimeoutError } from "../native-host/transport.js";
 import type { ToolSpec } from "../acp/backend.js";
 import type { Logger } from "../logger.js";
+import { envValue } from "../env.js";
 
 /** Normalized tool result: MCP tools/call shape. */
 export interface NormalizedToolResult {
@@ -86,7 +87,7 @@ export interface BrowserToolTransport {
   dispose(): Promise<void>;
 }
 
-/** Incremental progress for an in-flight tool call (x-pi-browser/tool_update). */
+/** Incremental progress for an in-flight tool call (x-trusted-ua/tool_update). */
 export type BrowserToolUpdate = BrowserToolUpdateParams["update"];
 
 /** JSON.stringify that never throws (cycles, BigInt, undefined) — tool I/O logging. */
@@ -132,7 +133,7 @@ function timeoutFor(tool: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy (x-pi-browser/tool) transport
+// Legacy (x-trusted-ua/tool) transport
 // ---------------------------------------------------------------------------
 
 export interface LegacyTransportOptions {
@@ -161,7 +162,7 @@ export class LegacyBrowserCallbackTransport implements BrowserToolTransport {
     const slackMs = this.options.slackMs ?? 5_000;
     try {
       const raw = await this.transport.request(
-        X_PI_BROWSER.tool,
+        X_TRUSTED_UA.tool,
         { sessionId, tool, arguments: args, timeoutMs, ...(toolCallId ? { toolCallId } : {}) },
         timeoutMs + slackMs,
       );
@@ -172,8 +173,8 @@ export class LegacyBrowserCallbackTransport implements BrowserToolTransport {
       if (err instanceof TransportTimeoutError && toolCallId) {
         const partial = this.options.getPartial?.(toolCallId);
         if (partial && (partial.scanned !== undefined || partial.nextCursor)) {
-          throw new PiBrowserProtocolError(
-            PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT,
+          throw new TrustedUaProtocolError(
+            TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT,
             `browser tool timed out: ${tool}`,
             {
               tool,
@@ -220,20 +221,20 @@ export class NativeMcpOverAcpTransport implements BrowserToolTransport {
       const raw = await this.client.call(tool, args);
       return normalizeToolResult(raw);
     } catch (err) {
-      if (err instanceof PiBrowserProtocolError) throw err;
+      if (err instanceof TrustedUaProtocolError) throw err;
       if (isStructuredErrorObject(err)) {
         // Preserve structured codes the client sent (e.g. MCP_TOOL_NOT_FOUND).
-        const code = codeFromErrorObject(err) ?? PI_BROWSER_ERROR.MCP_UNAVAILABLE;
-        throw new PiBrowserProtocolError(code, err.message, { tool });
+        const code = codeFromErrorObject(err) ?? TRUSTED_UA_ERROR.MCP_UNAVAILABLE;
+        throw new TrustedUaProtocolError(code, err.message, { tool });
       }
       const message = err instanceof Error ? err.message : String(err);
       if (/timed out|timeout/i.test(message)) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT, `mcp tool call timed out: ${tool}`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT, `mcp tool call timed out: ${tool}`);
       }
       if (/disposed|closed/i.test(message)) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, `mcp connection unavailable: ${tool}`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_UNAVAILABLE, `mcp connection unavailable: ${tool}`);
       }
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, `mcp tool call failed: ${message}`, { tool });
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_UNAVAILABLE, `mcp tool call failed: ${message}`, { tool });
     }
   }
 
@@ -254,20 +255,20 @@ export class NativeMcpOverAcpTransport implements BrowserToolTransport {
 // Shared error translation
 // ---------------------------------------------------------------------------
 
-export function translateTransportError(err: unknown, tool: string): PiBrowserProtocolError {
-  if (err instanceof PiBrowserProtocolError) return err;
+export function translateTransportError(err: unknown, tool: string): TrustedUaProtocolError {
+  if (err instanceof TrustedUaProtocolError) return err;
   if (err instanceof TransportTimeoutError) {
-    return new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT, `browser tool timed out: ${tool}`);
+    return new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT, `browser tool timed out: ${tool}`);
   }
   if (err instanceof TransportClosedError) {
-    return new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_UNAVAILABLE, "browser connection closed", { tool });
+    return new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_UNAVAILABLE, "browser connection closed", { tool });
   }
   if (isStructuredErrorObject(err)) {
-    const code = codeFromErrorObject(err) ?? PI_BROWSER_ERROR.INTERNAL;
-    return new PiBrowserProtocolError(code, err.message, { tool });
+    const code = codeFromErrorObject(err) ?? TRUSTED_UA_ERROR.INTERNAL;
+    return new TrustedUaProtocolError(code, err.message, { tool });
   }
-  return new PiBrowserProtocolError(
-    PI_BROWSER_ERROR.INTERNAL,
+  return new TrustedUaProtocolError(
+    TRUSTED_UA_ERROR.INTERNAL,
     err instanceof Error ? err.message : String(err),
     { tool },
   );
@@ -290,7 +291,7 @@ interface ActiveToolCallState {
   tool: string;
   /** Client executing the call (undefined in single-client legacy mode). */
   clientId: string | undefined;
-  /** Last accepted x-pi-browser/tool_update sequence (0 = none). */
+  /** Last accepted x-trusted-ua/tool_update sequence (0 = none). */
   lastSequence: number;
   lastBatch: MailSearchResult | undefined;
   lastScanned: number | undefined;
@@ -310,7 +311,7 @@ interface PermissionGroupMember {
   toolCallId: string;
   toolName: string;
   resolve: () => void;
-  reject: (err: PiBrowserProtocolError) => void;
+  reject: (err: TrustedUaProtocolError) => void;
 }
 
 /** A session's in-flight coalesced permission prompt. */
@@ -391,7 +392,7 @@ export class CapabilityToolProvider {
   private readonly sessionAllowed = new Map<string, Set<string>>();
   /**
    * In-flight legacy tool calls: toolCallId → routing/sequence state.
-   * Used to validate x-pi-browser/tool_update notifications (session, call
+   * Used to validate x-trusted-ua/tool_update notifications (session, call
    * identity, client, monotonic sequence) and to recover the last streamed
    * batch when a call times out.
    */
@@ -434,8 +435,8 @@ export class CapabilityToolProvider {
   /** The ACP transport a tool call / permission prompt goes to (legacy mode). */
   private legacyTransport(): AcpTransportLike {
     if (this.transport) return this.transport;
-    throw new PiBrowserProtocolError(
-      PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+    throw new TrustedUaProtocolError(
+      TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
       "no connected client for tool call (registry mode requires a connected owner)",
     );
   }
@@ -455,7 +456,7 @@ export class CapabilityToolProvider {
    *
    * Control tools (pi_*) are only registered for the MCP-over-ACP mode:
    * they are served by the add-on's MCP server and have no equivalent on
-   * the legacy x-pi-browser/tool callback path.
+   * the legacy x-trusted-ua/tool callback path.
    *
    * `capabilities` selects the tool surface (plan §19): a client that
    * advertises "browser" gets the browser tools, one that advertises
@@ -513,7 +514,7 @@ export class CapabilityToolProvider {
       execute: async (toolCallId, args, _signal) => {
         const sessionId = idRef.id;
         if (!sessionId) {
-          throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "browser tool invoked before session id assigned");
+          throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "browser tool invoked before session id assigned");
         }
         const result = await this.routeTool(
           sessionId,
@@ -525,7 +526,7 @@ export class CapabilityToolProvider {
           ownerClientId,
           ownerApplication,
         );
-        return { content: result.content, details: { piBrowser: true, tool: entry.name } };
+        return { content: result.content, details: { trustedUa: true, tool: entry.name } };
       },
     }));
     // The host-side REPL (BROWSER-USE-REPL-PLAN.md): one `javascript` tool per
@@ -593,7 +594,7 @@ export class CapabilityToolProvider {
       // page.*/tabs.* primitives go through routeTool (and the caller gate).
       // The external-access switch still refuses the whole call.
       if (caller && !this.permissions.getExternalAccess()) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, EXTERNAL_ACCESS_OFF_MESSAGE, {
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED, EXTERNAL_ACCESS_OFF_MESSAGE, {
           tool: opts.tool,
         });
       }
@@ -653,8 +654,8 @@ export class CapabilityToolProvider {
       // be refused WITHOUT asking — no prompt, structured denial.
       if (this.permissions.isDenied(toolName)) {
         this.log.info(`${toolName}: persistently denied by the user — refusing without a prompt`);
-        throw new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+        throw new TrustedUaProtocolError(
+          TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
           `${toolName} is denied by the user in the Permission Configuration. Ask them to set it to Ask or Always approve.`,
           { tool: toolName },
         );
@@ -687,7 +688,7 @@ export class CapabilityToolProvider {
     const state = this.ensureState(sessionId, mode, mcpServerId, isOwnerPath ? targetTransport : undefined);
     // The session's own MCP-over-ACP connection is used only for the owner's
     // own tools; cross-app tools always go over the target client's legacy
-    // x-pi-browser/tool callback.
+    // x-trusted-ua/tool callback.
     const useOwnerMcp = isOwnerPath && state.mode === "mcp-acp" && state.mcp !== undefined;
     const transport: BrowserToolTransport = useOwnerMcp
       ? (state.mcp as NativeMcpOverAcpTransport)
@@ -734,7 +735,7 @@ export class CapabilityToolProvider {
    * Used by .probe/live-mail-search.mjs, which has no UI to click.
    */
   private autoApproves(toolName: string): boolean {
-    const raw = process.env.PI_BROWSER_AUTO_APPROVE;
+    const raw = envValue("AUTO_APPROVE");
     if (!raw) return false;
     const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
     return list.includes("*") || list.includes(toolName);
@@ -747,11 +748,11 @@ export class CapabilityToolProvider {
    * host.log; off in production.
    */
   private logToolIo(): boolean {
-    return process.env.PI_BROWSER_LOG_TOOL_IO === "1";
+    return envValue("LOG_TOOL_IO") === "1";
   }
 
   // ------------------------------------------------------------------
-  // Permission configuration (x-pi-browser/permissions|set|clear, §55)
+  // Permission configuration (x-trusted-ua/permissions|set|clear, §55)
   // ------------------------------------------------------------------
 
   /**
@@ -784,10 +785,10 @@ export class CapabilityToolProvider {
   /** Remember or forget ("ask") a caller's decision for one app. */
   setCallerPermission(caller: CallerRef, state: PermissionToolState): PermissionSetResult {
     if (caller.application !== "firefox" && caller.application !== "thunderbird") {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `unknown application: ${String(caller.application)}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `unknown application: ${String(caller.application)}`);
     }
     if (typeof caller.name !== "string" || caller.name === "") {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "caller name required");
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "caller name required");
     }
     this.permissions.setCallerState(caller.application, caller.name, state);
     // Running caller sessions re-check the store on their next call.
@@ -807,16 +808,16 @@ export class CapabilityToolProvider {
   setToolPermission(tool: string, state: PermissionToolState): PermissionSetResult {
     const entry = getGatedTool(tool);
     if (!entry) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool: ${tool}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool: ${tool}`);
     }
     if (entry.managedBy) {
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.INTERNAL,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.INTERNAL,
         `${tool} is managed by ${entry.managedBy} — its grant cannot be changed here`,
       );
     }
     if (entry.note) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${tool} has no toggleable state: ${entry.note}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${tool} has no toggleable state: ${entry.note}`);
     }
     this.permissions.setState(tool, state);
     this.log.info(`${tool}: persistent state set to "${state}" from Configuration page`);
@@ -831,7 +832,7 @@ export class CapabilityToolProvider {
     if (tool !== undefined) {
       const entry = getGatedTool(tool);
       if (!entry) {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool: ${tool}`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool: ${tool}`);
       }
       this.permissions.clear(tool);
       this.log.info(`${tool}: persistent allow cleared from Configuration page`);
@@ -865,7 +866,7 @@ export class CapabilityToolProvider {
         .filter((c) => c.type === "text")
         .map((c) => (c as { text: string }).text)
         .join("\n");
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, text || "browser tool failed", {
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, text || "browser tool failed", {
         tool: toolName,
       });
     }
@@ -873,7 +874,7 @@ export class CapabilityToolProvider {
   }
 
   /**
-   * Validate one x-pi-browser/tool_update notification (client → host) and
+   * Validate one x-trusted-ua/tool_update notification (client → host) and
    * forward it to the ACP mapping hook. Drops (never throws) when any check
    * fails:
    *   - the toolCallId is not an in-flight call;
@@ -982,7 +983,7 @@ export class CapabilityToolProvider {
     };
     this.log.info(`${ctx.toolName}: approval prompt shows in ${ctx.executingApp}; notifying session owner ${owner.clientId} (${owner.application})`);
     owner.transport
-      .request(X_PI_BROWSER.permission_prompted, params, 5_000)
+      .request(X_TRUSTED_UA.permission_prompted, params, 5_000)
       .catch((err) => {
         this.log.debug(
           `permission_prompted → owner ${owner.clientId} failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -1098,8 +1099,8 @@ export class CapabilityToolProvider {
         m.resolve();
       } else {
         m.reject(
-          new PiBrowserProtocolError(
-            PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+          new TrustedUaProtocolError(
+            TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
             failure ?? `user denied permission to run ${m.toolName}`,
             { tool: m.toolName },
           ),
@@ -1134,12 +1135,12 @@ export class CapabilityToolProvider {
       return registry.resolveTarget(ownerClientId, toolName);
     } catch (err) {
       const app = applicationForTool(toolName);
-      if (!caller || !app || !(err instanceof PiBrowserProtocolError) || err.code !== PI_BROWSER_ERROR.MCP_UNAVAILABLE) {
+      if (!caller || !app || !(err instanceof TrustedUaProtocolError) || err.code !== TRUSTED_UA_ERROR.MCP_UNAVAILABLE) {
         throw err;
       }
       const name = applicationShortName(app);
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
         `${toolName} needs ${name} with the Pi add-on running. Ask the user to open ${name}, then retry.`,
         { tool: toolName },
       );
@@ -1160,14 +1161,14 @@ export class CapabilityToolProvider {
   ): Promise<void> {
     if (!this.permissions.getExternalAccess()) {
       this.log.info(`${toolName}: external MCP access is off — refusing ${caller.name} without a prompt`);
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, EXTERNAL_ACCESS_OFF_MESSAGE, {
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED, EXTERNAL_ACCESS_OFF_MESSAGE, {
         tool: toolName,
       });
     }
     const appName = applicationShortName(app);
     const deniedError = () =>
-      new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+      new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
         `the user denied ${caller.name} access to the ${appName} tools. Ask them to allow it in the Pi permissions page.`,
         { tool: toolName },
       );
@@ -1230,7 +1231,7 @@ export class CapabilityToolProvider {
       const text = err instanceof TransportTimeoutError
         ? `the user did not respond within ${Math.round(this.permissionTimeoutMs / 1000)} s to the prompt allowing ${caller.name} to use the ${appName} tools`
         : `the prompt allowing ${caller.name} to use the ${appName} tools failed: ${err instanceof Error ? err.message : String(err)}`;
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED, text, { tool: toolName });
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED, text, { tool: toolName });
     }
     const outcome = (response as { outcome?: RequestPermissionResponse["outcome"] } | undefined)?.outcome;
     const optionId = outcome?.outcome === "selected" ? outcome.optionId : undefined;
@@ -1249,8 +1250,8 @@ export class CapabilityToolProvider {
       this.permissions.setCallerState(app, caller.name, "deny");
       this.cacheCallerDecision(sessionId, caller, app, "deny");
       this.log.info(`caller ${caller.name}: denied for ${app} (persisted)`);
-      throw new PiBrowserProtocolError(
-        PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+      throw new TrustedUaProtocolError(
+        TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
         `the user denied ${caller.name} access to the ${appName} tools. Ask them to allow it in the Pi permissions page.`,
         { tool: toolName },
       );
@@ -1258,8 +1259,8 @@ export class CapabilityToolProvider {
     // Cancelled (approval window closed, add-on-side timeout) or unknown:
     // deny this call only — nothing is remembered, the next call asks again.
     this.log.info(`caller ${caller.name}: approval for ${app} cancelled (not remembered)`);
-    throw new PiBrowserProtocolError(
-      PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+    throw new TrustedUaProtocolError(
+      TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
       `the user denied the request (the approval prompt for ${caller.name} was closed without an answer)`,
       { tool: toolName },
     );
@@ -1268,7 +1269,7 @@ export class CapabilityToolProvider {
   /**
    * Send a session/request_permission and remember it until it settles, so
    * a timeout or a closed caller session can withdraw it from the add-on UI
-   * (x-pi-browser/permission_withdrawn).
+   * (x-trusted-ua/permission_withdrawn).
    */
   private async sendTrackedPrompt(
     sessionId: string,
@@ -1329,9 +1330,9 @@ export class CapabilityToolProvider {
   }
 
 
-  /** Handle x-pi-browser/notify (tab closed/navigated, binding changes). */
+  /** Handle x-trusted-ua/notify (tab closed/navigated, binding changes). */
   handleNotify(params: BrowserNotifyParams): void {
-    this.log.debug(`x-pi-browser/notify ${params.event} session=${params.sessionId}`);
+    this.log.debug(`x-trusted-ua/notify ${params.event} session=${params.sessionId}`);
     // Element references are owned by the content script and validated at
     // use time (isConnected). No host-side ref state to invalidate today; the
     // hook exists so future transports can react (e.g. drop MCP connections

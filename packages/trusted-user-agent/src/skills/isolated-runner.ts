@@ -300,7 +300,7 @@ export class IsolatedSkillRunner {
             const result = await bridge.call({ tool: definition.name, args: params as Record<string, unknown>, toolCallId });
             return {
               content: result.content,
-              details: { piBrowser: true, tool: definition.name },
+              details: { trustedUa: true, tool: definition.name },
               ...(result.isError ? { isError: true } : {}),
             };
           },

@@ -55,7 +55,7 @@ export default function (pi: ExtensionAPI) {
           });
           return {
             content: result.content,
-            details: { piBrowser: true, tool: tool.name },
+            details: { trustedUa: true, tool: tool.name },
             ...(result.isError ? { isError: true } : {}),
           };
         },

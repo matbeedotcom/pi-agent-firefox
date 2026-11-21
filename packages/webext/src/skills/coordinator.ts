@@ -20,7 +20,7 @@
  * skills_result, routed to the gate/UI via onResult.
  */
 import {
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   parseSkillsContextRequestParams,
   parseSkillsResultParams,
   type SkillEvent,
@@ -130,7 +130,7 @@ export class SkillsCoordinator {
   /** Compile (or recompile) the page plan for one document. */
   async plan(id: DocumentIdentity): Promise<SkillsPlanResult> {
     const result = await this.opts.request<SkillsPlanResult>(
-      X_PI_BROWSER.skills_plan,
+      X_TRUSTED_UA.skills_plan,
       { source: this.source(id), url: id.url },
     );
     if (result.status === "ok" && result.plan) {
@@ -204,7 +204,7 @@ export class SkillsCoordinator {
     if (input.draftRevision !== undefined) event.draftRevision = input.draftRevision;
     if (input.causedBy !== undefined) event.causedBy = input.causedBy;
     return this.opts.request<SkillsEventResult>(
-      X_PI_BROWSER.skills_event,
+      X_TRUSTED_UA.skills_event,
       { event },
       15_000,
     );
@@ -212,11 +212,11 @@ export class SkillsCoordinator {
 
   async cancel(interactionId: string): Promise<SkillsCancelResult> {
     const params: SkillsCancelParams = { interactionId };
-    return this.opts.request<SkillsCancelResult>(X_PI_BROWSER.skills_cancel, params);
+    return this.opts.request<SkillsCancelResult>(X_TRUSTED_UA.skills_cancel, params);
   }
 
   status(): Promise<SkillsStatusResult> {
-    return this.opts.request<SkillsStatusResult>(X_PI_BROWSER.skills_status);
+    return this.opts.request<SkillsStatusResult>(X_TRUSTED_UA.skills_status);
   }
 
   /** Forget a document's snapshots/plan (navigation, removal, close). */
@@ -236,7 +236,7 @@ export class SkillsCoordinator {
    * Returns the JSON-RPC result, or undefined for unknown methods.
    */
   handleHostRequest(method: string, params: unknown): Promise<unknown> | unknown {
-    if (method === X_PI_BROWSER.skills_context) {
+    if (method === X_TRUSTED_UA.skills_context) {
       const request = parseSkillsContextRequestParams(params);
       const entry = this.snapshots.get(request.contextRef);
       if (!entry) throw new Error(`unknown contextRef: ${request.contextRef}`);
@@ -249,7 +249,7 @@ export class SkillsCoordinator {
       if (bytes > request.maxBytes) throw new Error("context snapshot exceeds limit");
       return { contextRef: request.contextRef, context, bytes };
     }
-    if (method === X_PI_BROWSER.skills_result) {
+    if (method === X_TRUSTED_UA.skills_result) {
       const result = parseSkillsResultParams(params);
       this.opts.onResult?.(result);
       const ack: SkillsResultAck = { delivered: true };

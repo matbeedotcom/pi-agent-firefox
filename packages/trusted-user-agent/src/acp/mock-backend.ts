@@ -6,12 +6,12 @@
  * ACP surface. Behaves like the real backend through the PiBackend seam:
  * sessions, streaming events, cancellation, history replay, and — when a
  * scripted turn requests it — execution of the session's custom tools
- * (the browser tools), which exercises the x-pi-browser/* and
+ * (the browser tools), which exercises the x-trusted-ua/* and
  * MCP-over-ACP paths end to end.
  */
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { PI_BROWSER_ERROR, PiBrowserProtocolError, codeFromErrorObject, isStructuredErrorObject } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError, codeFromErrorObject, isStructuredErrorObject } from "@trusted-ua/protocol";
 import type {
   BackendHistoryEntry,
   BackendEvent,
@@ -94,7 +94,7 @@ export class MockSession implements BackendSession {
     this.emit({ type: "tool_start", toolCallId, toolName: spec.toolName, args: spec.args ?? {} });
     try {
       if (!tool) {
-        const err = new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `mock: unknown tool ${spec.toolName}`);
+        const err = new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `mock: unknown tool ${spec.toolName}`);
         this.emit({ type: "tool_end", toolCallId, toolName: spec.toolName, result: { message: err.message }, isError: true });
         this.executedTools.push({ toolCallId, toolName: spec.toolName, isError: true, result: err.message });
         return;
@@ -106,7 +106,7 @@ export class MockSession implements BackendSession {
       // Preserve the structured code in the agent-visible failure text so
       // consumers can tell a BROWSER_TAB_CLOSED from a generic MCP failure.
       let message = err instanceof Error ? err.message : String(err);
-      if (err instanceof PiBrowserProtocolError) {
+      if (err instanceof TrustedUaProtocolError) {
         message = `[${err.code}] ${message}`;
       } else if (isStructuredErrorObject(err)) {
         message = `[${codeFromErrorObject(err)}] ${err.message}`;
@@ -180,7 +180,7 @@ export class MockSession implements BackendSession {
 
   async setModel(valueId: string): Promise<void> {
     if (valueId !== "mock/model-a" && valueId !== "mock/model-b") {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.ACP_CAPABILITY_UNSUPPORTED, `unknown model: ${valueId}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.ACP_CAPABILITY_UNSUPPORTED, `unknown model: ${valueId}`);
     }
     this.modelValueId = valueId;
     this.modelChanges.push(valueId);
@@ -248,7 +248,7 @@ export class MockBackend implements PiBackend {
   async openSession(opts: OpenSessionOptions): Promise<BackendSession> {
     const meta = this.known.get(opts.sessionId);
     if (!meta) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `mock session not found: ${opts.sessionId}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_NOT_FOUND, `mock session not found: ${opts.sessionId}`);
     }
     const prev = this.sessions.get(opts.sessionId);
     if (prev && !prev.isDisposed) {

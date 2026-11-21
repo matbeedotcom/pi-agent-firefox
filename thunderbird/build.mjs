@@ -72,7 +72,7 @@ await cp(path.join(root, "..", "assets", "icon.svg"), path.join(dist, "icons", "
 await cp(path.join(root, "src", "space", "index.html"), path.join(dist, "space", "index.html"));
 await cp(path.join(root, "src", "space", "style.css"), path.join(dist, "space", "style.css"));
 
-// The piPane pane page: a WebExtension page (TypeScript, like the Space) mounted
+// The trustedUaPane pane page: a WebExtension page (TypeScript, like the Space) mounted
 // in a <browser> by the Experiment. It reaches the background over a runtime
 // Port (name "pi-pane") for per-tab, streaming chat — the compact, message-inline
 // view that sits beside the email (the full Space stays the expanded view).

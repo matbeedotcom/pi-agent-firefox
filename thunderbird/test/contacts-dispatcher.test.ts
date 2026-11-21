@@ -9,7 +9,7 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 import { dispatchContactsTool } from "../src/background/contacts-dispatcher.js";
 
 interface Store {
@@ -277,7 +277,7 @@ test("no contacts mutation path exists", async () => {
   for (const name of ["contacts_create", "contacts_update", "contacts_delete"]) {
     await assert.rejects(
       dispatchContactsTool(name, {}),
-      (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+      (e: unknown) => e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND,
     );
   }
 });

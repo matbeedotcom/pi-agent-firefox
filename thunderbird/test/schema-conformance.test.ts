@@ -30,7 +30,7 @@ const MANIFEST_PATH = path.resolve(here, "../../manifest.json");
 const SCHEMA_PREFIX = "chrome/messenger/content/messenger/schemas/";
 
 /** Core / non-messenger namespaces that live outside the messenger schemas. */
-const EXEMPT_ROOTS = new Set(["runtime", "storage", "action", "tabs", "piPane"]);
+const EXEMPT_ROOTS = new Set(["runtime", "storage", "action", "tabs", "trustedUaPane"]);
 
 interface FnSpec {
   name: string;

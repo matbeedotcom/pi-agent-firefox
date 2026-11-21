@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ExecFn } from "./common.js";
 import type { CommandResult } from "./index.js";
-import { MCP_SERVER_NAME, mcpBridgePath, runMcpCommand, type McpSubcommand } from "./mcp.js";
+import { LEGACY_MCP_SERVER_NAME, MCP_SERVER_NAME, isOwnEntry, mcpBridgePath, runMcpCommand, type McpSubcommand } from "./mcp.js";
 
 export const MCP_CLIENTS = ["pi", "claude", "codex", "cursor", "gemini", "vscode"] as const;
 export type McpClientId = (typeof MCP_CLIENTS)[number];
@@ -65,11 +65,12 @@ interface ClientAdapter {
   location(ctx: McpClientContext): string;
   /** undefined when the client is present; otherwise why it is skipped. */
   detect(ctx: McpClientContext): string | undefined;
-  read(ctx: McpClientContext): Promise<EntryState>;
+  /** Read the entry named `name` (default: MCP_SERVER_NAME). */
+  read(ctx: McpClientContext, name?: string): Promise<EntryState>;
   /** Write or replace the entry. Throws with a user-facing message on failure. */
   write(ctx: McpClientContext, launch: Launch): Promise<void>;
   /** Remove the entry; false when there was nothing to remove. */
-  remove(ctx: McpClientContext): Promise<boolean>;
+  remove(ctx: McpClientContext, name?: string): Promise<boolean>;
 }
 
 function expectedLaunch(ctx: McpClientContext): Launch {
@@ -164,7 +165,7 @@ function jsonFileAdapter(spec: {
       existsSync(spec.marker(ctx)) || (spec.cli && findExecutable(spec.cli, ctx))
         ? undefined
         : `${spec.label} not found (no ${spec.marker(ctx)})`,
-    async read(ctx) {
+    async read(ctx, name = MCP_SERVER_NAME) {
       let config: JsonObject | undefined;
       try {
         config = readJsonConfig(spec.file(ctx));
@@ -172,7 +173,7 @@ function jsonFileAdapter(spec: {
         return { kind: "error", message: (err as Error).message };
       }
       const servers = config?.[spec.serversKey];
-      const entry = isObject(servers) ? servers[MCP_SERVER_NAME] : undefined;
+      const entry = isObject(servers) ? servers[name] : undefined;
       if (!isObject(entry)) return { kind: "missing" };
       return { kind: "present", command: entry.command, args: entry.args };
     },
@@ -185,12 +186,12 @@ function jsonFileAdapter(spec: {
       config[spec.serversKey] = servers;
       writeJsonConfig(file, config);
     },
-    async remove(ctx) {
+    async remove(ctx, name = MCP_SERVER_NAME) {
       const file = spec.file(ctx);
       const config = readJsonConfig(file);
       const servers = config?.[spec.serversKey];
-      if (!config || !isObject(servers) || !(MCP_SERVER_NAME in servers)) return false;
-      delete servers[MCP_SERVER_NAME];
+      if (!config || !isObject(servers) || !(name in servers)) return false;
+      delete servers[name];
       writeJsonConfig(file, config);
       return true;
     },
@@ -198,20 +199,30 @@ function jsonFileAdapter(spec: {
 }
 
 // ---------------------------------------------------------------------------
-// Codex: ~/.codex/config.toml [mcp_servers.pi-browser]
+// Codex: ~/.codex/config.toml [mcp_servers.trusted-ua]
 // ---------------------------------------------------------------------------
 
 export function codexConfigPath(ctx: Pick<McpClientContext, "env" | "homeDir">): string {
   return path.join(ctx.env.CODEX_HOME || path.join(ctx.homeDir, ".codex"), "config.toml");
 }
 
-const CODEX_HEADER = /^\s*\[\s*mcp_servers\s*\.\s*(?:pi-browser|"pi-browser")\s*\]\s*(?:#.*)?$/;
-const CODEX_SUBTABLE = /^\s*\[\s*mcp_servers\s*\.\s*(?:pi-browser|"pi-browser")\s*\./;
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function codexHeader(name: string): RegExp {
+  const n = escapeRe(name);
+  return new RegExp(`^\\s*\\[\\s*mcp_servers\\s*\\.\\s*(?:${n}|"${n}")\\s*\\]\\s*(?:#.*)?$`);
+}
+function codexSubtable(name: string): RegExp {
+  const n = escapeRe(name);
+  return new RegExp(`^\\s*\\[\\s*mcp_servers\\s*\\.\\s*(?:${n}|"${n}")\\s*\\.`);
+}
 const TABLE_HEADER = /^\s*\[/;
 
-/** Line range [start, end) of the [mcp_servers.pi-browser] table body (header included). */
-function codexTableRange(lines: string[]): { start: number; end: number } | undefined {
-  const start = lines.findIndex((l) => CODEX_HEADER.test(l));
+/** Line range [start, end) of the [mcp_servers.trusted-ua] table body (header included). */
+function codexTableRange(lines: string[], name: string = MCP_SERVER_NAME): { start: number; end: number } | undefined {
+  const header = codexHeader(name);
+  const start = lines.findIndex((l) => header.test(l));
   if (start === -1) return undefined;
   let end = start + 1;
   while (end < lines.length && !TABLE_HEADER.test(lines[end])) end++;
@@ -305,18 +316,18 @@ export function parseTomlValue(text: string): { ok: boolean; value?: unknown; in
   }
 }
 
-/** Insert or replace the managed keys of [mcp_servers.pi-browser]; other text is untouched. */
-export function upsertCodexToml(text: string, launch: Launch): string {
+/** Insert or replace the managed keys of [mcp_servers.trusted-ua]; other text is untouched. */
+export function upsertCodexToml(text: string, launch: Launch, name: string = MCP_SERVER_NAME): string {
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text === "" ? [] : text.split(/\r?\n/);
   const commandLine = `command = ${tomlString(launch.command)}`;
   const argsLine = `args = [${launch.args.map(tomlString).join(", ")}]`;
-  const range = codexTableRange(lines);
+  const range = codexTableRange(lines, name);
   if (!range) {
     const out = [...lines];
     while (out.length > 0 && out[out.length - 1] === "") out.pop();
     if (out.length > 0) out.push("");
-    out.push("[mcp_servers.pi-browser]", commandLine, argsLine, "");
+    out.push(`[mcp_servers.${name}]`, commandLine, argsLine, "");
     return out.join(eol);
   }
   const body = lines.slice(range.start + 1, range.end);
@@ -328,15 +339,16 @@ export function upsertCodexToml(text: string, launch: Launch): string {
   return [...lines.slice(0, range.start + 1), ...body, ...lines.slice(range.end)].join(eol);
 }
 
-/** Remove [mcp_servers.pi-browser] and its sub-tables; other text is untouched. */
-export function removeCodexToml(text: string): string | undefined {
+/** Remove [mcp_servers.trusted-ua] and its sub-tables; other text is untouched. */
+export function removeCodexToml(text: string, name: string = MCP_SERVER_NAME): string | undefined {
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
-  const range = codexTableRange(lines);
+  const range = codexTableRange(lines, name);
+  const subtable = codexSubtable(name);
   if (!range) return undefined;
   let end = range.end;
   // Sub-tables ([mcp_servers.pi-browser.env], ...) belong to the entry.
-  while (end < lines.length && CODEX_SUBTABLE.test(lines[end])) {
+  while (end < lines.length && subtable.test(lines[end])) {
     end++;
     while (end < lines.length && !TABLE_HEADER.test(lines[end])) end++;
   }
@@ -350,12 +362,13 @@ export function removeCodexToml(text: string): string | undefined {
   return out.join(eol);
 }
 
-export function readCodexEntry(text: string): EntryState {
+export function readCodexEntry(text: string, name: string = MCP_SERVER_NAME): EntryState {
   const lines = text.split(/\r?\n/);
-  if (lines.some((l) => /^\s*"?pi-browser"?\s*=\s*\{/.test(l))) {
-    return { kind: "error", message: "pi-browser is an inline table in config.toml — edit it by hand or remove it, then retry" };
+  const inline = new RegExp(`^\\s*"?${escapeRe(name)}"?\\s*=\\s*\\{`);
+  if (lines.some((l) => inline.test(l))) {
+    return { kind: "error", message: `${name} is an inline table in config.toml — edit it by hand or remove it, then retry` };
   }
-  const range = codexTableRange(lines);
+  const range = codexTableRange(lines, name);
   if (!range) return { kind: "missing" };
   const body = lines.slice(range.start + 1, range.end);
   return {
@@ -373,10 +386,10 @@ const codexAdapter: ClientAdapter = {
     existsSync(path.dirname(codexConfigPath(ctx))) || findExecutable("codex", ctx)
       ? undefined
       : `Codex not found (no ${path.dirname(codexConfigPath(ctx))})`,
-  async read(ctx) {
+  async read(ctx, name = MCP_SERVER_NAME) {
     const file = codexConfigPath(ctx);
     if (!existsSync(file)) return { kind: "missing" };
-    return readCodexEntry(readFileSync(file, "utf8"));
+    return readCodexEntry(readFileSync(file, "utf8"), name);
   },
   async write(ctx, launch) {
     const file = codexConfigPath(ctx);
@@ -394,17 +407,17 @@ const codexAdapter: ClientAdapter = {
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, upsertCodexToml(text, launch));
   },
-  async remove(ctx) {
+  async remove(ctx, name = MCP_SERVER_NAME) {
     const file = codexConfigPath(ctx);
     if (!existsSync(file)) return false;
     const exe = findExecutable("codex", ctx);
     if (exe) {
-      if ((await this.read(ctx)).kind === "missing") return false;
-      const res = await runCli(ctx, exe, ["mcp", "remove", MCP_SERVER_NAME]);
+      if ((await this.read(ctx, name)).kind === "missing") return false;
+      const res = await runCli(ctx, exe, ["mcp", "remove", name]);
       if (res.code !== 0) throw new Error(`codex mcp remove failed (exit ${res.code}): ${res.out}`);
       return true;
     }
-    const next = removeCodexToml(readFileSync(file, "utf8"));
+    const next = removeCodexToml(readFileSync(file, "utf8"), name);
     if (next === undefined) return false;
     writeFileSync(file, next);
     return true;
@@ -425,12 +438,12 @@ const claudeAdapter: ClientAdapter = {
   label: "Claude Code",
   location: (ctx) => `${claudeConfigPath(ctx)} (user scope, via the claude CLI)`,
   detect: (ctx) => (findExecutable("claude", ctx) ? undefined : "Claude Code CLI (claude) not found on PATH"),
-  async read(ctx) {
+  async read(ctx, name = MCP_SERVER_NAME) {
     // Read-only: Claude Code rewrites this file while it runs.
     try {
       const config = readJsonConfig(claudeConfigPath(ctx));
       const servers = config?.mcpServers;
-      const entry = isObject(servers) ? servers[MCP_SERVER_NAME] : undefined;
+      const entry = isObject(servers) ? servers[name] : undefined;
       if (!isObject(entry)) return { kind: "missing" };
       return { kind: "present", command: entry.command, args: entry.args };
     } catch (err) {
@@ -445,11 +458,11 @@ const claudeAdapter: ClientAdapter = {
     const res = await runCli(ctx, exe, ["mcp", "add-json", "--scope", "user", MCP_SERVER_NAME, json]);
     if (res.code !== 0) throw new Error(`claude mcp add-json failed (exit ${res.code}): ${res.out}`);
   },
-  async remove(ctx) {
-    if ((await this.read(ctx)).kind === "missing") return false;
+  async remove(ctx, name = MCP_SERVER_NAME) {
+    if ((await this.read(ctx, name)).kind === "missing") return false;
     const exe = findExecutable("claude", ctx);
     if (!exe) throw new Error("Claude Code CLI (claude) not found on PATH");
-    const res = await runCli(ctx, exe, ["mcp", "remove", "--scope", "user", MCP_SERVER_NAME]);
+    const res = await runCli(ctx, exe, ["mcp", "remove", "--scope", "user", name]);
     if (res.code !== 0) throw new Error(`claude mcp remove failed (exit ${res.code}): ${res.out}`);
     return true;
   },
@@ -514,19 +527,37 @@ async function runForAdapter(
   }
   const launch = expectedLaunch(ctx);
   const state = await adapter.read(ctx);
+  // A v0.4.0 entry of this package under the old name (openspec rename-trusted-user-agent D3).
+  const legacyState = await adapter.read(ctx, LEGACY_MCP_SERVER_NAME);
+  const legacy = legacyState.kind === "present" && isOwnEntry({ command: legacyState.command, args: legacyState.args });
   try {
     switch (sub) {
       case "install": {
         if (state.kind === "error") return { outcome: "error", lines: [`${tag} error — ${state.message}`] };
-        if (sameLaunch(state, launch)) return { outcome: "current", lines: [`${tag} already current in ${where}`] };
-        await adapter.write(ctx, launch);
-        return {
-          outcome: "installed",
-          lines: [`${tag} ${state.kind === "present" ? "updated" : "installed"} ${MCP_SERVER_NAME} in ${where}`],
-        };
+        const lines: string[] = [];
+        let outcome: ClientOutcome = "current";
+        if (sameLaunch(state, launch)) {
+          lines.push(`${tag} already current in ${where}`);
+        } else {
+          await adapter.write(ctx, launch);
+          outcome = "installed";
+          lines.push(`${tag} ${state.kind === "present" ? "updated" : "installed"} ${MCP_SERVER_NAME} in ${where}`);
+        }
+        if (legacy) {
+          await adapter.remove(ctx, LEGACY_MCP_SERVER_NAME);
+          outcome = "installed";
+          lines.push(`${tag} removed the old ${LEGACY_MCP_SERVER_NAME} entry`);
+        }
+        return { outcome, lines };
       }
       case "status": {
         if (state.kind === "error") return { outcome: "error", lines: [`${tag} error — ${state.message}`] };
+        if (state.kind === "missing" && legacy) {
+          return {
+            outcome: "stale",
+            lines: [`${tag} stale (${where}) — old name ${LEGACY_MCP_SERVER_NAME}; run trusted-ua mcp install ${adapter.id} to rename it to ${MCP_SERVER_NAME}`],
+          };
+        }
         if (state.kind === "missing") return { outcome: "missing", lines: [`${tag} missing (${where})`] };
         if (sameLaunch(state, launch)) return { outcome: "current", lines: [`${tag} current (${where})`] };
         return {
@@ -540,7 +571,8 @@ async function runForAdapter(
       }
       case "uninstall": {
         if (state.kind === "error") return { outcome: "error", lines: [`${tag} error — ${state.message}`] };
-        const removed = await adapter.remove(ctx);
+        const removedLegacy = legacy ? await adapter.remove(ctx, LEGACY_MCP_SERVER_NAME) : false;
+        const removed = (await adapter.remove(ctx)) || removedLegacy;
         return removed
           ? { outcome: "removed", lines: [`${tag} removed ${MCP_SERVER_NAME} from ${where}`] }
           : { outcome: "absent", lines: [`${tag} nothing to remove`] };

@@ -13,7 +13,7 @@
  * flat map so the full card is visible. Contact data is untrusted; the
  * extraction is defensive over vCard field names (FN/N, EMAIL, ORG, ...).
  */
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 
 export type ContactsToolResult = Record<string, unknown>;
 
@@ -27,7 +27,7 @@ const MAX_CONTACT_LIMIT = 50;
 function reqStr(args: Record<string, unknown>, key: string): string {
   const v = args[key];
   if (typeof v !== "string" || v.length === 0) {
-    throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${key} must be a non-empty string`);
+    throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${key} must be a non-empty string`);
   }
   return v;
 }
@@ -325,6 +325,6 @@ export async function dispatchContactsTool(
     case "contacts_list":
       return contactsList(args);
     default:
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown contacts tool: ${tool}`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown contacts tool: ${tool}`);
   }
 }

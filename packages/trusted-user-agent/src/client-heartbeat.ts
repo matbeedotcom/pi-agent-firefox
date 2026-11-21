@@ -18,6 +18,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { heartbeatFile, legacyHeartbeatFile } from "./paths.js";
+import { envValue } from "./env.js";
 
 /**
  * Client names the add-ons send in ACP `initialize` (acp-client.ts).
@@ -25,12 +27,15 @@ import path from "node:path";
  * can report per-app add-on presence (plan §23: both apps share the host).
  */
 export const ADDON_CLIENT_NAMES: readonly string[] = [
+  "trusted-ua-firefox",
+  "trusted-ua-thunderbird",
+  // v0.4.0 and older add-ons.
   "pi-browser-firefox",
   "pi-firefox",
   "pi-thunderbird",
 ];
-/** Legacy single-client constant (kept for tests/references). */
-export const ADDON_CLIENT_NAME = "pi-browser-firefox";
+/** Firefox add-on client name (clientInfo.name). */
+export const ADDON_CLIENT_NAME = "trusted-ua-firefox";
 
 export function isKnownAddonClient(name: string | undefined): name is string {
   return typeof name === "string" && ADDON_CLIENT_NAMES.includes(name);
@@ -48,8 +53,8 @@ export interface ClientHeartbeat {
 
 /** Application a client name belongs to (for per-app heartbeat files). */
 export function applicationForClient(name: string | undefined): "firefox" | "thunderbird" | undefined {
-  if (name === "pi-thunderbird") return "thunderbird";
-  if (name === "pi-browser-firefox" || name === "pi-firefox") return "firefox";
+  if (name === "trusted-ua-thunderbird" || name === "pi-thunderbird") return "thunderbird";
+  if (name === "trusted-ua-firefox" || name === "pi-browser-firefox" || name === "pi-firefox") return "firefox";
   return undefined;
 }
 
@@ -59,7 +64,7 @@ export function applicationForClient(name: string | undefined): "firefox" | "thu
  * report both applications independently (plan §23, cross-app broker).
  */
 export function heartbeatPathForHome(homeDir: string): string {
-  return process.env.PI_BROWSER_HEARTBEAT_FILE || path.join(homeDir, ".pi-browser", "client.heartbeat");
+  return heartbeatFile(process.env, homeDir);
 }
 
 export function heartbeatPath(): string {
@@ -68,9 +73,7 @@ export function heartbeatPath(): string {
 
 /** Per-app heartbeat file (e.g. client.heartbeat.thunderbird). */
 export function appHeartbeatPath(homeDir: string, application: "firefox" | "thunderbird"): string {
-  const dir = process.env.PI_BROWSER_HEARTBEAT_FILE
-    ? path.dirname(process.env.PI_BROWSER_HEARTBEAT_FILE)
-    : path.join(homeDir, ".pi-browser");
+  const dir = path.dirname(heartbeatFile(process.env, homeDir));
   return path.join(dir, `client.heartbeat.${application}`);
 }
 
@@ -117,6 +120,12 @@ export function readClientHeartbeat(
   const files: string[] = application
     ? [appHeartbeatPath(homeDir, application), heartbeatPathForHome(homeDir)]
     : [heartbeatPathForHome(homeDir)];
+  // A v0.4.0 host wrote ~/.pi-browser (no env override in that case).
+  if (!envValue("HEARTBEAT_FILE")) {
+    const legacy = legacyHeartbeatFile(homeDir);
+    if (application) files.push(path.join(path.dirname(legacy), `client.heartbeat.${application}`));
+    files.push(legacy);
+  }
   for (const file of files) {
     try {
       if (!existsSync(file)) continue;

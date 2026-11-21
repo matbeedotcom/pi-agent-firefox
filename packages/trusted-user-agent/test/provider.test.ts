@@ -22,9 +22,9 @@ import {
   PERMISSION_ALLOW_ONCE,
   PERMISSION_ALLOW_SESSION,
   PERMISSION_REJECT,
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
-  X_PI_BROWSER,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
+  X_TRUSTED_UA,
   toErrorObject,
   type JsonRpcErrorObject,
 } from "@trusted-ua/protocol";
@@ -50,7 +50,7 @@ function setupFakeFirefox(): FakeFirefox {
   const provider = new CapabilityToolProvider(b.transport, quiet, undefined, { permissionStore: store });
   const toolCalls: FakeFirefox["toolCalls"] = [];
   a.transport.onRequest = (method, params, id) => {
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { sessionId: string; tool: string; arguments: unknown };
       toolCalls.push({ sessionId: p.sessionId, tool: p.tool, args: p.arguments });
       // Default: echo a page result.
@@ -136,7 +136,7 @@ test("createTools: both capabilities register browser + mail + repl tools", () =
   assert.ok(names.includes("javascript"));
 });
 
-test("legacy transport: mail tool call round-trip over x-pi-browser/tool", async () => {
+test("legacy transport: mail tool call round-trip over x-trusted-ua/tool", async () => {
   const ff = setupFakeFirefox();
   const idRef = { id: "session-mail" };
   const tools = ff.provider.createTools(idRef, "legacy", undefined, ["mail"]);
@@ -168,9 +168,9 @@ function setupFakeThunderbird(answerOptionId: string = PERMISSION_REJECT) {
       const p = params as {
         sessionId: string;
         toolCall: { toolCallId: string; title: string };
-        _meta?: { piBrowser?: { tool?: string } };
+        _meta?: { trustedUa?: { tool?: string } };
       };
-      const tool = p._meta?.piBrowser?.tool ?? "?";
+      const tool = p._meta?.trustedUa?.tool ?? "?";
       permRequests.push({ sessionId: p.sessionId, tool, title: p.toolCall.title });
       if (answerOptionId === "cancelled") {
         a.transport.respond(id, { outcome: { outcome: "cancelled" } });
@@ -179,7 +179,7 @@ function setupFakeThunderbird(answerOptionId: string = PERMISSION_REJECT) {
       }
       return;
     }
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { tool: string };
       toolCalls.push({ tool: p.tool });
       a.transport.respond(id, { content: [{ type: "text", text: "ok" }] });
@@ -199,7 +199,7 @@ test("approval gate: thunderbird mail tool is denied until the user approves", a
   await assert.rejects(
     get.execute("tc-denied", { messageId: 42 }, undefined),
     (err: unknown) =>
-      err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+      err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
   );
   // The prompt went to the client naming the tool...
   assert.equal(tb.permRequests.length, 1);
@@ -340,7 +340,7 @@ test("approval gate: firefox client gates EVERY tool (2026-09-15: all tools gate
   await assert.rejects(
     get.execute("tc-ff", {}, undefined),
     (err: unknown) =>
-      err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+      err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
   );
   assert.equal(tb.permRequests.length, 1);
   assert.equal(tb.permRequests[0].tool, "mail_get_message");
@@ -354,7 +354,7 @@ test("approval gate: firefox client gates EVERY tool (2026-09-15: all tools gate
   await assert.rejects(
     getPage.execute("tc-ff2", {}, undefined),
     (err: unknown) =>
-      err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+      err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
   );
   assert.equal(ff.permRequests.length, 1);
   assert.equal(ff.permRequests[0].tool, "browser_get_page");
@@ -381,7 +381,7 @@ test("approval gate: allow_always persists to the permission store (survives res
       a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
       return;
     }
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       toolCallsAfterRestart += 1;
       a.transport.respond(id, { content: [{ type: "text", text: "ok" }] });
       return;
@@ -396,7 +396,7 @@ test("approval gate: allow_always persists to the permission store (survives res
 });
 
 // ---------------------------------------------------------------------------
-// Permission Configuration page (x-pi-browser/permissions|set|clear)
+// Permission Configuration page (x-trusted-ua/permissions|set|clear)
 // ---------------------------------------------------------------------------
 
 test("permissionConfig: lists the full gated inventory with live states", () => {
@@ -434,7 +434,7 @@ test("permission_set: toggling a tool on stops prompts; off re-enables them", as
   // First call: prompted (and denied by the fake user).
   await assert.rejects(
     search.execute("tc-1", {}, undefined),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
   );
   assert.equal(tb.permRequests.length, 1);
 
@@ -448,7 +448,7 @@ test("permission_set: toggling a tool on stops prompts; off re-enables them", as
   assert.deepEqual(tb.provider.setToolPermission("mail_search", "ask"), { tool: "mail_search", state: "ask" });
   await assert.rejects(
     search.execute("tc-3", {}, undefined),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
   );
   assert.equal(tb.permRequests.length, 2, "toggle off re-enables the prompt");
 });
@@ -457,7 +457,7 @@ test("permission_set: rejects unknown tools and non-toggleable rows", () => {
   const tb = setupFakeThunderbird(PERMISSION_REJECT);
   assert.throws(
     () => tb.provider.setToolPermission("totally_unknown_tool", "allow"),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND,
   );
   // Firefox owns the userScripts grant — the page cannot set it.
   assert.throws(
@@ -484,8 +484,8 @@ test("permission_set: Deny refuses the tool WITHOUT prompting", async () => {
   await assert.rejects(
     search.execute("tc-deny", {}, undefined),
     (err: unknown) =>
-      err instanceof PiBrowserProtocolError &&
-      err.code === PI_BROWSER_ERROR.BROWSER_PERMISSION_DENIED &&
+      err instanceof TrustedUaProtocolError &&
+      err.code === TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED &&
       /denied by the user/.test(err.message),
   );
   assert.equal(tb.permRequests.length, 0, "deny short-circuits before the prompt");
@@ -522,7 +522,7 @@ test("permission_clear: clears one tool, or every tool when omitted", async () =
   assert.equal(tb.toolCalls.length, 2);
 });
 
-test("legacy transport: tool call round-trip over x-pi-browser/tool", async () => {
+test("legacy transport: tool call round-trip over x-trusted-ua/tool", async () => {
   const ff = setupFakeFirefox();
   const idRef = { id: "session-123" };
   const tools = ff.provider.createTools(idRef, "legacy");
@@ -534,7 +534,7 @@ test("legacy transport: tool call round-trip over x-pi-browser/tool", async () =
   assert.equal(ff.toolCalls[0].tool, "browser_get_page");
   assert.equal(result.content[0].type, "text");
   assert.ok((result.content[0] as { text: string }).text.includes("Salvage Rush"));
-  assert.ok((result.details as { piBrowser: boolean }).piBrowser);
+  assert.ok((result.details as { trustedUa: boolean }).trustedUa);
 });
 
 test("legacy transport: structured errors from Firefox map to PiBrowser error codes", async () => {
@@ -545,8 +545,8 @@ test("legacy transport: structured errors from Firefox map to PiBrowser error co
       ff.a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
       return;
     }
-    if (method === X_PI_BROWSER.tool) {
-      ff.a.transport.respondError(id, toErrorObject(PI_BROWSER_ERROR.BROWSER_TAB_CLOSED, "bound tab is gone", { tabId: 9 }));
+    if (method === X_TRUSTED_UA.tool) {
+      ff.a.transport.respondError(id, toErrorObject(TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED, "bound tab is gone", { tabId: 9 }));
       return;
     }
     ff.a.transport.respondError(id, { code: -32601, message: "unknown" });
@@ -556,7 +556,7 @@ test("legacy transport: structured errors from Firefox map to PiBrowser error co
   await assert.rejects(
     click!.execute("tc", { ref: "el-1" }, undefined),
     (err: unknown) =>
-      err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.BROWSER_TAB_CLOSED,
+      err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED,
   );
 });
 
@@ -565,20 +565,20 @@ test("translateTransportError maps transport errors to structured codes", async 
   const { TransportTimeoutError, TransportClosedError } = await import("../src/native-host/transport.js");
 
   const timeout = translateTransportError(
-    new TransportTimeoutError("x-pi-browser/tool", 40),
+    new TransportTimeoutError("x-trusted-ua/tool", 40),
     "browser_get_page",
   );
-  assert.equal(timeout.code, PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT);
+  assert.equal(timeout.code, TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT);
 
   const closed = translateTransportError(new TransportClosedError(), "browser_get_page");
-  assert.equal(closed.code, PI_BROWSER_ERROR.MCP_UNAVAILABLE);
+  assert.equal(closed.code, TRUSTED_UA_ERROR.MCP_UNAVAILABLE);
 
   // Structured JSON-RPC error objects keep their Pi Browser code.
   const structured = translateTransportError(
-    { jsonrpc: "2.0", code: -32010, message: "tab gone", data: { piBrowserError: "BROWSER_TAB_CLOSED" } },
+    { jsonrpc: "2.0", code: -32010, message: "tab gone", data: { trustedUaError: "BROWSER_TAB_CLOSED" } },
     "browser_click",
   );
-  assert.equal(structured.code, PI_BROWSER_ERROR.BROWSER_TAB_CLOSED);
+  assert.equal(structured.code, TRUSTED_UA_ERROR.BROWSER_TAB_CLOSED);
 });
 
 test("legacy transport: real timeout over a non-responding peer", async () => {
@@ -587,13 +587,13 @@ test("legacy transport: real timeout over a non-responding peer", async () => {
   // b has a handler that never responds -> a's request genuinely times out.
   b.transport.onRequest = () => {};
   const transport = new LegacyBrowserCallbackTransport(a.transport, { timeoutMs: () => 30, slackMs: 20 });
-  const err = (await transport.call("s1", "browser_get_page", {}).catch((e) => e)) as PiBrowserProtocolError;
-  assert.ok(err instanceof PiBrowserProtocolError);
-  assert.equal(err.code, PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT);
+  const err = (await transport.call("s1", "browser_get_page", {}).catch((e) => e)) as TrustedUaProtocolError;
+  assert.ok(err instanceof TrustedUaProtocolError);
+  assert.equal(err.code, TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT);
 });
 
 // ---------------------------------------------------------------------------
-// Incremental tool progress (x-pi-browser/tool_update, protocol v3)
+// Incremental tool progress (x-trusted-ua/tool_update, protocol v3)
 // ---------------------------------------------------------------------------
 
 test("tool_update: batches forwarded in order; malformed/mismatched updates dropped", async () => {
@@ -602,7 +602,7 @@ test("tool_update: batches forwarded in order; malformed/mismatched updates drop
   // The ACP agent wires host-transport notifications to the provider in
   // production; replicate that seam here.
   b.transport.onNotification = (method, params) => {
-    if (method === X_PI_BROWSER.tool_update) {
+    if (method === X_TRUSTED_UA.tool_update) {
       provider.handleToolUpdate(params as never, undefined);
     }
   };
@@ -615,12 +615,12 @@ test("tool_update: batches forwarded in order; malformed/mismatched updates drop
       a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
       return;
     }
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { sessionId: string; tool: string; toolCallId: string };
       assert.equal(p.tool, "mail_search");
       assert.equal(p.toolCallId, "tc-mail"); // the host passes the active tool-call id
       const send = (update: unknown, sequence: number) =>
-        a.transport.notify(X_PI_BROWSER.tool_update, {
+        a.transport.notify(X_TRUSTED_UA.tool_update, {
           sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence, update,
         });
       send({ kind: "batch", result: { messages: [{ messageId: 1, subject: "A" }], nextCursor: "sc-a", complete: false, sortComplete: false, scanned: 10 } }, 1);
@@ -629,11 +629,11 @@ test("tool_update: batches forwarded in order; malformed/mismatched updates drop
       send({ kind: "progress", scanned: 30 }, 1); // regressed sequence -> dropped
       send({ kind: "complete" }, 3);              // accepted
       // Mismatched session -> dropped.
-      a.transport.notify(X_PI_BROWSER.tool_update, { sessionId: "other-session", toolCallId: p.toolCallId, tool: "mail_search", sequence: 4, update: { kind: "progress", scanned: 1 } });
+      a.transport.notify(X_TRUSTED_UA.tool_update, { sessionId: "other-session", toolCallId: p.toolCallId, tool: "mail_search", sequence: 4, update: { kind: "progress", scanned: 1 } });
       // Non-streaming tool -> dropped.
-      a.transport.notify(X_PI_BROWSER.tool_update, { sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_get_message", sequence: 5, update: { kind: "progress", scanned: 1 } });
+      a.transport.notify(X_TRUSTED_UA.tool_update, { sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_get_message", sequence: 5, update: { kind: "progress", scanned: 1 } });
       // Unknown toolCall -> dropped.
-      a.transport.notify(X_PI_BROWSER.tool_update, { sessionId: p.sessionId, toolCallId: "tc-unknown", tool: "mail_search", sequence: 1, update: { kind: "progress", scanned: 1 } });
+      a.transport.notify(X_TRUSTED_UA.tool_update, { sessionId: p.sessionId, toolCallId: "tc-unknown", tool: "mail_search", sequence: 1, update: { kind: "progress", scanned: 1 } });
       a.transport.respond(id, { content: [{ type: "text", text: JSON.stringify({ messages: [{ messageId: 1 }, { messageId: 2 }], nextCursor: null, complete: true, sortComplete: true, scanned: 20 }) }] });
       return;
     }
@@ -671,7 +671,7 @@ test("tool_update: broker mode drops updates from a client that is not executing
       a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
       return;
     }
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { sessionId: string; tool: string; toolCallId: string };
       // From the executing client (tb-1): accepted.
       provider.handleToolUpdate({ sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence: 1, update: { kind: "progress", scanned: 5 } }, "tb-1");
@@ -695,18 +695,18 @@ test("legacy transport: timed-out mail_search returns a resumable partial", asyn
     permissionStore: tempPermissionStore(),
   });
   b.transport.onNotification = (method, params) => {
-    if (method === X_PI_BROWSER.tool_update) provider.handleToolUpdate(params as never, undefined);
+    if (method === X_TRUSTED_UA.tool_update) provider.handleToolUpdate(params as never, undefined);
   };
   a.transport.onRequest = (method, params, id) => {
     if (method === CLIENT_METHODS.session_request_permission) {
       a.transport.respond(id, { outcome: { outcome: "selected", optionId: PERMISSION_ALLOW_ONCE } });
       return;
     }
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { sessionId: string; tool: string; toolCallId: string };
       // Stream one batch, then go silent: the request never answers.
       setTimeout(() => {
-        a.transport.notify(X_PI_BROWSER.tool_update, {
+        a.transport.notify(X_TRUSTED_UA.tool_update, {
           sessionId: p.sessionId, toolCallId: p.toolCallId, tool: "mail_search", sequence: 1,
           update: { kind: "batch", result: { messages: [{ messageId: 1, subject: "A" }], nextCursor: "sc-abc", complete: false, sortComplete: false, scanned: 1200 } },
         });
@@ -715,9 +715,9 @@ test("legacy transport: timed-out mail_search returns a resumable partial", asyn
     }
   };
   const search = provider.createTools({ id: "s-mail3" }, "legacy", undefined, ["mail"]).find((t) => t.name === "mail_search");
-  const err = (await search!.execute("tc-to", { text: "x" }, undefined).catch((e) => e)) as PiBrowserProtocolError;
-  assert.ok(err instanceof PiBrowserProtocolError);
-  assert.equal(err.code, PI_BROWSER_ERROR.BROWSER_TOOL_TIMEOUT);
+  const err = (await search!.execute("tc-to", { text: "x" }, undefined).catch((e) => e)) as TrustedUaProtocolError;
+  assert.ok(err instanceof TrustedUaProtocolError);
+  assert.equal(err.code, TRUSTED_UA_ERROR.BROWSER_TOOL_TIMEOUT);
   assert.deepEqual(err.data, { tool: "mail_search", partial: true, scanned: 1200, nextCursor: "sc-abc" });
 });
 
@@ -796,7 +796,7 @@ function setupMcpFirefox() {
             });
             return;
           }
-          a.transport.respondError(id, toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool ${call.name}`));
+          a.transport.respondError(id, toErrorObject(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown tool ${call.name}`));
           return;
         }
         default:
@@ -862,7 +862,7 @@ test("mcp-acp transport: unknown serverId surfaces as MCP_UNAVAILABLE", async ()
   const transport = new NativeMcpOverAcpTransport(ff.b.transport, "wrong-id", quiet, "s");
   await assert.rejects(
     transport.call("s", "browser_get_page", {}),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MCP_UNAVAILABLE,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
   );
 });
 
@@ -883,7 +883,7 @@ test("provider: mcp-acp session routes tool execution through the MCP channel", 
   await ff.provider.disposeSession("session-y");
 });
 
-test("provider: x-pi-browser/notify is accepted without error", async () => {
+test("provider: x-trusted-ua/notify is accepted without error", async () => {
   const ff = setupFakeFirefox();
   ff.provider.handleNotify({ sessionId: "s1", event: "tab_closed" });
   ff.provider.handleNotify({ sessionId: "s1", event: "tab_navigated", data: { url: "http://x" } });
@@ -916,7 +916,7 @@ function setupReplFake(): ReplFake {
   };
   const toolCalls: ReplFake["toolCalls"] = [];
   a.transport.onRequest = (method, params, id) => {
-    if (method === X_PI_BROWSER.tool) {
+    if (method === X_TRUSTED_UA.tool) {
       const p = params as { sessionId: string; tool: string; arguments: unknown };
       toolCalls.push({ sessionId: p.sessionId, tool: p.tool, args: p.arguments });
       if (behavior.error) {
@@ -958,7 +958,7 @@ test("javascript: no bound tab surfaces BROWSER_NOT_BOUND as a cell error (not a
   const ws = await mkdtemp(path.join(tmpdir(), "pi-repl-prov-"));
   process.env.PI_BROWSER_REPL_DIR = ws;
   try {
-    fake.behavior.error = toErrorObject(PI_BROWSER_ERROR.BROWSER_NOT_BOUND, "session s-nb has no bound tab");
+    fake.behavior.error = toErrorObject(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "session s-nb has no bound tab");
     const js = await replSession(fake, "s-nb");
     const result = await js.execute("tc", { code: "await page.info()" }, undefined);
     const text = result.content.map((c) => (c.type === "text" ? c.text : "")).join("\n");

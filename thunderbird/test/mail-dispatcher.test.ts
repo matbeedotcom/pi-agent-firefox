@@ -9,7 +9,7 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 import { dispatchMailTool, __tests } from "../src/background/mail-dispatcher.js";
 
 // ---------------------------------------------------------------------------
@@ -74,12 +74,12 @@ interface Store {
   continueDelayMs?: number;
   activeContinues?: number;
   maxActiveContinues?: number;
-  /** Gloda (piSearch experiment API) hits to return for text searches. */
+  /** Gloda (trustedUaSearch experiment API) hits to return for text searches. */
   glodaHits?: Array<Record<string, unknown>>;
-  /** Fake state: how many times piSearch.searchMessages() was called. */
+  /** Fake state: how many times trustedUaSearch.searchMessages() was called. */
   glodaCalls?: number;
   lastGlodaQuery?: { text: string; options?: Record<string, unknown> };
-  /** When true, the piSearch API is exposed (Gloda path). */
+  /** When true, the trustedUaSearch API is exposed (Gloda path). */
   glodaEnabled?: boolean;
 }
 
@@ -121,7 +121,7 @@ function installStub(): void {
         return { id: null, messages: store.displayedMessages ?? [] };
       },
     },
-    piSearch: {
+    trustedUaSearch: {
       get searchMessages() {
         if (store.glodaEnabled !== true) return undefined;
         return async (text: string, options?: { limit?: number; andTerms?: boolean }) => {
@@ -291,7 +291,7 @@ test("mail_get_selected_messages: defaults to the current tab", async () => {
 test("mail_get_selected_messages: no mail tab -> MAIL_NO_CONTEXT", async () => {
   await assert.rejects(
     call("mail_get_selected_messages"),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MAIL_NO_CONTEXT,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MAIL_NO_CONTEXT,
   );
 });
 
@@ -315,12 +315,12 @@ test("mail_get_message: returns normalized metadata", async () => {
 test("mail_get_message: missing message -> MAIL_MESSAGE_NOT_FOUND", async () => {
   await assert.rejects(
     call("mail_get_message", { messageId: 999 }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MAIL_MESSAGE_NOT_FOUND,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MAIL_MESSAGE_NOT_FOUND,
   );
 });
 
 test("mail_get_message: requires messageId", async () => {
-  await assert.rejects(call("mail_get_message"), (err: unknown) => err instanceof PiBrowserProtocolError);
+  await assert.rejects(call("mail_get_message"), (err: unknown) => err instanceof TrustedUaProtocolError);
 });
 
 // ---------------------------------------------------------------------------
@@ -448,7 +448,7 @@ test("mail_search: a text query uses the Gloda index when available (complete, s
   assert.equal(cont.nextCursor, null);
 });
 
-test("mail_search: without piSearch the text query falls back to the WDAPI scan", async () => {
+test("mail_search: without trustedUaSearch the text query falls back to the WDAPI scan", async () => {
   store.search = [{ id: 11, subject: "old" }];
   store.searchCursor = { id: 12, subject: "older" };
   const res = await call("mail_search", { text: "pi browser" });
@@ -497,11 +497,11 @@ test("mail_search: invalid sort/order values are rejected", async () => {
   store.search = [{ id: 10 }];
   await assert.rejects(
     call("mail_search", { sort: "size" }),
-    (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.INTERNAL,
+    (e: unknown) => e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.INTERNAL,
   );
   await assert.rejects(
     call("mail_search", { order: "upwards" }),
-    (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.INTERNAL,
+    (e: unknown) => e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.INTERNAL,
   );
 });
 
@@ -525,14 +525,14 @@ test("mail_search: an unknown/evicted registry token fails with a structured cur
   await assert.rejects(
     call("mail_search", { cursor: "scdeadbeefdeadbeef" }),
     (e: unknown) =>
-      e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.MAIL_CURSOR_EXPIRED,
+      e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.MAIL_CURSOR_EXPIRED,
   );
 });
 
 test("mail_search: unknown tool is rejected; empty store yields empty page", async () => {
   const res = await call("mail_search", {});
   assert.deepEqual(res.messages, []);
-  await assert.rejects(call("mail_definitely_not_a_tool"), (e: unknown) => e instanceof PiBrowserProtocolError);
+  await assert.rejects(call("mail_definitely_not_a_tool"), (e: unknown) => e instanceof TrustedUaProtocolError);
 });
 
 test("mail_search: filters by tag, resolving names to keys (mode any by default)", async () => {
@@ -558,7 +558,7 @@ test("mail_search: unknown tag name -> PI_NOT_FOUND", async () => {
   store.tags = [{ key: "finance", tag: "Finance" }];
   await assert.rejects(
     call("mail_search", { tags: ["nonexistent"] }),
-    (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.PI_NOT_FOUND,
+    (e: unknown) => e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.PI_NOT_FOUND,
   );
 });
 
@@ -814,7 +814,7 @@ test("mail_get_attachment: returns base64 and truncates large files", async () =
 test("mail_get_attachment: missing file -> MAIL_ATTACHMENT_NOT_FOUND", async () => {
   await assert.rejects(
     call("mail_get_attachment", { messageId: 31, partName: "x" }),
-    (err: unknown) => err instanceof PiBrowserProtocolError && err.code === PI_BROWSER_ERROR.MAIL_ATTACHMENT_NOT_FOUND,
+    (err: unknown) => err instanceof TrustedUaProtocolError && err.code === TRUSTED_UA_ERROR.MAIL_ATTACHMENT_NOT_FOUND,
   );
 });
 
@@ -938,7 +938,7 @@ test("mail_search: abandoned cursors expire and are swept on the next issuance",
   await assert.rejects(
     call("mail_search", { cursor: res.nextCursor }),
     (e: unknown) =>
-      e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.MAIL_CURSOR_EXPIRED,
+      e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.MAIL_CURSOR_EXPIRED,
   );
   const res2 = (await call("mail_search", { text: "x" })) as any;
   assert.ok(res2.nextCursor);

@@ -8,7 +8,7 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { TRUSTED_UA_ERROR, TrustedUaProtocolError } from "@trusted-ua/protocol";
 import { dispatchMutationTool } from "../src/background/mutation-dispatcher.js";
 import { keyForName } from "../src/background/tag-utils.js";
 
@@ -145,7 +145,7 @@ test("messageIds must be a non-empty array of numbers", async () => {
   await assert.rejects(
     dispatchMutationTool("mail_archive", { messageIds: [] }),
     (e: unknown) =>
-      e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.INTERNAL && /messageIds/.test(e.message),
+      e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.INTERNAL && /messageIds/.test(e.message),
   );
 });
 
@@ -157,6 +157,6 @@ test("no delete / permanent-delete path exists", async () => {
   // mail_delete is not a known mutation tool.
   await assert.rejects(
     dispatchMutationTool("mail_delete", { messageIds: [1] }),
-    (e: unknown) => e instanceof PiBrowserProtocolError && e.code === PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND,
+    (e: unknown) => e instanceof TrustedUaProtocolError && e.code === TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND,
   );
 });

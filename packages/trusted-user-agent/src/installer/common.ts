@@ -16,14 +16,14 @@
  * No separately downloaded bridge: the launcher execs the bundled Node
  * host (same JS implementation on every platform).
  */
-import { PI_AGENT, PI_BROWSER } from "@trusted-ua/protocol";
+import { TRUSTED_UA_HOST, TRUSTED_UA } from "@trusted-ua/protocol";
 
 /** Application-neutral host name (manifest `name`). */
-export const NATIVE_HOST_NAME = PI_AGENT.nativeHost;
+export const NATIVE_HOST_NAME = TRUSTED_UA_HOST.nativeHost;
 /** Legacy Firefox host name; removed on uninstall for cleanup. */
-export const LEGACY_NATIVE_HOST_NAME = PI_AGENT.legacyNativeHost;
+export const LEGACY_NATIVE_HOST_NAME = TRUSTED_UA_HOST.legacyNativeHost;
 /** All add-on IDs the host manifest authorizes (plan §2). */
-export const ALLOWED_EXTENSIONS: string[] = [...PI_AGENT.authorizedExtensions];
+export const ALLOWED_EXTENSIONS: string[] = [...TRUSTED_UA_HOST.authorizedExtensions];
 
 export type AgentApp = "firefox" | "thunderbird";
 /** CLI target: one app or both. */
@@ -126,6 +126,6 @@ export function cmdLauncherContent(nodePath: string, mainJs: string): string {
 /** Friendly load-instructions for an app's built add-on (status/install output). */
 export function addonLoadHint(app: AgentApp): string {
   return app === "firefox"
-    ? "load the Firefox add-on (firefox/dist/manifest.json, id " + PI_BROWSER.extensionId + "): Firefox → about:debugging#aboutThisFirefoxBrowser → “Load Temporary Add-on…” → pick firefox/dist/manifest.json"
+    ? "load the Firefox add-on (firefox/dist/manifest.json, id " + TRUSTED_UA.extensionId + "): Firefox → about:debugging#aboutThisFirefoxBrowser → “Load Temporary Add-on…” → pick firefox/dist/manifest.json"
     : "load the Thunderbird add-on (thunderbird/dist/manifest.json, id pi-agent-thunderbird@matbee.com): Thunderbird → about:debugging#aboutThisThunderbird → “Load Temporary Add-on…” → pick thunderbird/dist/manifest.json";
 }

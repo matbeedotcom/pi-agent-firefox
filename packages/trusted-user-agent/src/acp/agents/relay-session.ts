@@ -18,8 +18,8 @@
 import {
   CLIENT_METHODS,
   PERMISSION_WITHDRAWN_METHOD,
-  PI_BROWSER_ERROR,
-  PiBrowserProtocolError,
+  TRUSTED_UA_ERROR,
+  TrustedUaProtocolError,
   type AcpTransportLike,
   type ContentBlock,
   type PermissionWithdrawnParams,
@@ -53,7 +53,7 @@ export interface RelayHost {
    */
   touchIndex(session: AcpRelaySession, title?: string, firstPrompt?: string): void;
   /** Map an agent error to a readable protocol error. */
-  describeError(agentId: string, err: unknown, action: string): PiBrowserProtocolError;
+  describeError(agentId: string, err: unknown, action: string): TrustedUaProtocolError;
   /** The session went away (closed or owner disconnected). */
   forget(session: AcpRelaySession): void;
 }
@@ -204,11 +204,11 @@ export class AcpRelaySession {
     const toolCall = isRecord(p.toolCall) ? p.toolCall : {};
     const toolCallId = typeof toolCall.toolCallId === "string" ? toolCall.toolCallId : `agent-perm-${Date.now()}`;
     const meta = isRecord(p._meta) ? p._meta : {};
-    const piBrowser = isRecord(meta.piBrowser) ? meta.piBrowser : {};
+    const trustedUa = isRecord(meta.trustedUa) ? meta.trustedUa : {};
     const request = {
       ...p,
       sessionId: this.id,
-      _meta: { ...meta, piBrowser: { ...piBrowser, agent: { id: this.agentId, name: this.agentName } } },
+      _meta: { ...meta, trustedUa: { ...trustedUa, agent: { id: this.agentId, name: this.agentName } } },
     };
     const release = this.host.liveConnection(this.agentId)?.hold();
     let settle!: (result: unknown) => void;
@@ -272,8 +272,8 @@ export class AcpRelaySession {
     try {
       const conn = await this.host.connection(this.agentId);
       if (!conn.init?.loadSession) {
-        throw new PiBrowserProtocolError(
-          PI_BROWSER_ERROR.SESSION_NOT_FOUND,
+        throw new TrustedUaProtocolError(
+          TRUSTED_UA_ERROR.SESSION_NOT_FOUND,
           `${this.agentName} stopped and can't reopen this session. Start a new session.`,
         );
       }
@@ -295,14 +295,14 @@ export class AcpRelaySession {
       return conn;
     } catch (err) {
       this.send({ sessionUpdate: "tool_call_update", toolCallId: cardId, status: "failed", title: `${this.agentName} did not start` } as SessionUpdate);
-      if (err instanceof PiBrowserProtocolError) throw err;
+      if (err instanceof TrustedUaProtocolError) throw err;
       throw this.host.describeError(this.agentId, err, "reopen the session");
     }
   }
 
   async prompt(prompt: ContentBlock[]): Promise<{ stopReason: string }> {
     if (this.streaming) {
-      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_BUSY, `session ${this.id} is busy`);
+      throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.SESSION_BUSY, `session ${this.id} is busy`);
     }
     this.streaming = true;
     try {
@@ -320,10 +320,10 @@ export class AcpRelaySession {
       this.host.touchIndex(this);
       return { stopReason: typeof result?.stopReason === "string" ? result.stopReason : "end_turn" };
     } catch (err) {
-      if (err instanceof PiBrowserProtocolError) throw err;
+      if (err instanceof TrustedUaProtocolError) throw err;
       if (err instanceof AgentStoppedError) {
         this.dormant = true;
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, `${err.message}. Send your message again to restart it.`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, `${err.message}. Send your message again to restart it.`);
       }
       throw this.host.describeError(this.agentId, err, "answer");
     } finally {
@@ -358,11 +358,11 @@ export class AcpRelaySession {
         await conn.request("session/set_mode", { sessionId: this.id, modeId: value });
         this.setLocalValue(configId, value);
       } else {
-        throw new PiBrowserProtocolError(PI_BROWSER_ERROR.ACP_CAPABILITY_UNSUPPORTED, `unknown config option: ${configId}`);
+        throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.ACP_CAPABILITY_UNSUPPORTED, `unknown config option: ${configId}`);
       }
       return this.configOptions;
     } catch (err) {
-      if (err instanceof PiBrowserProtocolError) throw err;
+      if (err instanceof TrustedUaProtocolError) throw err;
       throw this.host.describeError(this.agentId, err, "change the setting");
     } finally {
       release();

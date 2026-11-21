@@ -2,7 +2,7 @@
  * Approval window for external MCP callers (openspec external-mcp-callers,
  * D6). Shared by the Firefox and Thunderbird backgrounds.
  *
- * A permission request that carries `_meta.piBrowser.caller` comes from an
+ * A permission request that carries `_meta.trustedUa.caller` comes from an
  * agent outside the add-on (Claude Code, Codex, ...). The user is usually in
  * that other program, so the prompt never goes to the sidebar / Space: the
  * background opens (or focuses) ONE popup window per app, which shows the

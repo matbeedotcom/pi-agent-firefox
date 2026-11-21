@@ -33,8 +33,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   AGENT_METHODS,
-  PI_BROWSER_ERROR,
-  X_PI_BROWSER,
+  TRUSTED_UA_ERROR,
+  X_TRUSTED_UA,
   toErrorObject,
 } from "@trusted-ua/protocol";
 import { McpServer } from "@trusted-ua/firefox/mcp-server";
@@ -128,7 +128,7 @@ class FakeBrowser {
     });
   }
   attach(host) {
-    host.on(X_PI_BROWSER.tool, (params) => this.dispatch(params));
+    host.on(X_TRUSTED_UA.tool, (params) => this.dispatch(params));
     host.on("mcp/connect", (params) => this.mcpServer.handleConnect(params));
     host.on("mcp/message", (params) => this.mcpServer.handleMessage(params));
     host.on("mcp/disconnect", (params) => this.mcpServer.handleDisconnect(params));
@@ -137,7 +137,7 @@ class FakeBrowser {
     }));
     // Cross-app heads-up: this client's session has a tool waiting for
     // approval in ANOTHER app (display-only; ack it).
-    host.on(X_PI_BROWSER.permission_prompted, (params) => {
+    host.on(X_TRUSTED_UA.permission_prompted, (params) => {
       this.promptedElsewhere.push(params);
       return { ok: true };
     });
@@ -152,7 +152,7 @@ class FakeBrowser {
       case "browser_get_selection":
         return { content: [{ type: "text", text: "SELECTION: 'password field'" }] };
       default:
-        throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${params.tool}`);
+        throw toErrorObject(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown browser tool: ${params.tool}`);
     }
   }
 }
@@ -167,14 +167,14 @@ class FakeMail {
     this.answerPermission = () => ({ outcome: { outcome: "selected", optionId: "allow_always" } });
   }
   attach(host) {
-    host.on(X_PI_BROWSER.tool, (params) => this.dispatch(params));
+    host.on(X_TRUSTED_UA.tool, (params) => this.dispatch(params));
     // Mail tools are approval-gated: the fake user answers via answerPermission.
     host.on("session/request_permission", (params) => {
       this.permRequests.push(params);
       return this.answerPermission(params);
     });
     // Cross-app heads-up (display-only; ack it).
-    host.on(X_PI_BROWSER.permission_prompted, (params) => {
+    host.on(X_TRUSTED_UA.permission_prompted, (params) => {
       this.promptedElsewhere.push(params);
       return { ok: true };
     });
@@ -196,7 +196,7 @@ class FakeMail {
       case "contacts_search":
         return { content: [{ type: "text", text: JSON.stringify({ count: 1, contacts: [{ id: "c1", name: "Alice" }] }) }] };
       default:
-        throw toErrorObject(PI_BROWSER_ERROR.MCP_TOOL_NOT_FOUND, `unknown mail tool: ${params.tool}`);
+        throw toErrorObject(TRUSTED_UA_ERROR.MCP_TOOL_NOT_FOUND, `unknown mail tool: ${params.tool}`);
     }
   }
 }
@@ -224,14 +224,14 @@ async function startScenario(script, firstApp = "firefox", simultaneous = false)
     clientCapabilities: { loadSession: true },
     clientInfo: { name: "pi-browser-firefox", version: "0.1.1" },
     _meta: {
-      piAgent: {
-        type: "pi.agent.hello",
+      trustedUaAgent: {
+        type: "trusted-ua.hello",
         client: { application: "firefox", extensionId: "pi-agent-firefox@matbee.com", version: "0.1.1" },
         capabilities: ["browser"],
       },
     },
   });
-  assert.equal(ffInit._meta?.piAgent?.application, "firefox");
+  assert.equal(ffInit._meta?.trustedUaAgent?.application, "firefox");
 
   // Give the relay a moment to be wired before TB initializes (it must
   // round-trip through host B → socket → broker).
@@ -240,16 +240,16 @@ async function startScenario(script, firstApp = "firefox", simultaneous = false)
     clientCapabilities: { loadSession: true },
     clientInfo: { name: "pi-thunderbird", version: "0.1.1" },
     _meta: {
-      piAgent: {
-        type: "pi.agent.hello",
+      trustedUaAgent: {
+        type: "trusted-ua.hello",
         client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
         capabilities: ["mail", "attachments", "compose", "mailModify", "contacts"],
       },
     },
   }, 20_000);
-  assert.equal(tbInit._meta?.piAgent?.application, "thunderbird", "TB hello routed through the relay");
+  assert.equal(tbInit._meta?.trustedUaAgent?.application, "thunderbird", "TB hello routed through the relay");
   assert.deepEqual(
-    tbInit._meta?.piAgent?.capabilities,
+    tbInit._meta?.trustedUaAgent?.capabilities,
     ["mail", "attachments", "compose", "mailModify", "contacts"],
   );
 
@@ -300,7 +300,7 @@ test("cross-app: Firefox-owned session calls browser AND mail tools (one session
 
     // The approval prompts for the cross-app mail tools were routed through
     // the relay to the EXECUTING client (Thunderbird), not Firefox.
-    const prompted = sc.mail.permRequests.map((p) => p?._meta?.piBrowser?.tool);
+    const prompted = sc.mail.permRequests.map((p) => p?._meta?.trustedUa?.tool);
     assert.ok(prompted.includes("mail_get_selected_messages"), "mail prompt reached Thunderbird");
     assert.ok(prompted.includes("compose_prepare_reply"), "compose prompt reached Thunderbird");
 
@@ -492,8 +492,8 @@ test("lifecycle: broker survives relay disconnect; peer re-attaches later", asyn
       clientCapabilities: { loadSession: true },
       clientInfo: { name: "pi-thunderbird", version: "0.1.1" },
       _meta: {
-        piAgent: {
-          type: "pi.agent.hello",
+        trustedUaAgent: {
+          type: "trusted-ua.hello",
           client: { application: "thunderbird", extensionId: "pi-agent-thunderbird@matbee.com", version: "0.1.1" },
           capabilities: ["mail", "attachments"],
         },

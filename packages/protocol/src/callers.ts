@@ -7,14 +7,14 @@
  * REPL state, routed to whichever connected app serves the tool, and with no
  * add-on chat session needed.
  *
- * - The bridge names the caller with the `pi-browser/caller` notification
+ * - The bridge names the caller with the `trusted-ua/caller` notification
  *   (the MCP client's `clientInfo` from `initialize`, plus process ids).
  *   Direct socket clients are named from their own `initialize`.
  * - Processes the host itself spawned (pi subagents and their MCP servers)
  *   inherit `PI_BROWSER_HOST_CHILD=<broker instance id>`; when the value the
  *   bridge reports matches the running broker, the call keeps the old
  *   "most recently active add-on session" routing.
- * - Permission prompts for caller sessions carry `_meta.piBrowser.caller`.
+ * - Permission prompts for caller sessions carry `_meta.trustedUa.caller`.
  *   Add-ons show those in an approval window instead of the sidebar/Space.
  * - Before a caller's first tool call in an app, the user approves the
  *   caller for that app (stored per app + caller name). A global
@@ -22,16 +22,21 @@
  */
 import type { AgentApplication } from "./integration.js";
 
+/** Name of the MCP server in clients' configs (v0.4.0: "pi-browser", see legacy.ts). */
+export const MCP_SERVER_NAME = "trusted-ua";
+
 /** MCP notification the stdio bridge sends to the broker after each connect. */
-export const MCP_CALLER_NOTIFICATION = "pi-browser/caller";
+export const MCP_CALLER_NOTIFICATION = "trusted-ua/caller";
 
 /** Environment variable the broker sets for every process it spawns. */
-export const HOST_CHILD_ENV = "PI_BROWSER_HOST_CHILD";
+export const HOST_CHILD_ENV = "TRUSTED_UA_HOST_CHILD";
+/** v0.4.0 name of HOST_CHILD_ENV (still set, and read as a fallback). */
+export const LEGACY_HOST_CHILD_ENV = "PI_BROWSER_HOST_CHILD";
 
 /** Caller name used when a client never identified itself. */
 export const UNKNOWN_CALLER_NAME = "unknown MCP client";
 
-/** Params of the `pi-browser/caller` notification. */
+/** Params of the `trusted-ua/caller` notification. */
 export interface CallerInfo {
   /** The MCP client's self-reported name (`clientInfo.name`). Not authenticated. */
   name: string;
@@ -51,19 +56,19 @@ export interface CallerInfo {
   parentSession?: string;
 }
 
-/** `_meta.piBrowser.caller` on a session/request_permission for a caller session. */
+/** `_meta.trustedUa.caller` on a session/request_permission for a caller session. */
 export interface PermissionCallerMeta {
   name: string;
   version?: string;
 }
 
 /**
- * `_meta.piBrowser` of a session/request_permission. `tool` is set for tool
+ * `_meta.trustedUa` of a session/request_permission. `tool` is set for tool
  * prompts; `callerApproval` marks the one-time "allow <caller> to use <App>
  * tools?" prompt (then `tool` is absent and `triggerTool` names the tool call
  * that needs it).
  */
-export interface PermissionRequestPiBrowserMeta {
+export interface PermissionRequestTrustedUaMeta {
   tool?: string;
   triggerTool?: string;
   caller?: PermissionCallerMeta;
@@ -83,7 +88,7 @@ export interface PermissionRequestPiBrowserMeta {
  * showing no longer needs an answer (it timed out, or its caller session
  * ended). The approval window drops it. Older add-ons ignore it.
  */
-export const PERMISSION_WITHDRAWN_METHOD = "x-pi-browser/permission_withdrawn";
+export const PERMISSION_WITHDRAWN_METHOD = "x-trusted-ua/permission_withdrawn";
 
 export interface PermissionWithdrawnParams {
   sessionId: string;
@@ -96,7 +101,7 @@ export interface PermissionWithdrawnParams {
  * Firefox releases the session's tab binding and closes its REPL-owned
  * tabs. Older add-ons ignore it.
  */
-export const SESSION_ENDED_METHOD = "x-pi-browser/session_ended";
+export const SESSION_ENDED_METHOD = "x-trusted-ua/session_ended";
 
 export interface SessionEndedParams {
   sessionId: string;
@@ -116,7 +121,7 @@ export interface CallerRef {
   name: string;
 }
 
-/** One remembered caller decision (x-pi-browser/permissions `callers`). */
+/** One remembered caller decision (x-trusted-ua/permissions `callers`). */
 export interface CallerPermissionEntry extends CallerRef {
   state: CallerPermissionState;
 }
@@ -142,7 +147,7 @@ export function normalizeCallerName(raw: unknown): string {
   return cleaned || UNKNOWN_CALLER_NAME;
 }
 
-/** Parse `pi-browser/caller` params (or `initialize` clientInfo) defensively. */
+/** Parse `trusted-ua/caller` params (or `initialize` clientInfo) defensively. */
 export function parseCallerInfo(raw: unknown): CallerInfo {
   const r = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   const out: CallerInfo = { name: normalizeCallerName(r.name) };

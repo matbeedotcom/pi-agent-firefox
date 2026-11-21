@@ -7,14 +7,14 @@
  * browser theme" we read the active lightweight theme via browser.theme
  * (Firefox 84+ / Thunderbird 115+; no extra permission) in the background
  * event page — the only context where the API is guaranteed — and ship the
- * snapshot inside the usual pi/state push. applyPiTheme() maps the LWT color
+ * snapshot inside the usual pi/state push. applyTrustedUaTheme() maps the LWT color
  * keys onto the page's CSS custom properties.
  */
 
-export type PiThemeMode = "light" | "dark";
+export type TrustedUaThemeMode = "light" | "dark";
 
-export interface PiTheme {
-  mode: PiThemeMode;
+export interface TrustedUaTheme {
+  mode: TrustedUaThemeMode;
   /** LWT color keys (frame, toolbar, text, accent, ...) as hex/rgb strings. */
   colors: Record<string, string>;
 }
@@ -33,7 +33,7 @@ interface ThemeResult {
  * undefined when the API is unavailable (we then keep the page's own
  * dark palette) or on any error.
  */
-export async function fetchPiTheme(): Promise<PiTheme | undefined> {
+export async function fetchTrustedUaTheme(): Promise<TrustedUaTheme | undefined> {
   const browserAny: unknown = (globalThis as { browser?: unknown }).browser;
   const api = (browserAny as { theme?: unknown } | undefined)?.theme as
     | { getTheme?: () => Promise<ThemeResult>; getCurrent?: () => Promise<ThemeResult> }
@@ -48,7 +48,7 @@ export async function fetchPiTheme(): Promise<PiTheme | undefined> {
     }
     // Firefox reports `mode`; Thunderbird reports properties.color_scheme.
     const cs = t.properties?.color_scheme;
-    const mode: PiThemeMode =
+    const mode: TrustedUaThemeMode =
       t.mode === "light" || t.mode === "dark" ? t.mode : cs === "light" || cs === "dark" ? cs : "dark";
     return { mode, colors };
   } catch (err) {
@@ -78,21 +78,21 @@ const THEME_VARS: ReadonlyArray<readonly [string, string]> = [
 
 /**
  * Apply a theme snapshot to the current document (panel pages only — call
- * fetchPiTheme in the background). A theme with no colors (API unavailable)
+ * fetchTrustedUaTheme in the background). A theme with no colors (API unavailable)
  * simply clears any previous overrides, falling back to the page palette.
  */
 let lastAppliedKey = "";
 
-export function applyPiTheme(theme: PiTheme | undefined): void {
+export function applyTrustedUaTheme(theme: TrustedUaTheme | undefined): void {
   // Called on every state push; re-apply only when the snapshot changed.
   const key = theme ? JSON.stringify(theme) : "";
   if (key === lastAppliedKey) return;
   lastAppliedKey = key;
   const root = document.documentElement;
   if (theme) {
-    root.dataset.piTheme = theme.mode;
+    root.dataset.trustedUaTheme = theme.mode;
   } else {
-    delete root.dataset.piTheme;
+    delete root.dataset.trustedUaTheme;
   }
   for (const [colorKey, cssVar] of THEME_VARS) {
     const value = theme?.colors[colorKey];

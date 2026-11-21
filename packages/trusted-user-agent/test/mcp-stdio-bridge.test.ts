@@ -102,7 +102,7 @@ test("bridge: initialize + tools/list answer locally — no broker running", asy
   const client = new StdioClient();
   try {
     const init = await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
-    assert.equal((init.result as { serverInfo: { name: string } }).serverInfo.name, "pi-browser");
+    assert.equal((init.result as { serverInfo: { name: string } }).serverInfo.name, "trusted-ua");
     client.notify("notifications/initialized");
     const list = await client.request("tools/list");
     const names = (list.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
@@ -218,7 +218,7 @@ test("bridge: a host child (marker matches the broker) keeps the old session rou
   }
 });
 
-test("bridge: an older broker that ignores pi-browser/caller still serves calls", async () => {
+test("bridge: an older broker that ignores trusted-ua/caller still serves calls", async () => {
   // v0.2.5's dispatch: unknown notifications are dropped, tools/call answered.
   const { defaultMcpEndpoint } = await import("../src/native-host/mcp-server.js");
   const { mkdirSync } = await import("node:fs");
@@ -247,7 +247,8 @@ test("bridge: an older broker that ignores pi-browser/caller still serves calls"
     await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "gemini-cli" } });
     const res = await client.request("tools/call", { name: "browser_get_page", arguments: {} });
     assert.equal(callText(res), "old-ok");
-    assert.match(lines[0], /"method":"pi-browser\/caller"/, "the caller notification goes first");
+    assert.match(lines[0], /"method":"trusted-ua\/caller"/, "the caller notification goes first");
+    assert.match(lines[1], /"method":"pi-browser\/caller"/, "then the v0.4.0 name, for an older broker");
   } finally {
     await client.close().catch(() => undefined);
     client.child.kill();

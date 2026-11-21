@@ -18,7 +18,7 @@ import {
   AGENT_METHODS,
   CLIENT_METHODS,
   PERMISSION_WITHDRAWN_METHOD,
-  X_PI_BROWSER,
+  X_TRUSTED_UA,
   type AgentsResult,
   type SessionNotification,
 } from "@trusted-ua/protocol";
@@ -188,7 +188,7 @@ function setup(cfg: FakeAgentConfig = {}, opts: { permissionTimeoutMs?: number; 
 }
 
 async function newSession(h: Harness, agentId = "fake"): Promise<{ sessionId: string; configOptions: Array<{ id: string; currentValue: unknown }>; _meta?: unknown }> {
-  return h.request(AGENT_METHODS.session_new, { cwd: h.dir, mcpServers: [], _meta: { piBrowser: { agent: agentId } } }, 30_000);
+  return h.request(AGENT_METHODS.session_new, { cwd: h.dir, mcpServers: [], _meta: { trustedUa: { agent: agentId } } }, 30_000);
 }
 
 async function promptText(h: Harness, sessionId: string, text: string): Promise<{ stopReason: string }> {
@@ -210,11 +210,11 @@ function initCount(h: Harness): number {
 // Registry and process
 // ---------------------------------------------------------------------------
 
-test("x-pi-browser/agents lists pi first, available agents, and missing commands with a reason", async () => {
+test("x-trusted-ua/agents lists pi first, available agents, and missing commands with a reason", async () => {
   const h = setup();
   try {
     writeAgents(h.agentsFile, h.dir, h.logFile, {}, { ghost: { name: "Ghost", command: "definitely-not-a-real-agent-cmd" } });
-    const res = await h.request<AgentsResult>(X_PI_BROWSER.agents, {});
+    const res = await h.request<AgentsResult>(X_TRUSTED_UA.agents, {});
     assert.equal(res.defaultAgent, "pi");
     assert.equal(res.agents[0]!.id, "pi");
     assert.equal(res.agents.find((a) => a.id === "fake")?.available, true);
@@ -231,7 +231,7 @@ test("an invalid agents.json keeps the built-in agents and reports the parse err
   const h = setup();
   try {
     writeFileSync(h.agentsFile, "{ not json");
-    const res = await h.request<AgentsResult>(X_PI_BROWSER.agents, {});
+    const res = await h.request<AgentsResult>(X_TRUSTED_UA.agents, {});
     assert.ok(res.agents.some((a) => a.id === "claude"));
     assert.ok(!res.agents.some((a) => a.id === "fake"));
     assert.match(res.configError ?? "", /agents\.json/);
@@ -265,7 +265,7 @@ test("the agent starts on its first session; one process serves two sessions; pi
     assert.equal(initCount(h), 1, "initialized once");
     const pids = new Set(h.log().map((l) => l.pid));
     assert.equal(pids.size, 1, "one process");
-    assert.deepEqual((s1._meta as { piBrowser: { agent: unknown } }).piBrowser.agent, { id: "fake", name: "Fake Agent" });
+    assert.deepEqual((s1._meta as { trustedUa: { agent: unknown } }).trustedUa.agent, { id: "fake", name: "Fake Agent" });
   } finally {
     await h.close();
   }
@@ -353,9 +353,9 @@ test("sessions are listed with their agent and reopen through the agent after a 
   try {
     sessionId = (await newSession(h1)).sessionId;
     await promptText(h1, sessionId, "hello there");
-    const list = await h1.request<{ sessions: Array<{ sessionId: string; title?: string | null; _meta?: { piBrowser?: { agent?: unknown } } }> }>(AGENT_METHODS.session_list, { cwd: null });
+    const list = await h1.request<{ sessions: Array<{ sessionId: string; title?: string | null; _meta?: { trustedUa?: { agent?: unknown } } }> }>(AGENT_METHODS.session_list, { cwd: null });
     const entry = list.sessions.find((x) => x.sessionId === sessionId);
-    assert.deepEqual(entry?._meta?.piBrowser?.agent, { id: "fake", name: "Fake Agent" });
+    assert.deepEqual(entry?._meta?.trustedUa?.agent, { id: "fake", name: "Fake Agent" });
     assert.equal(entry?.title, "hello there");
   } finally {
     await h1.close();
@@ -515,7 +515,7 @@ test("permission relay: the agent's options pass through, labelled with the agen
       ["reject", "Reject"],
     ]);
     assert.equal((req.toolCall as { title: string }).title, "Run npm test");
-    assert.deepEqual((req._meta as { piBrowser: { agent: unknown } }).piBrowser.agent, { id: "fake", name: "Fake Agent" });
+    assert.deepEqual((req._meta as { trustedUa: { agent: unknown } }).trustedUa.agent, { id: "fake", name: "Fake Agent" });
     assert.match(agentText(h, s.sessionId), /permission: always/);
     // Nothing remembered: the next request is passed through again.
     await promptText(h, s.sessionId, "perm");
