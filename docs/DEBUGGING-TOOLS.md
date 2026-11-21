@@ -55,7 +55,7 @@ The host's capability provider chooses the tool executor:
 
 | Execution path | Wire messages | Implementation |
 | --- | --- | --- |
-| Thunderbird mail and cross-app callbacks | `x-pi-browser/tool`, optional `x-pi-browser/tool_update` | `packages/trusted-user-agent/src/browser/provider.ts`, `packages/webext/src/acp-client.ts`, `thunderbird/src/background/index.ts` |
+| Thunderbird mail and cross-app callbacks | `x-trusted-ua/tool`, optional `x-trusted-ua/tool_update` (`x-pi-browser/*` from v0.4.0 peers) | `packages/trusted-user-agent/src/browser/provider.ts`, `packages/webext/src/acp-client.ts`, `thunderbird/src/background/index.ts` |
 | Firefox MCP-over-ACP | `mcp/connect`, `mcp/message`, `mcp/disconnect`; nested MCP `tools/call` | `packages/trusted-user-agent/src/browser/mcp-acp-client.ts`, `firefox/src/background/mcp-server.ts` |
 | Browser `javascript` tool | REPL worker invokes ordinary browser tools | `packages/trusted-user-agent/src/repl/`, then the provider above |
 
@@ -102,7 +102,7 @@ Linux inspection:
 
 ```sh
 pgrep -af 'native-host/main.js|thunderbird'
-ls -lt ~/.pi/browser/logs/host-*.log | head
+ls -lt ~/.trusted-ua/logs/host-*.log | head
 ss -lxnp | rg 'agent-broker'
 node packages/trusted-user-agent/dist/installer/cli.js doctor
 ```
@@ -114,14 +114,14 @@ tail -n 160 /absolute/path/to/selected-host.log
 rg -n 'initialize:|registry:|permission:|mail_search|round-trip|tool_update|unknown id|session/cancel' /absolute/path/to/selected-host.log
 ```
 
-`PI_BROWSER_LOG_LEVEL=debug` adds host diagnostics, including tool starts/results.
-`PI_BROWSER_LOG_FILE=/absolute/path/to/debug.log` selects the log destination.
+`TRUSTED_UA_LOG_LEVEL=debug` adds host diagnostics, including tool starts/results.
+`TRUSTED_UA_LOG_FILE=/absolute/path/to/debug.log` selects the log destination.
 Set these in the launcher environment **before the host starts**; setting them in
 an unrelated terminal does not change a running host. Debug logs and session
 transcripts can contain message content, tool arguments and results; retain only
 the evidence needed for the bug report.
 
-The default broker socket is `~/.pi/run/agent-broker.sock`. It is private host IPC,
+The default broker socket is `~/.trusted-ua/run/agent-broker.sock`. It is private host IPC,
 not an HTTP endpoint or Thunderbird debugger port. Creating a fresh session after
 both apps connect avoids an older session's stale tool capability selection.
 
@@ -145,7 +145,7 @@ PI_MATRIX_TEXT='addons.mozilla.org' PI_MATRIX_TERM='mozilla' \
 The mail probe temporarily replaces
 `~/.mozilla/native-messaging-hosts/com.matbee.agent.json`, terminates current host
 processes, and lets Thunderbird reconnect to a scripted mock broker. This interrupts
-active host sessions. It supplies a narrowly scoped `PI_BROWSER_AUTO_APPROVE` test
+active host sessions. It supplies a narrowly scoped `TRUSTED_UA_AUTO_APPROVE` test
 override and restores the registration during cleanup. Run one such probe at a time;
 after interruption verify the registration and reconnect to the normal host.
 Do not leave the test approval override in a normal launcher.
@@ -183,7 +183,7 @@ assertion can fail against a newer working host.
 
 ## Attach to live Thunderbird
 
-For a quick read-only engine test, open the Pi Thunderbird **background** inspector
+For a quick read-only engine test, open the Trusted User Agent for Thunderbird **background** inspector
 from `about:debugging`, choose its console, and evaluate:
 
 ```js

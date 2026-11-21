@@ -293,3 +293,9 @@ test("relay: preserves an ACP frame coalesced with the handshake ack", { timeout
     rmSync(brokerPaths().state, { force: true });
   }
 });
+
+test("ipc endpoint: the v0.4.0 pipe prefix is available for the bridge's fallback", async () => {
+  const { LEGACY_PIPE_PREFIX } = await import("../src/native-host/broker-ipc.js");
+  const dir = String.raw`C:\Users\u\.pi\run`;
+  assert.match(ipcEndpoint(dir, "agent-broker-mcp.sock", "win32", LEGACY_PIPE_PREFIX), /^\\\\\.\\pipe\\pi-agent-[0-9a-f]{16}-agent-broker-mcp$/);
+});

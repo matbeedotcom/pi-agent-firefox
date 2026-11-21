@@ -468,7 +468,9 @@ async function sendPrompt(sessionId: string, text: string, automatic = false): P
 
 const client = new AcpClient(
   {
-    clientName: "trusted-ua-firefox",
+    // Wire identity, kept from v0.4.0 like the add-on ID: v0.4.0 hosts only
+    // record add-on presence (status/doctor) for client names they know.
+    clientName: "pi-browser-firefox",
     application: "firefox",
     capabilities: ["browser"],
     extensionId: TRUSTED_UA.extensionId,

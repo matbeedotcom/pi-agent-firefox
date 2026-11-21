@@ -12,7 +12,7 @@ The product is called **Trusted User Agent** (npm `trusted-user-agent`, command 
 - **Environment variables:** `TRUSTED_UA_*`, with `PI_BROWSER_*` still read as a fallback. Processes the host starts get both.
 - **Commands:** the pi command becomes `/trusted-ua`; `/pi-browser` keeps working.
 - **Code:** identifiers, workspace packages (`@pi-browser/*` → `@trusted-ua/*`) and the host package directory (`packages/pi-agent` → `packages/trusted-user-agent`) are renamed.
-- **Unchanged:** add-on IDs (`pi-agent-firefox@matbee.com`, `pi-agent-thunderbird@matbee.com`; AMO and existing installs depend on them), the native host name `com.matbee.agent`, tool names (`browser_*`, `mail_*`, ...), the GitHub repository name.
+- **Unchanged:** add-on IDs (`pi-agent-firefox@matbee.com`, `pi-agent-thunderbird@matbee.com`; AMO and existing installs depend on them), the add-ons' ACP client names (`pi-browser-firefox`, `pi-thunderbird`; older hosts detect the add-ons by them), the native host name `com.matbee.agent`, tool names (`browser_*`, `mail_*`, ...), the GitHub repository name.
 
 ## Capabilities
 

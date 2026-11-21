@@ -9,7 +9,7 @@
 
 **Goals:** one product name everywhere; new names on the wire, on disk and in the environment; v0.4.0 add-ons, hosts, MCP entries, files and environment variables keep working.
 
-**Non-Goals:** changing add-on IDs, the native host name, tool names, the repository name; renaming the pi agent's own things (`pi`, `~/.pi/agent`, `PI_CODING_AGENT_DIR`); rewriting historical design docs.
+**Non-Goals:** changing add-on IDs, the add-ons' ACP client names (`pi-browser-firefox`, `pi-thunderbird`: v0.4.0 hosts record add-on presence for `status`/`doctor` only under those names; found in task 8.4), the native host name, tool names, the repository name; renaming the pi agent's own things (`pi`, `~/.pi/agent`, `PI_CODING_AGENT_DIR`); rewriting historical design docs.
 
 ## Decisions
 

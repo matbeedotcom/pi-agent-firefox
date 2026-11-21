@@ -30,7 +30,7 @@
 import net from "node:net";
 import { createInterface } from "node:readline";
 import { LEGACY_MCP_CALLER_NOTIFICATION, MCP_CALLER_NOTIFICATION, normalizeCallerName, type CallerInfo } from "@trusted-ua/protocol";
-import { defaultMcpEndpoint, mcpInitializeResult, mcpToolListResult } from "./mcp-server.js";
+import { defaultMcpEndpoint, legacyMcpEndpoint, mcpInitializeResult, mcpToolListResult } from "./mcp-server.js";
 import { envValue } from "../env.js";
 
 /** How long a tools/call waits to connect to the broker before giving up. */
@@ -59,7 +59,9 @@ export interface BridgeOptions {
 
 /** Run the bridge until `input` ends. Resolves when it has shut down. */
 export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
-  const endpoint = opts.endpoint ?? defaultMcpEndpoint();
+  // The broker's endpoint, then a v0.4.0 broker's (an older host still
+  // running after the package was upgraded; openspec rename-trusted-user-agent).
+  const endpoints = opts.endpoint ? [opts.endpoint] : [defaultMcpEndpoint(), legacyMcpEndpoint()];
   const log = opts.log ?? (() => {});
   const write = (msg: unknown) => opts.output.write(`${JSON.stringify(msg)}\n`);
   const reply = (id: unknown, result: unknown) => write({ jsonrpc: "2.0", id, result });
@@ -85,7 +87,20 @@ export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
 
   function connect(): Promise<net.Socket | undefined> {
     if (socket && !socket.destroyed) return Promise.resolve(socket);
-    connecting ??= new Promise<net.Socket | undefined>((resolve) => {
+    connecting ??= (async () => {
+      for (const endpoint of endpoints) {
+        const s = await connectTo(endpoint);
+        if (s) return s;
+      }
+      return undefined;
+    })().finally(() => {
+      connecting = undefined;
+    });
+    return connecting;
+  }
+
+  function connectTo(endpoint: string): Promise<net.Socket | undefined> {
+    return new Promise<net.Socket | undefined>((resolve) => {
       const s = net.createConnection(endpoint);
       const timer = setTimeout(() => {
         s.destroy();
@@ -131,10 +146,7 @@ export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
         log(`broker not reachable at ${endpoint}: ${err.message}`);
         resolve(undefined);
       });
-    }).finally(() => {
-      connecting = undefined;
     });
-    return connecting;
   }
 
   async function forward(msg: Message, line: string): Promise<void> {

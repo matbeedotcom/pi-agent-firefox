@@ -34,8 +34,12 @@ export const ADDON_CLIENT_NAMES: readonly string[] = [
   "pi-firefox",
   "pi-thunderbird",
 ];
-/** Firefox add-on client name (clientInfo.name). */
-export const ADDON_CLIENT_NAME = "trusted-ua-firefox";
+/**
+ * Firefox add-on client name (clientInfo.name). The add-ons keep their
+ * v0.4.0 names on the wire (older hosts detect presence by them); the
+ * trusted-ua-* names are accepted for the future.
+ */
+export const ADDON_CLIENT_NAME = "pi-browser-firefox";
 
 export function isKnownAddonClient(name: string | undefined): name is string {
   return typeof name === "string" && ADDON_CLIENT_NAMES.includes(name);

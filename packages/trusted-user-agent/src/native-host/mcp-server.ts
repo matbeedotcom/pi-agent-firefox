@@ -61,7 +61,8 @@ import {
   parseCallerInfo,
   type CallerInfo,
 } from "@trusted-ua/protocol";
-import { ipcEndpoint, isNamedPipe } from "./broker-ipc.js";
+import { LEGACY_PIPE_PREFIX, ipcEndpoint, isNamedPipe } from "./broker-ipc.js";
+import { envValue } from "../env.js";
 import { BROWSER_TOOL_SCHEMAS, REPL_TOOL_SCHEMAS } from "../browser/schemas.js";
 import { MAIL_TOOL_SCHEMAS } from "../mail/schemas.js";
 import { COMPOSE_TOOL_SCHEMAS } from "../compose/schemas.js";
@@ -152,6 +153,15 @@ export function mcpToolListResult(): { tools: Array<Record<string, unknown>> } {
 /** The broker's MCP endpoint (TRUSTED_UA_BROKER_DIR honored): unix socket, or a named pipe on Windows. */
 export function defaultMcpEndpoint(): string {
   return ipcEndpoint(runDir(), TRUSTED_UA_BROKER.mcpSocketFile);
+}
+
+/**
+ * Where a v0.4.0 broker listened: `~/.pi/run` (or the same env override) and
+ * the `pi-agent-` pipe prefix on Windows.
+ */
+export function legacyMcpEndpoint(): string {
+  const dir = envValue("BROKER_DIR")?.trim() || path.join(os.homedir(), ".pi", TRUSTED_UA_BROKER.runDir);
+  return ipcEndpoint(dir, TRUSTED_UA_BROKER.mcpSocketFile, process.platform, LEGACY_PIPE_PREFIX);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -221,7 +221,8 @@ async function ensurePiSpace(): Promise<number | undefined> {
 
 const client = new AcpClient(
   {
-    clientName: "trusted-ua-thunderbird",
+    // Wire identity, kept from v0.4.0 (see the Firefox background).
+    clientName: "pi-thunderbird",
     application: "thunderbird",
     // Capabilities: T2 read-only mail + attachments, T3 draft-first compose
     // (no send), T4 mail organization (mailModify: mark read/tag/archive/move —

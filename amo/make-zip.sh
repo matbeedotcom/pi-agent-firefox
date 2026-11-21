@@ -3,13 +3,13 @@
 # The manifest must sit at the ZIP ROOT (not under a directory).
 # Source maps are stripped — they embed absolute local paths and are not
 # needed for review.
-# Usage: sh amo/make-zip.sh   ->   amo/pi-browser-<version>.zip
+# Usage: sh amo/make-zip.sh   ->   amo/trusted-user-agent-<version>.zip
 set -eu
 cd "$(dirname "$0")/.."
 DIST=firefox/dist
 [ -f "$DIST/manifest.json" ] || { echo "build first: npm run build" >&2; exit 1; }
 VER=$(python3 -c "import json;print(json.load(open('$DIST/manifest.json'))['version'])")
-OUT="amo/pi-browser-$VER.zip"
+OUT="amo/trusted-user-agent-$VER.zip"
 rm -f "$OUT"
 # $OLDPWD inside the subshell = repo root (where the zip must land).
 (cd "$DIST" && zip -qr "$OLDPWD/$OUT" . -x '*.map')

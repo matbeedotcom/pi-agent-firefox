@@ -1,18 +1,18 @@
 # AMO submission — metadata & review notes
 
-**Add-on:** Pi Browser · **ID:** `pi-agent-firefox@matbee.com` · **Version:** 0.4.0
-**Zip:** `amo/pi-browser-0.4.0.zip` (build: `sh amo/make-zip.sh`)
-**Source zip:** `amo/pi-browser-0.4.0-source.zip` (build: `git archive --format=zip --prefix=pi-agent-firefox/ -o amo/pi-browser-0.4.0-source.zip HEAD`) — pure TypeScript/shell source, no transpiled or machine-generated files. Build instructions: README "Building from source" + `build.sh`.
+**Add-on:** Trusted User Agent · **ID:** `pi-agent-firefox@matbee.com` · **Version:** 0.4.0
+**Zip:** `amo/trusted-user-agent-0.4.0.zip` (build: `sh amo/make-zip.sh`)
+**Source zip:** `amo/trusted-user-agent-0.4.0-source.zip` (build: `git archive --format=zip --prefix=pi-agent-firefox/ -o amo/trusted-user-agent-0.4.0-source.zip HEAD`) — pure TypeScript/shell source, no transpiled or machine-generated files. Build instructions: README "Building from source" + `build.sh`.
 
 ## Form fields
 
-- **Name:** Pi Browser
+- **Name:** Trusted User Agent
 - **Version:** 0.4.0
-- **Summary (≤60 chars):** Pi Coding Agent sidebar for Firefox — chat, sessions, tab control
+- **Summary (≤60 chars):** Agent sidebar for Firefox: pi, Claude Code, Codex, your tabs
 - **Description (first paragraph, ~600 chars):**
-  Pi Browser connects Firefox to the Pi coding agent through a local Native
-  Messaging host installed by the companion Pi package. It adds a sidebar with
-  multiple agent sessions (streamed replies, cancel, model/reasoning controls
+  Trusted User Agent connects Firefox to coding agents (pi, Claude Code, Codex)
+  through a local Native Messaging host installed by the companion
+  trusted-user-agent package. It adds a sidebar with multiple agent sessions (streamed replies, cancel, model/reasoning controls
   taken from the agent's own configuration). You can bind a session to a tab;
   the agent can then read that page's content and DOM, click and type into
   referenced elements, reload the tab, and — after your explicit approval via
@@ -24,7 +24,7 @@
 
 | Permission | Justification |
 |------------|---------------|
-| `nativeMessaging` | The add-on speaks only to the locally installed `com.matbee.agent` host (shipped with the separate Pi package, never downloaded by this add-on). Until that host is installed the add-on is inert and shows a setup screen. |
+| `nativeMessaging` | The add-on speaks only to the locally installed `com.matbee.agent` host (shipped with the separate trusted-user-agent package, never downloaded by this add-on). Until that host is installed the add-on is inert and shows a setup screen. |
 | `<all_urls>` (host) | Required to operate the tab the user **explicitly binds** to an agent session: read page content/DOM, click/type into referenced elements, reload, permission-gated screenshot. The add-on never acts on a tab that has not been bound by the user. |
 | `activeTab` | Fallback for the screenshot capture path when the bound tab is the active tab. |
 | `tabs` | Tab binding (session ↔ tab) and locating the bound tab. |

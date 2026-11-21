@@ -3,13 +3,13 @@
 Let AI agents use **Firefox** and **Thunderbird**, with your approval.
 
 `trusted-user-agent` is the host half of
-[Pi Browser Agent](https://github.com/matbeedotcom/pi-agent-firefox). The add-ons run inside
+[Trusted User Agent](https://github.com/matbeedotcom/pi-agent-firefox). The add-ons run inside
 your browser and mail client. This package runs on your machine and connects them to agents:
 
 - **Any MCP client** (Claude Code, Codex, Cursor, Gemini CLI, VS Code, pi) gets the
-  `pi-browser` MCP server. It reads and drives a browser tab, and reads, searches, files and
+  `trusted-ua` MCP server. It reads and drives a browser tab, and reads, searches, files and
   drafts mail, while Firefox or Thunderbird is running.
-- **The add-ons' own chat** (Firefox sidebar, Thunderbird Pi Space and pane) talks to an
+- **The add-ons' own chat** (Firefox sidebar, Thunderbird space and pane) talks to an
   embedded [pi](https://pi.dev) agent through this host over the Agent Client Protocol (ACP),
   or, if you pick it for a session, to **Claude Code**, **Codex** or another ACP agent, with the
   browser and mail tools at hand.
@@ -20,7 +20,7 @@ you the `trusted-ua` command to set it up.
 ## Requirements
 
 - **Node.js 22 or newer**
-- **Firefox** with the Pi Browser add-on and/or **Thunderbird** with the Pi Thunderbird add-on
+- **Firefox** and/or **Thunderbird** with the Trusted User Agent add-on
   (both are on the [releases page](https://github.com/matbeedotcom/pi-agent-firefox/releases))
 - Linux, macOS or Windows
 
@@ -29,16 +29,16 @@ you the `trusted-ua` command to set it up.
 ```sh
 npm i -g trusted-user-agent
 trusted-ua install              # register the native host for Firefox and Thunderbird
-trusted-ua mcp install all      # add the pi-browser MCP server to every MCP client found
+trusted-ua mcp install all      # add the trusted-ua MCP server to every MCP client found
 trusted-ua doctor               # check the host and whether an add-on has connected
 ```
 
 Then install the add-ons:
 
-- **Firefox:** download `pi-browser-firefox-<version>.xpi` from the
+- **Firefox:** download `trusted-user-agent-firefox-<version>.xpi` from the
   [latest release](https://github.com/matbeedotcom/pi-agent-firefox/releases/latest) and open it
   in Firefox (it is signed).
-- **Thunderbird:** download `pi-thunderbird-<version>.xpi`, then go to Add-ons and Themes → ⚙ →
+- **Thunderbird:** download `trusted-user-agent-thunderbird-<version>.xpi`, then go to Add-ons and Themes → ⚙ →
   *Install Add-on From File…*.
 
 The add-ons find the host by themselves within about 10 seconds. You don't need to restart
@@ -49,7 +49,7 @@ anything. If you install the add-on first, it shows a *Connect* screen until the
 
 ## Using the tools from your agent
 
-After `trusted-ua mcp install <client>`, your agent sees a `pi-browser` MCP server. It starts
+After `trusted-ua mcp install <client>`, your agent sees a `trusted-ua` MCP server. It starts
 before Firefox or Thunderbird does, and tool calls work while an app with the add-on is running.
 
 | Client | Command | Where the entry goes |
@@ -62,7 +62,7 @@ before Firefox or Thunderbird does, and tool calls work while an app with the ad
 | VS Code | `trusted-ua mcp install vscode` | the user `mcp.json` |
 | Every client found | `trusted-ua mcp install all` | each of the above that is installed |
 
-The installer edits only the `pi-browser` entry. It leaves your other servers and settings
+The installer edits only the `trusted-ua` entry (and replaces an old `pi-browser` one). It leaves your other servers and settings
 alone, and it never rewrites a config file it can't parse. It reports the error instead.
 
 ### What the agent can do
@@ -74,7 +74,7 @@ alone, and it never rewrites a config file it can't parse. It reports the error 
 
 Browser tools act on a tab bound to the agent's connection. The agent calls
 `browser_list_tabs` and then `browser_bind_tab`, or opens a new tab with `browser_open_tab`.
-An agent can't take a tab that one of your Pi chats has bound.
+An agent can't take a tab that one of your chats in the sidebar has bound.
 
 Page and mail content reach the agent as untrusted tool data, never as instructions.
 
@@ -89,9 +89,9 @@ Page and mail content reach the agent as untrusted tool data, never as instructi
 - **Tool calls still ask** as set on the add-on's permissions page (Ask / Deny / Always
   approve), and each prompt names the agent: *"claude-code wants to take a screenshot"*.
 - **Prompts come to you.** They open a small approval window in the app that runs the tool,
-  even when the sidebar or Pi Space is closed. **Closing the window denies** whatever is
-  waiting. While a prompt waits, the toolbar or Pi Space button shows a badge.
-- **You can turn it off.** In the add-on, go to Pi settings → permissions → *Other apps (MCP)*.
+  even when the sidebar or the Trusted Agent space is closed. **Closing the window denies** whatever is
+  waiting. While a prompt waits, the toolbar or space button shows a badge.
+- **You can turn it off.** In the add-on, go to settings → permissions → *Other apps (MCP)*.
   You can switch external access off there, or revoke agents you allowed or denied.
 
 Agent names are what agents report about themselves and are not verified. Any program running
@@ -114,7 +114,7 @@ Install the agent's ACP adapter and log in with the agent's own CLI:
 `trusted-ua status` lists which agents are available. Agents that aren't found show disabled in
 the panel, with the missing command.
 
-- **Nothing to set up in the agent's config.** Each session gets the `pi-browser` tools tied to
+- **Nothing to set up in the agent's config.** Each session gets the `trusted-ua` tools tied to
   that sidebar session: its bound tab, its approvals, and prompts in the sidebar or pane. It can
   reach the other app's tools when both apps run.
 - **Two kinds of prompts.** Tool prompts (*"Allow this action?"*) are the add-on's own, as for
@@ -126,7 +126,7 @@ the panel, with the missing command.
 - The agents work in the session's folder with their own tools and approval rules. New sessions
   default to a fresh folder under `~/.pi/workspaces`.
 
-Add agents or change a built-in one in `~/.pi/browser/agents.json` (no restart needed):
+Add agents or change a built-in one in `~/.trusted-ua/agents.json` (no restart needed):
 
 ```json
 {
@@ -145,7 +145,7 @@ Fields: `name`, `command`, `args`, `env`, `idleTimeoutMinutes` (0 means never st
 
 Both add-ons use the same host. The first app to connect becomes the broker and owns the
 sessions. The second app's host process relays into it over private OS IPC: a `0600` Unix
-socket in `~/.pi/run`, or a per-user named pipe on Windows. Nothing listens on TCP.
+socket in `~/.trusted-ua/run`, or a per-user named pipe on Windows. Nothing listens on TCP.
 
 So one session can use both apps. A chat in the Firefox sidebar can search your mail, and an
 agent connected over MCP can read an email and then reproduce its bug in a tab.
@@ -164,9 +164,9 @@ trusted-ua mcp [install|status|uninstall] [pi|claude|codex|cursor|gemini|vscode|
 | `trusted-ua install [app]` | Register (or repair) the native host. `app` defaults to `mozilla`, which means both apps |
 | `trusted-ua doctor [app]` | `status` plus a live probe of the host |
 | `trusted-ua uninstall [app]` | Remove the registration (the package files stay) |
-| `trusted-ua mcp install [client]` | Add or update the `pi-browser` MCP entry (default client: `pi`) |
+| `trusted-ua mcp install [client]` | Add or update the `trusted-ua` MCP entry (default client: `pi`); renames an old `pi-browser` entry |
 | `trusted-ua mcp status [client]` | Report each entry as missing, current or stale (for example after the package moved) |
-| `trusted-ua mcp uninstall [client]` | Remove only the `pi-browser` entry |
+| `trusted-ua mcp uninstall [client]` | Remove only the `trusted-ua` entry (and an old `pi-browser` one) |
 
 After upgrading or moving the package, run `trusted-ua install` and
 `trusted-ua mcp install <client>` again. `status` and `mcp status` tell you when an entry is
@@ -184,30 +184,40 @@ stale.
 
 ## Using it as a pi package
 
-The same package is a [pi](https://pi.dev) package. It adds the `/pi-browser` command, which
+The same package is a [pi](https://pi.dev) package. It adds the `/trusted-ua` command (old name `/pi-browser` still works), which
 works like `trusted-ua`:
 
 ```sh
 pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.4.0
 ```
 
-In pi: `/pi-browser install`, `/pi-browser doctor`, `/pi-browser mcp install [client]`.
+In pi: `/trusted-ua install`, `/trusted-ua doctor`, `/trusted-ua mcp install [client]`.
 
 ## Configuration
 
-The Pi chat in the add-ons runs on the embedded pi SDK and uses your normal pi setup
+The pi chat in the add-ons runs on the embedded pi SDK and uses your normal pi setup
 (`~/.pi/agent`: models, API keys, extensions, skills). Approvals the add-ons store live in
-`~/.pi/browser/`, next to `agents.json` (chat agents) and `agent-sessions.json` (the list of
+`~/.trusted-ua/`, next to `agents.json` (chat agents) and `agent-sessions.json` (the list of
 Claude Code / Codex sessions started from the add-ons).
 
 | Variable | Effect |
 |----------|--------|
-| `PI_BROWSER_LOG_FILE` | Host log path. Set it to `off` to disable logging |
-| `PI_BROWSER_LOG_LEVEL` | Host log level |
-| `PI_BROWSER_AGENT_DIR` | pi agent directory for the embedded agent (default: pi's own) |
-| `PI_BROWSER_PREWARM` | `0` turns off the warm-up session the host starts at launch |
+| `TRUSTED_UA_LOG_FILE` | Host log path. Set it to `off` to disable logging |
+| `TRUSTED_UA_LOG_LEVEL` | Host log level |
+| `TRUSTED_UA_PI_AGENT_DIR` | pi agent directory for the embedded agent (default: pi's own) |
+| `TRUSTED_UA_PREWARM` | `0` turns off the warm-up session the host starts at launch |
+
+The v0.4.0 names (`PI_BROWSER_*`) are still read when the new ones are not set.
 
 The host's stdout carries only protocol data. Logs go to stderr and the log file.
+
+## Upgrading from v0.4.0 (Pi Browser)
+
+Up to v0.4.0 the product was called Pi Browser. After upgrading, run `trusted-ua install` and
+`trusted-ua mcp install all`: the second renames each client's `pi-browser` MCP entry to
+`trusted-ua` (tools become `mcp__trusted-ua__<tool>`). Your approvals and settings in
+`~/.pi/browser/` are read until the first change saves them to `~/.trusted-ua/`; nothing is
+deleted. Old and new add-ons and hosts work together.
 
 ## Troubleshooting
 
@@ -218,9 +228,9 @@ The host's stdout carries only protocol data. Logs go to stderr and the log file
 - **The agent's browser calls fail with `BROWSER_NOT_BOUND`.** The agent has to bind a tab
   first (`browser_bind_tab` or `browser_open_tab`).
 - **Nothing happens when the agent calls a tool.** Look for the approval window or the badge
-  on the Pi toolbar / Pi Space button.
+  on the Trusted Agent toolbar / space button.
 - **Claude Code or Codex is greyed out in the new-session panel.** Its ACP adapter isn't on
-  your `PATH`. Install it (see above), or set its `command` in `~/.pi/browser/agents.json`.
+  your `PATH`. Install it (see above), or set its `command` in `~/.trusted-ua/agents.json`.
 - **"Codex needs you to log in".** Log in with the agent's own CLI (`codex login`, or run
   `claude` once), then create the session again.
 

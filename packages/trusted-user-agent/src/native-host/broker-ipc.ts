@@ -40,11 +40,20 @@ import { runDir } from "../paths.js";
  * TRUSTED_UA_BROKER_DIR override gets its own pipe, exactly like a socket
  * file in that dir would.
  */
-export function ipcEndpoint(dir: string, file: string, platform: NodeJS.Platform = process.platform): string {
+/** Windows pipe-name prefix (v0.4.0 used LEGACY_PIPE_PREFIX). */
+export const PIPE_PREFIX = "trusted-ua-";
+export const LEGACY_PIPE_PREFIX = "pi-agent-";
+
+export function ipcEndpoint(
+  dir: string,
+  file: string,
+  platform: NodeJS.Platform = process.platform,
+  prefix: string = PIPE_PREFIX,
+): string {
   if (platform !== "win32") return path.join(dir, file);
   const key = path.win32.resolve(dir).toLowerCase();
   const hash = createHash("sha256").update(key).digest("hex").slice(0, 16);
-  return String.raw`\\.\pipe\trusted-ua-` + `${hash}-${file.replace(/\.sock$/, "")}`;
+  return "\\\\.\\pipe\\" + `${prefix}${hash}-${file.replace(/\.sock$/, "")}`;
 }
 
 /** True for a Windows named-pipe endpoint (no file to chmod or unlink). */
