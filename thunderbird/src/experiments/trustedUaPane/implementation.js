@@ -89,7 +89,7 @@
       const inMail = current?.mode.name === "mail3PaneTab";
       const remembered = tabmail.tabInfo.includes(state.lastMail) ? state.lastMail : null;
       const target = inMail ? current : remembered || tabmail.tabInfo.find(tab => tab.mode.name === "mail3PaneTab");
-      if (!target) throw new Error("No mail tab is available for the Pi pane");
+      if (!target) throw new Error("No mail tab is available for the Trusted Agent pane");
       state.busy = true;
       try {
         const tabId = this.context.extension.tabManager.wrapTab(target).id;

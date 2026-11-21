@@ -3,7 +3,7 @@
  *
  * Same pattern as the browser tool bridge: the native host installs a
  * SkillsBridge here at startup (createSkillsHost). A Pi extension loaded
- * into an ACP session — see extensions/pi-skills.ts — reads the bridge from
+ * into an ACP session — see extensions/trusted-ua-skills.ts — reads the bridge from
  * this module instance and registers commands/tools. The bridge is
  * undefined outside a host process, so the extension registers nothing in a
  * plain pi session. Isolated job sessions never load the extension at all

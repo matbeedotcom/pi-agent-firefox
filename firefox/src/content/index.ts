@@ -1315,7 +1315,7 @@ let consoleReadSeq = 0;
 
 /**
  * Read the page-world console ring buffer. Primary path: direct cross-world
- * read of window.__PI_BROWSER_CONSOLE__ (works in Gecko). Fallback: a
+ * read of window.__TRUSTED_UA_CONSOLE__ (works in Gecko). Fallback: a
  * postMessage round-trip asking the MAIN-world helper for a cloned copy.
  */
 function readConsole(
@@ -1338,7 +1338,7 @@ function readConsole(
     return { messages: out, total: entries.length, dropped, cleared: doClear };
   };
 
-  const page = (window as unknown as { __PI_BROWSER_CONSOLE__?: { messages?: unknown; dropped?: unknown } }).__PI_BROWSER_CONSOLE__;
+  const page = (window as unknown as { __TRUSTED_UA_CONSOLE__?: { messages?: unknown; dropped?: unknown } }).__TRUSTED_UA_CONSOLE__;
   if (page && Array.isArray(page.messages)) {
     const result = deliver(page.messages as ConsoleMessageEntry[], typeof page.dropped === "number" ? page.dropped : 0);
     if (doClear) window.postMessage({ __trustedUaConsoleClear: true }, "*");
@@ -1455,7 +1455,7 @@ async function handle(msg: ContentMessage): Promise<unknown> {
 // handlers, no model work until a relevant interaction).
 // Each runtime makes the synchronous "hold" decision on its gate event's
 // gesture; the background gate re-validates every allowed gesture. Gate-view
-// pushes ("pi/skills_state", carrying the qualified event) update the owning
+// pushes ("tua/skills_state", carrying the qualified event) update the owning
 // runtime's local mirror + the review card.
 // ---------------------------------------------------------------------------
 
@@ -1465,7 +1465,7 @@ let skillsPlan: PagePlan | undefined;
 let skillsInteractionId = `int:${Date.now().toString(36)}${Math.floor(Math.random() * 1_000_000).toString(36)}`;
 
 async function skillsAction(action: string, payload: Record<string, unknown> = {}): Promise<unknown> {
-  const res = (await browser.runtime.sendMessage({ type: "pi/action", action, payload })) as {
+  const res = (await browser.runtime.sendMessage({ type: "tua/action", action, payload })) as {
     ok?: boolean;
     result?: unknown;
     error?: { message?: string };
@@ -1518,7 +1518,7 @@ async function probeSkills(): Promise<void> {
       // arm nowhere and are logged, not silently dropped. `?? "isolated"`
       // keeps a stale host build (pre-world plans) arming, not dead.
       if ((rule.world ?? "isolated") !== "isolated") {
-        console.warn(`[pi-browser skills] rule ${rule.skillKey} requires the main world; not armed here`);
+        console.warn(`[trusted-ua skills] rule ${rule.skillKey} requires the main world; not armed here`);
         continue;
       }
       // The scan closure needs the runtime's compiled predicates, and the
@@ -1588,7 +1588,7 @@ async function probeSkills(): Promise<void> {
           window.postMessage({ __skillsTestRecord: { type: "arm", detail: { state, event: `${rule.packageId}` } } }, "*");
         },
         log: (message) => {
-          console.warn(`[pi-browser skills] ${message}`);
+          console.warn(`[trusted-ua skills] ${message}`);
           // TEMP e2e diagnostic: mirror runtime logs into the beacon.
           window.postMessage({ __skillsTestRecord: { type: "runtime-log", detail: { message } } }, "*");
         },
@@ -1676,7 +1676,7 @@ function updateReviewCard(): void {
   card.hidden = false;
   card.replaceChildren();
   const title = document.createElement("h2");
-  title.textContent = `Pi Browser — ${REVIEW_CARD_TITLES[view.state]}`;
+  title.textContent = `Trusted Agent — ${REVIEW_CARD_TITLES[view.state]}`;
   card.appendChild(title);
   if (view.reason) {
     const reason = document.createElement("p");
@@ -1749,7 +1749,7 @@ void probeSkills();
 browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   if (typeof message !== "object" || message === null) return;
   const msg = message as ContentMessage;
-  if (msg.type === "pi/skills_state") {
+  if (msg.type === "tua/skills_state") {
     // Push from the background on every gate transition (no response);
     // carries the qualified event so the view routes to the owning rule.
     if (

@@ -4,7 +4,7 @@
  * Pi subagent sessions are created inside the broker process (pi-subagents
  * children never get the session-level customTools that ACP sessions get).
  * This extension plugs that gap: when it loads in a process with an active
- * tool bridge (the Pi Browser native-host broker), it registers the add-on
+ * tool bridge (the Trusted User Agent native-host broker), it registers the add-on
  * tool surface — Firefox's browser tools and Thunderbird's mail / compose /
  * mail-organization / contacts tools — with execution routed through the
  * provider's standard path (cross-app routing, permission prompts, activity
@@ -14,8 +14,8 @@
  *
  *   ---
  *   name: browser
- *   extensions: ["<repo>/packages/trusted-user-agent/extensions/pi-browser-tools.ts"]
- *   tools: ext:pi-browser-tools
+ *   extensions: ["<repo>/packages/trusted-user-agent/extensions/trusted-ua-tools.ts"]
+ *   tools: ext:trusted-ua-tools
  *   ---
  *
  * In a plain Pi session (no broker) the bridge is undefined and the

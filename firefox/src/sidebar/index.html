@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pi</title>
+    <title>Trusted Agent</title>
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="activity.css" />
     <link rel="stylesheet" href="permissions.css" />
@@ -20,7 +20,7 @@
         </div>
       </header>
 
-      <div id="caps" class="hidden" title="Capabilities available to Pi from the connected apps"></div>
+      <div id="caps" class="hidden" title="Capabilities available to the agent from the connected apps"></div>
 
       <!-- filled by mountNewSessionPanel (@trusted-ua/webext) -->
       <div id="new-panel" class="hidden"></div>
@@ -82,17 +82,17 @@
     <div id="onboard-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="onboard-title">
       <div id="onboard-card">
         <div id="onboard-badge">setup</div>
-        <h3 id="onboard-title">Connect Pi Browser to Pi</h3>
+        <h3 id="onboard-title">Connect Firefox to Trusted User Agent</h3>
         <p id="onboard-desc" class="muted">
           No ACP server detected: the <code>com.matbee.agent</code> native host
-          (installed by the Pi package) is unavailable or does not authorize this add-on. This page connects
+          (installed by the <code>trusted-user-agent</code> package) is unavailable or does not authorize this add-on. This page connects
           on its own the moment it's installed — no reload needed.
         </p>
         <ol id="onboard-steps">
           <li>Install the host package:
             <div class="step-code"><code>npm install -g trusted-user-agent</code><span class="muted">or, with pi: <code>pi install git:github.com/matbeedotcom/pi-agent-firefox</code></span></div>
           </li>
-          <li>Register the host (or run <code>/pi-browser install</code> in a pi session):
+          <li>Register the host (or run <code>/trusted-ua install</code> in a pi session):
             <div class="step-code"><code>trusted-ua install</code></div>
           </li>
           <li>Return here — the connection completes itself within ~10s.

@@ -389,7 +389,7 @@ test("permissionPromptDescription: friendly text for known tools, safe fallback"
   assert.match(permissionPromptDescription("mail_move"), /move/i);
   assert.match(permissionPromptDescription("browser_screenshot"), /screenshot/i);
   // Unknown tools fall back to the bare tool name (UI-safe for new tools).
-  assert.equal(permissionPromptDescription("brand_new_tool"), "Pi wants to run: brand_new_tool.");
+  assert.equal(permissionPromptDescription("brand_new_tool"), "The agent wants to run: brand_new_tool.");
 });
 
 test("agent identity: host name + authorized extensions", () => {

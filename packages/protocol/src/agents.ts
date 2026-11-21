@@ -4,7 +4,7 @@
  * A sidebar, Space or pane session runs either on the built-in pi agent or
  * on an external ACP agent (Claude Code, Codex, or one the user configures
  * in `~/.trusted-ua/agents.json`). The host relays such a session to the
- * agent's ACP adapter and gives it the pi-browser tools through the stdio
+ * agent's ACP adapter and gives it the trusted-ua tools through the stdio
  * bridge, tied to the sidebar session.
  *
  * All of this is additive: an add-on that never asks `x-trusted-ua/agents`

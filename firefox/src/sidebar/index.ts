@@ -107,7 +107,7 @@ function addBlock(sessionId: string, block: Block): void {
 function action<A>(name: string, payload?: Record<string, unknown>): Promise<A> {
   return new Promise((resolve, reject) => {
     browser.runtime
-      .sendMessage({ type: "pi/action", action: name, ...(payload !== undefined ? { payload } : {}) })
+      .sendMessage({ type: "tua/action", action: name, ...(payload !== undefined ? { payload } : {}) })
       .then((resp) => {
         if (resp && resp.ok === false) {
           reject(new Error(resp.error?.message ?? "action failed"));
@@ -359,7 +359,7 @@ function renderStatus(): void {
     case "connected": {
       el.classList.add("ok");
       const agent = s.agentInfo ? `${s.agentInfo.name ?? "agent"} ${s.agentInfo.version ?? ""}`.trim() : "connected";
-      el.textContent = `Pi · ${agent}`;
+      el.textContent = `Trusted Agent · ${agent}`;
       el.title = s.trustedUaMeta
         ? `integration v${s.trustedUaMeta.version}, protocol v${s.trustedUaMeta.protocolVersion}, tools v${s.trustedUaMeta.browserToolVersion}`
         : "";
@@ -370,7 +370,7 @@ function renderStatus(): void {
       break;
     case "not_installed":
       el.classList.add("err");
-      el.textContent = "native host not detected — run /pi-browser install";
+      el.textContent = "native host not detected — run trusted-ua install";
       el.title =
         "Auto-detecting: the add-on connects on its own as soon as the host " +
         "is installed (no reload needed).\n\n" + (s.detail ?? "");
@@ -395,7 +395,7 @@ function renderCaps(): void {
   const parts = ["browsing"];
   if (s.capabilities?.includes("mail")) parts.push("mail");
   el.textContent = `capabilities: ${parts.join(" · ")}`;
-  el.title = "Tools Pi can use: your browser, plus mail when Thunderbird is connected.";
+  el.title = "Tools the agent can use: your browser, plus mail when Thunderbird is connected.";
   el.classList.remove("hidden");
 }
 
@@ -691,7 +691,7 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     activity?: BrowserActivity;
     params?: { sessionId: string; toolCallId: string; tool: string; application: string };
   };
-  if (msg.type === "pi/state" && msg.state) {
+  if (msg.type === "tua/state" && msg.state) {
     const state = msg.state;
     // The connection dropped mid-turn (host exit, port EOF, event-page
     // reload): tool blocks left at "in_progress" will never receive a final
@@ -706,13 +706,13 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     applyTrustedUaTheme(state.theme);
     renderAll();
     syncPermissionPrompt(state.permissionRequests);
-  } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
+  } else if (msg.type === "tua/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update as SessionNotification["update"]);
-  } else if (msg.type === "pi/browser_activity" && msg.sessionId && msg.activity) {
+  } else if (msg.type === "tua/browser_activity" && msg.sessionId && msg.activity) {
     applyBrowserActivity(msg.sessionId, msg.activity);
-  } else if (msg.type === "pi/permission_request" && msg.request) {
+  } else if (msg.type === "tua/permission_request" && msg.request) {
     showPermissionPrompt(msg.request);
-  } else if (msg.type === "pi/permission_prompted" && msg.params) {
+  } else if (msg.type === "tua/permission_prompted" && msg.params) {
     const { sessionId, toolCallId, tool, application } = msg.params;
     remotePrompts.set(`${sessionId}:${toolCallId}`, { tool, application });
     renderRemotePromptBanner();
@@ -756,7 +756,7 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
   // Guard against a stale sidebar (no modal markup): answer "cancelled" so the
   // host never hangs, rather than crashing the message handler.
   if (!overlay || !desc || !optionsWrap) {
-    browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId: "cancelled" }).catch(() => {});
+    browser.runtime.sendMessage({ type: "tua/permission_response", permId, optionId: "cancelled" }).catch(() => {});
     return;
   }
   const tool = request._meta?.trustedUa?.tool ?? request.toolCall.title ?? "an action";
@@ -816,7 +816,7 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
 
 function answerPermissionOption(tool: string, permId: string, opt: PermissionOptionUi): void {
   const answer = (optionId: string) => {
-    void browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId }).catch(() => {});
+    void browser.runtime.sendMessage({ type: "tua/permission_response", permId, optionId }).catch(() => {});
     if (activePermId === permId) {
       activePermId = undefined;
       hidePermissionPrompt();
@@ -913,7 +913,7 @@ $<HTMLDivElement>("settings-card").addEventListener("click", (e) => e.stopPropag
 // host appeared. "Dismiss" hides it for this sidebar open.
 $<HTMLButtonElement>("onboard-check").addEventListener("click", () => {
   browser.runtime
-    .sendMessage({ type: "pi/ensure_connected" })
+    .sendMessage({ type: "tua/ensure_connected" })
     .then((res: { connected?: boolean } | undefined) => {
       if (res?.connected) {
         // Fast path: refresh so the UI flips before the next status push.

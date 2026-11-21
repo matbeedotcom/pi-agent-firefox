@@ -43,7 +43,7 @@ export interface RelayHost {
   connection(agentId: string): Promise<AgentConnection>;
   /** The live connection, if the agent is running. */
   liveConnection(agentId: string): AgentConnection | undefined;
-  /** The `mcpServers` to pass the agent for this session (the pi-browser bridge). */
+  /** The `mcpServers` to pass the agent for this session (the trusted-ua bridge). */
   mcpServers(session: AcpRelaySession): unknown[];
   /** Prompt timeout of the add-on's permission UI. */
   permissionTimeoutMs(): number;
@@ -129,7 +129,7 @@ export class AcpRelaySession {
   /** The agent process stopped; the next request restarts and reloads. */
   dormant = false;
   streaming = false;
-  /** Token the bridge reports as its parent session (PI_BROWSER_PARENT_SESSION). */
+  /** Token the bridge reports as its parent session (TRUSTED_UA_PARENT_SESSION). */
   readonly parentToken: string;
   private suppressReplay = false;
   private readonly transcript: SessionUpdate[] = [];
@@ -267,7 +267,7 @@ export class AcpRelaySession {
   private async live(): Promise<AgentConnection> {
     const existing = this.host.liveConnection(this.agentId);
     if (existing && !this.dormant) return existing;
-    const cardId = `pi-browser-agent-start-${++this.startSeq}`;
+    const cardId = `trusted-ua-agent-start-${++this.startSeq}`;
     this.send({ sessionUpdate: "tool_call", toolCallId: cardId, title: `Starting ${this.agentName}…`, kind: "other", status: "in_progress" } as SessionUpdate);
     try {
       const conn = await this.host.connection(this.agentId);
@@ -382,7 +382,7 @@ export class AcpRelaySession {
     if (notice) {
       this.send({
         sessionUpdate: "tool_call",
-        toolCallId: `pi-browser-agent-stopped-${Date.now()}`,
+        toolCallId: `trusted-ua-agent-stopped-${Date.now()}`,
         title: notice,
         kind: "other",
         status: "failed",

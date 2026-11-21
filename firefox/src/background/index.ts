@@ -42,7 +42,7 @@ const store = new SessionStore();
 /** REPL-owned tabs (javascript tool, BROWSER-USE-REPL-PLAN.md P2.3). */
 const replTabs = new ReplTabs();
 const dispatcher = new ToolDispatcher(store, replTabs, (sessionId, activity) => {
-  void browser.runtime.sendMessage({ type: "pi/browser_activity", sessionId, activity }).catch(() => {});
+  void browser.runtime.sendMessage({ type: "tua/browser_activity", sessionId, activity }).catch(() => {});
 });
 
 /**
@@ -136,7 +136,7 @@ const skills = new SkillsRuntime({
     // the content routes the view to the rule that owns `event`.
     if (document.tabId !== undefined) {
       browser.tabs.sendMessage(document.tabId, {
-        type: "pi/skills_state",
+        type: "tua/skills_state",
         documentGeneration: document.documentGeneration,
         event,
         view,
@@ -252,7 +252,7 @@ const approvals = new ApprovalWindowController({
     if (text) void browser.action.setBadgeBackgroundColor({ color: "#d93025" }).catch(() => {});
   },
   notifyPage: (requests) => {
-    void browser.runtime.sendMessage({ type: "pi/approval_state", requests }).catch(() => {});
+    void browser.runtime.sendMessage({ type: "tua/approval_state", requests }).catch(() => {});
   },
   cancel: (permId) => resolvePermission(permId, "cancelled"),
 });
@@ -269,7 +269,7 @@ function pushPermissionRequest(request: RequestPermissionRequest): void {
     return;
   }
   browser.runtime
-    .sendMessage({ type: "pi/permission_request", request })
+    .sendMessage({ type: "tua/permission_request", request })
     .catch(() => {
       /* sidebar not open */
     });
@@ -282,7 +282,7 @@ function resolvePermission(permId: string, optionId: string | "cancelled"): void
     // The event page reloaded (map wiped) or the prompt already resolved:
     // the click is lost. Log it — a silent no-op here hides the
     // "I clicked Allow and nothing happened" class of stall.
-    console.warn(`[pi-browser] resolvePermission: no pending prompt for ${permId}, option=${optionId}`);
+    console.warn(`[trusted-ua] resolvePermission: no pending prompt for ${permId}, option=${optionId}`);
     return;
   }
   clearTimeout(pending.timer);
@@ -353,7 +353,7 @@ function pushState(): void {
     permissionRequests: pendingPermissionRequests(),
   };
   browser.runtime
-    .sendMessage({ type: "pi/state", state })
+    .sendMessage({ type: "tua/state", state })
     .catch(() => {
       /* sidebar not open */
     });
@@ -361,7 +361,7 @@ function pushState(): void {
 
 function pushSessionUpdate(sessionId: string, update: SessionUpdate): void {
   browser.runtime
-    .sendMessage({ type: "pi/session_update", sessionId, update })
+    .sendMessage({ type: "tua/session_update", sessionId, update })
     .catch(() => {
       /* sidebar not open */
     });
@@ -377,7 +377,7 @@ async function refreshSessionList(): Promise<void> {
     store.upsertFromList(res.sessions ?? []);
     pushState();
   } catch (err) {
-    console.warn("[pi-browser] session/list failed", err);
+    console.warn("[trusted-ua] session/list failed", err);
   }
 }
 
@@ -491,7 +491,7 @@ const client = new AcpClient(
   // client does NOT answer the prompt — the executing client owns it.
   onPermissionPrompted: (params) => {
     browser.runtime
-      .sendMessage({ type: "pi/permission_prompted", params })
+      .sendMessage({ type: "tua/permission_prompted", params })
       .catch(() => {
         /* sidebar not open */
       });
@@ -568,7 +568,7 @@ async function bootstrap(): Promise<void> {
     await client.initialize();
     initialized = true;
   } catch (err) {
-    console.error("[pi-browser] initialize failed", err);
+    console.error("[trusted-ua] initialize failed", err);
     // Only downgrade to "disconnected" when the port is still alive (a real
     // protocol failure). If the port is gone, onDisconnect has already set
     // the precise state (not_installed vs disconnected) — overwriting it
@@ -590,7 +590,7 @@ async function bootstrap(): Promise<void> {
         activeSessionId = undefined;
       }
     } catch (err) {
-      console.warn("[pi-browser] resuming last session failed", err);
+      console.warn("[trusted-ua] resuming last session failed", err);
     }
   }
   pushState();
@@ -643,25 +643,25 @@ browser.tabs.onActivated.addListener(async () => {
 browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (typeof message !== "object" || message === null) return;
   const msg = message as { type?: string; action?: string; payload?: Record<string, unknown> };
-  if (msg.type === "pi/permission_response") {
+  if (msg.type === "tua/permission_response") {
     const permId = String((msg as { permId?: unknown }).permId ?? "");
     const optionId = String((msg as { optionId?: unknown }).optionId ?? "cancelled");
     resolvePermission(permId, optionId);
     sendResponse({ ok: true });
     return;
   }
-  if (msg.type === "pi/approval_get") {
+  if (msg.type === "tua/approval_get") {
     sendResponse({ requests: approvals.pending() });
     return;
   }
-  if (msg.type === "pi/ensure_connected") {
+  if (msg.type === "tua/ensure_connected") {
     // Onboarding: the sidebar's "Check again now" button. Idempotent no-op
     // when already connected; otherwise attempts the connect immediately.
     client.ensureConnected();
     sendResponse({ ok: true, connected: client.connected });
     return;
   }
-  if (msg.type !== "pi/action") return;
+  if (msg.type !== "tua/action") return;
   void handleAction(msg.action ?? "", (msg.payload ?? {}) as never, sender)
     .then((result) => sendResponse({ ok: true, ...(result !== undefined ? { result } : {}) }))
     .catch((err) => {
@@ -745,7 +745,7 @@ async function handleSkillsAction(action: string, payload: ActionPayload, sender
       const document = skillsDocument(sender);
       if (!document) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.BROWSER_NOT_BOUND, "skills: no sender tab");
       // Return the view DIRECTLY (consumers read `.state`); the separate
-      // "pi/skills_state" push message is the one that wraps it in { view }.
+      // "tua/skills_state" push message is the one that wraps it in { view }.
       const view = skills.view(document);
       return view ?? null;
     }
@@ -814,7 +814,7 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
       const sessionId = String(payload.sessionId);
       const text = String(payload.text ?? "");
       if (!text.trim()) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "empty prompt");
-      void sendPrompt(sessionId, text).catch((err) => console.warn("[pi-browser] prompt ended", err));
+      void sendPrompt(sessionId, text).catch((err) => console.warn("[trusted-ua] prompt ended", err));
       return { accepted: true };
     }
     case "cancel": {
@@ -1010,7 +1010,7 @@ void (async () => {
 // with it the session). Two duties on one interval:
 //   - connected:  periodic liveness ping (doubles as the x-trusted-ua/ping
 //     probe; the host refreshes the add-on heartbeat it uses for onboarding
-//     auto-detection in /pi-browser status|doctor)
+//     auto-detection in /trusted-ua status|doctor)
 //   - NOT connected: ensureConnected() — auto-detects a host installed AFTER
 //     the add-on loaded (add-on-first onboarding), even if the event page was
 //     unloaded in the meantime and the 3s reconnect timer was lost. The

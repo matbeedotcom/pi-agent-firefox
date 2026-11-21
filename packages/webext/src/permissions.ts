@@ -71,8 +71,8 @@ export function mountPermissionSettings(
   const intro = document.createElement("p");
   intro.className = "ps-intro";
   intro.textContent =
-    "Pi asks for your approval before every tool call. Set each tool to Ask (prompt every time), " +
-    "Deny (never run without asking), or Always approve (never ask). States are stored on the Pi host and shared by all connected apps.";
+    "The agent asks for your approval before every tool call. Set each tool to Ask (prompt every time), " +
+    "Deny (never run without asking), or Always approve (never ask). States are stored by the host and shared by all connected apps.";
   root.append(intro);
 
   const status = document.createElement("div");

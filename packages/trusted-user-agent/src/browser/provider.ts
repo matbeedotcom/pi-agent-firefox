@@ -334,8 +334,8 @@ interface OpenPrompt {
 
 /** Message for calls refused because external MCP access is off. */
 export const EXTERNAL_ACCESS_OFF_MESSAGE =
-  "External MCP access is disabled in the Pi add-on settings. Ask the user to turn on " +
-  "\"Allow other apps (MCP) to use these tools\" in the Pi permissions page.";
+  "External MCP access is disabled in the Trusted User Agent add-on settings. Ask the user to turn on " +
+  "\"Allow other apps (MCP) to use these tools\" in the Trusted Agent permissions page.";
 
 /** The caller attribution sent to the add-on (name + version only). */
 function callerMeta(caller: CallerInfo): { name: string; version?: string } {
@@ -710,7 +710,7 @@ export class CapabilityToolProvider {
     });
     const t0 = Date.now();
     // The round-trip line logs only duration + isError — with
-    // PI_BROWSER_LOG_TOOL_IO the full request args and response are logged too.
+    // TRUSTED_UA_LOG_TOOL_IO the full request args and response are logged too.
     const toolIo = this.logToolIo();
     if (toolIo) this.log.info(`${toolName}: REQUEST ${safeJson(args)}`);
     try {
@@ -729,7 +729,7 @@ export class CapabilityToolProvider {
   }
 
   /**
-   * Test-only approval seam: PI_BROWSER_AUTO_APPROVE (comma list of tool
+   * Test-only approval seam: TRUSTED_UA_AUTO_APPROVE (comma list of tool
    * names or "*") grants the host-side approval gate WITHOUT prompting a
    * user. Never read in production paths — the launcher must opt in.
    * Used by .probe/live-mail-search.mjs, which has no UI to click.
@@ -742,7 +742,7 @@ export class CapabilityToolProvider {
   }
 
   /**
-   * Test-only I/O logging seam: PI_BROWSER_LOG_TOOL_IO=1 makes the host log
+   * Test-only I/O logging seam: TRUSTED_UA_LOG_TOOL_IO=1 makes the host log
    * the FULL request args and response of every browser tool call. The skills
    * e2e matrix sets it so each scripted step is reconstructable from
    * host.log; off in production.
@@ -1141,7 +1141,7 @@ export class CapabilityToolProvider {
       const name = applicationShortName(app);
       throw new TrustedUaProtocolError(
         TRUSTED_UA_ERROR.MCP_UNAVAILABLE,
-        `${toolName} needs ${name} with the Pi add-on running. Ask the user to open ${name}, then retry.`,
+        `${toolName} needs ${name} with the Trusted User Agent add-on running. Ask the user to open ${name}, then retry.`,
         { tool: toolName },
       );
     }
@@ -1169,7 +1169,7 @@ export class CapabilityToolProvider {
     const deniedError = () =>
       new TrustedUaProtocolError(
         TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
-        `the user denied ${caller.name} access to the ${appName} tools. Ask them to allow it in the Pi permissions page.`,
+        `the user denied ${caller.name} access to the ${appName} tools. Ask them to allow it in the Trusted Agent permissions page.`,
         { tool: toolName },
       );
     const cached = this.callerApprovals.get(sessionId)?.apps.get(app);
@@ -1252,7 +1252,7 @@ export class CapabilityToolProvider {
       this.log.info(`caller ${caller.name}: denied for ${app} (persisted)`);
       throw new TrustedUaProtocolError(
         TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
-        `the user denied ${caller.name} access to the ${appName} tools. Ask them to allow it in the Pi permissions page.`,
+        `the user denied ${caller.name} access to the ${appName} tools. Ask them to allow it in the Trusted Agent permissions page.`,
         { tool: toolName },
       );
     }

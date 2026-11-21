@@ -3,7 +3,7 @@
  *
  * Production skill jobs run a real Pi agent session that reads the skill
  * instructions and calls `skill_report` with an identity-bound payload. In
- * controlled tests (PI_BROWSER_BACKEND=mock + PI_BROWSER_SKILLS_CONFIG) the
+ * controlled tests (TRUSTED_UA_BACKEND=mock + TRUSTED_UA_SKILLS_CONFIG) the
  * job "model" is scripted: it calls skill_report with a deterministic
  * payload (or fails / stays silent), exercising the full runner + service +
  * protocol path without a model.

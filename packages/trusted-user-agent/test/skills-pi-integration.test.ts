@@ -376,7 +376,7 @@ test("extension: full behavior with a host bridge", () => {
   createSkillsExtensionFactory()(pi);
   setSkillsBridge(undefined);
 
-  assert.deepEqual(commands.map((c) => c.name), ["pi-skills"]);
+  assert.deepEqual(commands.map((c) => c.name), ["trusted-ua-skills", "pi-skills"]);
 
   // Idempotent attach/detach — repeated starts/shutdowns never throw.
   void handlers.session_start![0]({});

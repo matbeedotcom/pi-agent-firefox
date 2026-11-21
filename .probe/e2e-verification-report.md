@@ -43,11 +43,11 @@ All six gates were executed independently, in order, from `/home/acidhax/dev/per
 ## Host evidence (verbatim)
 
 ```text
-[2026-09-14T21:07:11.449Z] [info] [pi-browser-host] backend: mock
-[2026-09-14T21:07:17.673Z] [info] [pi-browser-host] session/new -> 779ea6b6-c92e-4b12-8507-3667f60e3140 cwd=/tmp/pi-live-1789420029609/proj
-[2026-09-14T21:07:23.807Z] [info] [pi-browser-host] session/prompt 779ea6b6-c92e-4b12-8507-3667f60e3140 (14 chars, 0 images)
-[2026-09-14T21:07:23.854Z] [info] [pi-browser-host] browser_screenshot: requesting user permission (toolCall=repl:browser_screenshot)
-[2026-09-14T21:07:26.541Z] [info] [pi-browser-host] browser_screenshot: user chose Allow once
+[2026-09-14T21:07:11.449Z] [info] [trusted-ua-browser-host] backend: mock
+[2026-09-14T21:07:17.673Z] [info] [trusted-ua-browser-host] session/new -> 779ea6b6-c92e-4b12-8507-3667f60e3140 cwd=/tmp/pi-live-1789420029609/proj
+[2026-09-14T21:07:23.807Z] [info] [trusted-ua-browser-host] session/prompt 779ea6b6-c92e-4b12-8507-3667f60e3140 (14 chars, 0 images)
+[2026-09-14T21:07:23.854Z] [info] [trusted-ua-browser-host] browser_screenshot: requesting user permission (toolCall=repl:browser_screenshot)
+[2026-09-14T21:07:26.541Z] [info] [trusted-ua-browser-host] browser_screenshot: user chose Allow once
 ```
 
 The independent evidence-copy stat check returned:

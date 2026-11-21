@@ -35,7 +35,7 @@ import { dataFile, readableDataFile } from "./paths.js";
 export interface PermissionStoreOptions {
   /**
    * File to persist to. Defaults to ~/.pi/browser/permissions.json;
-   * PI_BROWSER_PERMISSIONS_FILE overrides (test seam / custom locations).
+   * TRUSTED_UA_PERMISSIONS_FILE overrides (test seam / custom locations).
    */
   filePath?: string;
 }

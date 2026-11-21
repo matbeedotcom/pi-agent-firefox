@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
 
-  "name": "Pi Thunderbird",
+  "name": "Trusted User Agent for Thunderbird",
   "version": "0.4.0",
 
   "trustedUaDebug": true,
 
-  "description": "Pi Agent for Thunderbird: multi-session ACP chat with mail tools over Native Messaging",
+  "description": "Chat with pi, Claude Code or Codex in Thunderbird and let agents read, search and draft mail, with your approval. Multi-session ACP chat over Native Messaging.",
 
   "icons": {
     "48": "icons/icon.svg",

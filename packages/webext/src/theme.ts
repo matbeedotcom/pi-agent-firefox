@@ -52,7 +52,7 @@ export async function fetchTrustedUaTheme(): Promise<TrustedUaTheme | undefined>
       t.mode === "light" || t.mode === "dark" ? t.mode : cs === "light" || cs === "dark" ? cs : "dark";
     return { mode, colors };
   } catch (err) {
-    console.warn("[pi-theme] reading the browser theme failed", err);
+    console.warn("[trusted-ua-theme] reading the browser theme failed", err);
     return undefined;
   }
 }

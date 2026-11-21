@@ -1,5 +1,5 @@
 /**
- * Pi Browser integration protocol: identity, versioning, and the private
+ * Trusted User Agent integration protocol: identity, versioning, and the private
  * `x-trusted-ua/*` compatibility namespace.
  *
  * The private namespace is a transport compatibility layer only (see
@@ -15,7 +15,7 @@ export const TRUSTED_UA = {
   /** Package release version (npm version of trusted-user-agent). */
   version: "0.4.0",
   /**
-   * Pi Browser integration protocol version (bump on breaking changes to
+   * Trusted User Agent integration protocol version (bump on breaking changes to
    * x-trusted-ua/* semantics or integration metadata). v2 = 2026-09-11
    * identity rename (add-on IDs to @matbee.com, host name to com.matbee.agent).
    * v3 = 2026-09-12: x-trusted-ua/tool_update — long-running tools (mail_search)
@@ -209,7 +209,7 @@ export function buildAgentHelloMeta(hello: Omit<AgentHello, "type">): { trustedU
  * Mozilla security boundary — the relay only forwards bytes.
  */
 export const TRUSTED_UA_BROKER = {
-  /** Run directory name under $HOME (0700; env PI_BROWSER_BROKER_DIR overrides). */
+  /** Run directory name under $HOME (0700; env TRUSTED_UA_BROKER_DIR overrides). */
   runDir: "run",
   /** Unix socket file name inside the run directory (0600). */
   socketFile: "agent-broker.sock",
@@ -252,7 +252,7 @@ export const TRUSTED_UA_META: TrustedUaMeta = {
 
 /** Private extension methods (PRODUCT.md §30). Never used for ACP session semantics. */
 export const X_TRUSTED_UA = {
-  /** Firefox → host: liveness/version probe used by /pi-browser status|doctor. */
+  /** Firefox → host: liveness/version probe used by /trusted-ua status|doctor. */
   ping: "x-trusted-ua/ping",
   /** Host → Firefox: browser tool invocation (legacy compatibility transport). */
   tool: "x-trusted-ua/tool",

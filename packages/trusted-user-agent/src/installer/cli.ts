@@ -8,7 +8,7 @@
  *
  * The app target selects which Mozilla applications the shared `com.matbee.agent`
  * host is registered for (plan §23). Default: `mozilla` (both).
- * The mcp client selects which MCP client configs get the `pi-browser` stdio
+ * The mcp client selects which MCP client configs get the `trusted-ua` stdio
  * bridge entry. Default: `pi`.
  *
  * `--allow-temporary` lets install run from a temporary package root (npx

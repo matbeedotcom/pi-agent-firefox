@@ -197,7 +197,7 @@ export const PERMISSION_TOOL_GROUPS: readonly PermissionToolGroup[] = [
 export const PERMISSION_TOOL_GROUP_LABELS: Record<PermissionToolGroup, string> = {
   browser: "Browser",
   repl: "JavaScript REPL",
-  control: "Pi controls",
+  control: "Session controls",
   mail: "Mail (read-only)",
   compose: "Compose (drafts)",
   "mail-mutations": "Mail mutations",
@@ -265,39 +265,39 @@ export function getGatedTool(name: string): GatedToolEntry | undefined {
 const TOOL_PROMPT_TEXT: Record<string, string> = {
   // Browser
   browser_evaluate:
-    "In order to automate the UI on this page, Pi needs permission to run browser scripts. " +
-    "Firefox will ask you to allow user scripts. Once enabled, Pi can continue automatically; " +
+    "In order to automate the UI on this page, the agent needs permission to run browser scripts. " +
+    "Firefox will ask you to allow user scripts. Once enabled, the agent can continue automatically; " +
     "you can revoke this permission in Firefox’s extension settings.",
   browser_screenshot:
-    "Pi wants to take a screenshot of the bound tab. Approving brings the tab to the front and captures what is visible.",
+    "The agent wants to take a screenshot of the bound tab. Approving brings the tab to the front and captures what is visible.",
   // Read-only mail
-  mail_get_context: "Pi wants to read the current mail tab context (current folder, selected messages).",
-  mail_get_selected_messages: "Pi wants to read the messages selected in the current mail tab.",
-  mail_get_displayed_messages: "Pi wants to read the messages displayed in the current mail tab.",
-  mail_get_message: "Pi wants to read one email (headers and body summary).",
-  mail_get_message_body: "Pi wants to read the full body of an email.",
-  mail_search: "Pi wants to search your mailbox for messages.",
-  mail_list_attachments: "Pi wants to list the attachments of an email.",
-  mail_get_attachment: "Pi wants to download an email attachment. It will be returned to Pi as data.",
-  mail_list_accounts: "Pi wants to list your mail accounts.",
-  mail_list_folders: "Pi wants to list the folders of a mail account.",
-  mail_list_tags: "Pi wants to list your message tags.",
+  mail_get_context: "The agent wants to read the current mail tab context (current folder, selected messages).",
+  mail_get_selected_messages: "The agent wants to read the messages selected in the current mail tab.",
+  mail_get_displayed_messages: "The agent wants to read the messages displayed in the current mail tab.",
+  mail_get_message: "The agent wants to read one email (headers and body summary).",
+  mail_get_message_body: "The agent wants to read the full body of an email.",
+  mail_search: "The agent wants to search your mailbox for messages.",
+  mail_list_attachments: "The agent wants to list the attachments of an email.",
+  mail_get_attachment: "The agent wants to download an email attachment. It will be returned to the agent as data.",
+  mail_list_accounts: "The agent wants to list your mail accounts.",
+  mail_list_folders: "The agent wants to list the folders of a mail account.",
+  mail_list_tags: "The agent wants to list your message tags.",
   // Compose (draft-first: nothing is sent without the user pressing Send)
-  compose_prepare_new: "Pi wants to open a new email draft (nothing is sent — you review and press Send).",
-  compose_prepare_reply: "Pi wants to open a reply draft (nothing is sent — you review and press Send).",
-  compose_prepare_forward: "Pi wants to open a forward draft (nothing is sent — you review and press Send).",
-  compose_get: "Pi wants to read the draft open in the compose window.",
-  compose_update: "Pi wants to edit the draft in the compose window (nothing is sent).",
-  compose_add_attachment: "Pi wants to attach a local file to the draft in the compose window (nothing is sent).",
+  compose_prepare_new: "The agent wants to open a new email draft (nothing is sent — you review and press Send).",
+  compose_prepare_reply: "The agent wants to open a reply draft (nothing is sent — you review and press Send).",
+  compose_prepare_forward: "The agent wants to open a forward draft (nothing is sent — you review and press Send).",
+  compose_get: "The agent wants to read the draft open in the compose window.",
+  compose_update: "The agent wants to edit the draft in the compose window (nothing is sent).",
+  compose_add_attachment: "The agent wants to attach a local file to the draft in the compose window (nothing is sent).",
   // Mail mutations
-  mail_mark_read: "Pi wants to change the read/unread status of messages.",
-  mail_set_tags: "Pi wants to add or remove tags on messages.",
-  mail_archive: "Pi wants to archive messages.",
-  mail_move: "Pi wants to move messages to another folder.",
+  mail_mark_read: "The agent wants to change the read/unread status of messages.",
+  mail_set_tags: "The agent wants to add or remove tags on messages.",
+  mail_archive: "The agent wants to archive messages.",
+  mail_move: "The agent wants to move messages to another folder.",
   // Contacts
-  contacts_search: "Pi wants to search your address book for contacts.",
-  contacts_get: "Pi wants to read one contact from your address book.",
-  contacts_list: "Pi wants to list contacts from your address book.",
+  contacts_search: "The agent wants to search your address book for contacts.",
+  contacts_get: "The agent wants to read one contact from your address book.",
+  contacts_list: "The agent wants to list contacts from your address book.",
 };
 
 /**
@@ -305,5 +305,5 @@ const TOOL_PROMPT_TEXT: Record<string, string> = {
  * tool name for tools without an entry (keeps the UI safe for new tools).
  */
 export function permissionPromptDescription(tool: string): string {
-  return TOOL_PROMPT_TEXT[tool] ?? `Pi wants to run: ${tool}.`;
+  return TOOL_PROMPT_TEXT[tool] ?? `The agent wants to run: ${tool}.`;
 }

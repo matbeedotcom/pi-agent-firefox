@@ -1,5 +1,5 @@
 /**
- * ACP (Agent Client Protocol) surface used by Pi Browser.
+ * ACP (Agent Client Protocol) surface used by Trusted User Agent.
  *
  * Canonical types and method constants come from the official
  * @agentclientprotocol/sdk package; this module re-exports the subset that

@@ -281,7 +281,7 @@ export class AcpAgent {
         case X_TRUSTED_UA.ping: {
           const backendReady = await this.opts.backend.ready.then(() => true, () => false);
           // Refresh the add-on heartbeat (no-op for non-add-on clients), so
-          // /pi-browser status|doctor can report add-on presence.
+          // /trusted-ua status|doctor can report add-on presence.
           touchClientHeartbeat(this.clientIdentityName);
           this.transport().respond(id, { pong: true, meta: TRUSTED_UA_META, backendReady });
           return;

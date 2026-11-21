@@ -5,7 +5,7 @@
  * The add-on holds the Native Messaging port, so the host cannot enumerate
  * add-ons; instead the host records when the add-on connects (ACP
  * initialize) and on every keepalive ping. The installer CLI
- * (/pi-browser status|doctor) reads the file to report whether the add-on
+ * (/trusted-ua status|doctor) reads the file to report whether the add-on
  * side of the onboarding is complete, in either install order:
  *
  *   - plugin first:  doctor shows "add-on: not detected" until it is loaded
@@ -80,7 +80,7 @@ export function appHeartbeatPath(homeDir: string, application: "firefox" | "thun
 /**
  * Record add-on presence. No-op for non-add-on clients (e.g. test harnesses).
  * Writes the legacy single file (latest client) AND the per-app file so
- * /pi-browser status|doctor can report both applications (plan §23).
+ * /trusted-ua status|doctor can report both applications (plan §23).
  * Best-effort: never throws.
  */
 export function touchClientHeartbeat(

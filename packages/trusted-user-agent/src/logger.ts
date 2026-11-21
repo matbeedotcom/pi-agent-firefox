@@ -45,7 +45,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   function emit(lvl: LogLevel, msg: string, data?: unknown): void {
     if (LEVEL_RANK[lvl] < LEVEL_RANK[level]) return;
     const line =
-      `[${new Date().toISOString()}] [${lvl}] [pi-browser-host] ${msg}` +
+      `[${new Date().toISOString()}] [${lvl}] [trusted-ua-host] ${msg}` +
       (data !== undefined ? ` ${safeStringify(data)}` : "");
     stderr.write(line + "\n");
     logFile?.write(line + "\n");

@@ -35,7 +35,7 @@ async function handleSkillsCommand(bridge: SkillsBridge, args: string, ctx: Exte
   if (command === "run") {
     const skillKey = rest[0];
     if (!skillKey) {
-      ctx.ui.notify("usage: /pi-skills run <skillKey> [instructions]", "warning");
+      ctx.ui.notify("usage: /trusted-ua-skills run <skillKey> [instructions]", "warning");
       return;
     }
     const instructions = rest.slice(1).join(" ") || undefined;
@@ -55,14 +55,14 @@ async function handleSkillsCommand(bridge: SkillsBridge, args: string, ctx: Exte
   if (command === "cancel") {
     const key = rest[0];
     if (!key) {
-      ctx.ui.notify("usage: /pi-skills cancel <key>", "warning");
+      ctx.ui.notify("usage: /trusted-ua-skills cancel <key>", "warning");
       return;
     }
     const cancelled = bridge.cancel(key);
     ctx.ui.notify(cancelled > 0 ? `cancelled ${cancelled} job(s) for ${key}` : `no pending job for ${key}`, "info");
     return;
   }
-  ctx.ui.notify("usage: /pi-skills [run <skillKey> [instructions] | status | cancel <key>]", "warning");
+  ctx.ui.notify("usage: /trusted-ua-skills [run <skillKey> [instructions] | status | cancel <key>]", "warning");
 }
 
 export function createSkillsExtensionFactory(): (pi: ExtensionAPI) => void {
@@ -118,9 +118,12 @@ export function createSkillsExtensionFactory(): (pi: ExtensionAPI) => void {
       pi.events.emit(SKILL_JOB_RESULT_CHANNEL, { key, outcome });
     });
 
-    pi.registerCommand("pi-skills", {
-      description: "Run an Active skill job: /pi-skills run <skillKey> [instructions] | status | cancel <key>",
-      handler: (args, ctx) => handleSkillsCommand(bridge, args, ctx),
-    });
+    // /trusted-ua-skills, and its v0.4.0 name /pi-skills.
+    for (const name of ["trusted-ua-skills", "pi-skills"]) {
+      pi.registerCommand(name, {
+        description: `Run an Active skill job: /${name} run <skillKey> [instructions] | status | cancel <key>`,
+        handler: (args, ctx) => handleSkillsCommand(bridge, args, ctx),
+      });
+    }
   };
 }

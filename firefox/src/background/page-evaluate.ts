@@ -32,7 +32,7 @@ export async function evaluateInPage(
   if (!api?.execute) {
     throw new TrustedUaProtocolError(
       TRUSTED_UA_ERROR.BROWSER_PERMISSION_DENIED,
-      'Page evaluation requires Firefox 153+ and the user scripts permission. Approve the page evaluation permission request in the Pi sidebar.',
+      'Page evaluation requires Firefox 153+ and the user scripts permission. Approve the page evaluation permission request in the Trusted Agent sidebar.',
     );
   }
   const source = `(${expression}\n)${isFunctionExpression(expression) ? "(arg)" : ""}`;

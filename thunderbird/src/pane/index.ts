@@ -90,7 +90,7 @@ function connect(): void {
   try {
     port = browser.runtime.connect({ name: "pi-pane" });
   } catch (err) {
-    console.warn("[pi-pane] connect failed", err);
+    console.warn("[trusted-ua-pane] connect failed", err);
     scheduleReconnect();
     return;
   }
@@ -101,7 +101,7 @@ function connect(): void {
   try {
     p.postMessage({ type: "pane.ready", tabId });
   } catch (err) {
-    console.warn("[pi-pane] ready post failed", err);
+    console.warn("[trusted-ua-pane] ready post failed", err);
   }
   p.onMessage.addListener(onPortMessage);
   p.onDisconnect.addListener(() => {
@@ -118,7 +118,7 @@ function scheduleReconnect(): void {
   // backoff; the pane re-delivers its full state via the next pane.ready.
   reconnectAttempts += 1;
   if (reconnectAttempts > 10) {
-    flash("disconnected from Pi background");
+    flash("disconnected from the background page");
     return;
   }
   const delay = Math.min(500 * reconnectAttempts, 4000);
@@ -152,17 +152,17 @@ function onPortMessage(raw: unknown): void {
     return;
   }
 
-  if (msg.type === "pi/state" && msg.state) {
+  if (msg.type === "tua/state" && msg.state) {
     reconnectAttempts = 0;
     uiState = msg.state;
     activeSessionId = msg.state.activeSessionId;
     applyTrustedUaTheme(msg.state.theme);
     renderAll();
-  } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
+  } else if (msg.type === "tua/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update);
-  } else if (msg.type === "pi/permission_request" && msg.request) {
+  } else if (msg.type === "tua/permission_request" && msg.request) {
     showPermissionPrompt(msg.request);
-  } else if (msg.type === "pi/permission_prompted" && msg.params) {
+  } else if (msg.type === "tua/permission_prompted" && msg.params) {
     const { sessionId, toolCallId, tool, application } = msg.params;
     remotePrompts.set(`${sessionId}:${toolCallId}`, { tool, application });
     renderRemotePromptBanner();
@@ -189,7 +189,7 @@ function answerPermission(permId: string, optionId: string): void {
   // Reply over the same Port the background pushed the prompt on.
   if (port) {
     try {
-      port.postMessage({ type: "pi/permission_response", permId, optionId });
+      port.postMessage({ type: "tua/permission_response", permId, optionId });
     } catch {
       /* port torn down; the background's timeout auto-cancels */
     }
@@ -208,7 +208,7 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
   if (!overlay || !desc || !optionsWrap) {
     if (port) {
       try {
-        port.postMessage({ type: "pi/permission_response", permId, optionId: "cancelled" });
+        port.postMessage({ type: "tua/permission_response", permId, optionId: "cancelled" });
       } catch {
         /* port torn down */
       }
@@ -497,8 +497,8 @@ function renderStatus(): void {
     case "connected": {
       el.classList.add("ok");
       const agent = s.agentInfo ? `${s.agentInfo.name ?? "agent"} ${s.agentInfo.version ?? ""}`.trim() : "connected";
-      el.textContent = `Pi · ${agent}`;
-      el.title = "Connected to the Pi native host.";
+      el.textContent = `Trusted Agent · ${agent}`;
+      el.title = "Connected to the Trusted User Agent host.";
       break;
     }
     case "connecting":
@@ -508,7 +508,7 @@ function renderStatus(): void {
     case "not_installed":
       el.classList.add("err");
       el.textContent = "native host not detected";
-      el.title = "No ACP server found. Install the Pi package and run /pi-browser install thunderbird; this pane reconnects automatically.";
+      el.title = "No ACP server found. Install trusted-user-agent (npm i -g trusted-user-agent) and run trusted-ua install thunderbird; this pane reconnects automatically.";
       break;
     default:
       el.classList.add("err");
@@ -544,11 +544,11 @@ function renderCaps(): void {
     ? "capabilities: chat · read-only mail · browsing"
     : "capabilities: chat · read-only mail";
   el.title =
-    "Pi can read the mail you select or view (context, messages, bodies, search, attachments, accounts, folders). " +
+    "The agent can read the mail you select or view (context, messages, bodies, search, attachments, accounts, folders). " +
     "It cannot send, move, or delete. Compose (drafts) arrives in a later phase. " +
     (browsing
-      ? "The browser add-on is connected, so Pi can also use your browser."
-      : "Connect the browser add-on to also give Pi your browser.");
+      ? "The browser add-on is connected, so the agent can also use your browser."
+      : "Connect the browser add-on to also give the agent your browser.");
 }
 
 function renderActive(): void {
@@ -564,7 +564,7 @@ function renderActive(): void {
     empty.classList.remove("hidden");
     empty.textContent = connected
       ? "No session selected. Create one with “+ New”."
-      : "Waiting for Pi to connect…";
+      : "Waiting for the host to connect…";
     return;
   }
 

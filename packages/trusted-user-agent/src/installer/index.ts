@@ -1,5 +1,5 @@
 /**
- * Installer command entry point used by /pi-browser (install | status |
+ * Installer command entry point used by /trusted-ua (install | status |
  * doctor | uninstall) and by tests.
  */
 import { spawn } from "node:child_process";
@@ -139,7 +139,7 @@ export function buildEnv(ctx: InstallerContext = {}): { env: InstallerEnv; targe
           "add-on: not detected — to finish setup:",
           `  1. build the add-on(s) (from source): ${buildSteps}`,
           loadSteps,
-          "  3. wait ~10s — the add-on auto-connects (no reload needed); run /pi-browser status again",
+          "  3. wait ~10s — the add-on auto-connects (no reload needed); run /trusted-ua status again",
         ],
         detected: false,
         fresh: false,
@@ -237,7 +237,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
         else note(addon.detected ? "status: HOST OK — add-on heartbeat stale (reload the add-on or check the app)" : "status: HOST OK — add-on not detected yet (see steps above)");
       } else {
         for (const issue of report.issues) note(`issue: ${issue}`);
-        note(`status: PROBLEMS FOUND (run /pi-browser install ${apps.length === 2 ? "mozilla" : apps[0]} to repair)`);
+        note(`status: PROBLEMS FOUND (run /trusted-ua install ${apps.length === 2 ? "mozilla" : apps[0]} to repair)`);
       }
       return { ok: report.installed, lines };
     }
@@ -246,7 +246,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
       for (const l of status.lines) note(l);
       if (!status.installed) {
         for (const issue of status.issues) note(`issue: ${issue}`);
-        note(`doctor: NOT INSTALLED — run /pi-browser install ${apps.length === 2 ? "mozilla" : apps[0]}`);
+        note(`doctor: NOT INSTALLED — run /trusted-ua install ${apps.length === 2 ? "mozilla" : apps[0]}`);
         return { ok: false, lines };
       }
       const probe = await probeHost(env, status);

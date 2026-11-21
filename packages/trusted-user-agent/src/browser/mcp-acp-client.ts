@@ -56,7 +56,7 @@ export class McpAcpClient {
     await this.innerRequest(connectionId, "initialize", {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: "pi-browser-agent", version: TRUSTED_UA.version },
+      clientInfo: { name: "trusted-ua-agent", version: TRUSTED_UA.version },
     });
     // MCP "initialized" notification; the ACP mcp/message method is a
     // request, so expect (and ignore) an empty result.

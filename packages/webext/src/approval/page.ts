@@ -3,9 +3,9 @@
  * callers' permission prompts. Bundled by both add-ons' build.mjs.
  *
  * Shows the waiting prompts one at a time (oldest first), answers through
- * the background ("pi/permission_response"), and closes itself when the
+ * the background ("tua/permission_response"), and closes itself when the
  * queue is empty. The background owns the queue: it pushes
- * "pi/approval_state" on every change, and closing this window answers the
+ * "tua/approval_state" on every change, and closing this window answers the
  * waiting prompts "deny once" (handled by the background's windows.onRemoved).
  */
 import type { PermissionOption, RequestPermissionRequest } from "@trusted-ua/protocol";
@@ -49,7 +49,7 @@ function render(): void {
   const request = waiting[0];
   const text = describePermissionRequest(request);
   document.title = text.title;
-  $("caller").textContent = text.caller ?? "Pi";
+  $("caller").textContent = text.caller ?? "the agent";
   $("title").textContent = text.title;
   $("desc").textContent = text.description;
   $("queue").textContent = waiting.length > 1 ? `1 of ${waiting.length} waiting` : "";
@@ -75,7 +75,7 @@ function answer(request: RequestPermissionRequest, opt: PermissionOption, tool: 
   const permId = request.toolCall.toolCallId;
   const send = (optionId: string) => {
     answered.add(permId);
-    void browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId }).catch(() => undefined);
+    void browser.runtime.sendMessage({ type: "tua/permission_response", permId, optionId }).catch(() => undefined);
     render();
   };
   if (tool === "browser_evaluate" && opt.kind.startsWith("allow")) {
@@ -105,10 +105,10 @@ function applyState(next: unknown): void {
 
 browser.runtime.onMessage.addListener((message: unknown) => {
   const msg = message as { type?: string; requests?: unknown } | null;
-  if (msg?.type === "pi/approval_state") applyState(msg.requests);
+  if (msg?.type === "tua/approval_state") applyState(msg.requests);
 });
 
 void browser.runtime
-  .sendMessage({ type: "pi/approval_get" })
+  .sendMessage({ type: "tua/approval_get" })
   .then((res: unknown) => applyState((res as { requests?: unknown } | undefined)?.requests))
   .catch(() => applyState([]));

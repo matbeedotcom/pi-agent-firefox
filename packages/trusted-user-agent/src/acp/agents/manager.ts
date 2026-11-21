@@ -8,8 +8,8 @@
  * - routes the agent's updates and permission requests to the session's
  *   relay (and so to the client that owns it);
  * - keeps the session index for `session/list` and reopening (D5);
- * - gives each session the pi-browser stdio bridge, tied to it by a token
- *   in PI_BROWSER_PARENT_SESSION (D6);
+ * - gives each session the trusted-ua stdio bridge, tied to it by a token
+ *   in TRUSTED_UA_PARENT_SESSION (D6);
  * - stops idle agents and restarts them on demand (D2a);
  * - turns missing commands, logins and crashes into readable errors (D8).
  */
@@ -44,7 +44,7 @@ export interface ExternalAgentsOptions {
   log: Logger;
   registry?: AgentRegistry;
   index?: AgentSessionIndex;
-  /** Broker instance id (PI_BROWSER_HOST_CHILD for the bridge). */
+  /** Broker instance id (TRUSTED_UA_HOST_CHILD for the bridge). */
   instanceId?: string;
   /** The stdio bridge launch (default: this package's mcp-stdio-main.js with this node). */
   bridgeLaunch?: { command: string; args: string[] };
@@ -120,7 +120,7 @@ export class ExternalAgents implements RelayHost {
     return this.sessions.get(sessionId);
   }
 
-  /** Sidebar session a bridge's PI_BROWSER_PARENT_SESSION token names. */
+  /** Sidebar session a bridge's TRUSTED_UA_PARENT_SESSION token names. */
   resolveParentToken(token: string): string | undefined {
     return this.tokens.get(token);
   }

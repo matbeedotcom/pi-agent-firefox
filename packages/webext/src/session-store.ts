@@ -76,7 +76,15 @@ export interface PersistedState {
   lastSessionId?: string;
 }
 
-const DEFAULT_STORAGE_KEY = "piBrowserState";
+const DEFAULT_STORAGE_KEY = "trustedUaState";
+/**
+ * v0.4.0 keys (openspec rename-trusted-user-agent D6): read once when the new
+ * key is absent; left in place so a downgrade still finds its state.
+ */
+const LEGACY_STORAGE_KEYS: Record<string, string> = {
+  trustedUaState: "piBrowserState",
+  trustedUaThunderbirdState: "piThunderbirdState",
+};
 
 export class SessionStore {
   /**
@@ -98,14 +106,18 @@ export class SessionStore {
     if (this.hydrated) return;
     this.hydrated = true;
     try {
-      const stored = (await browser.storage.local.get(this.storageKey)) as Record<string, PersistedState | undefined>;
-      const state = stored[this.storageKey];
+      const legacyKey = LEGACY_STORAGE_KEYS[this.storageKey];
+      const keys = legacyKey ? [this.storageKey, legacyKey] : [this.storageKey];
+      const stored = (await browser.storage.local.get(keys)) as Record<string, PersistedState | undefined>;
+      const state = stored[this.storageKey] ?? (legacyKey ? stored[legacyKey] : undefined);
+      const migrated = !stored[this.storageKey] && state !== undefined;
       if (state?.bindings) {
         for (const [sessionId, binding] of Object.entries(state.bindings)) {
           this.bindings.set(sessionId, binding);
         }
       }
       if (state?.lastSessionId) this.lastSessionId = state.lastSessionId;
+      if (migrated) this.persist();
     } catch {
       // storage read failures are non-fatal
     }

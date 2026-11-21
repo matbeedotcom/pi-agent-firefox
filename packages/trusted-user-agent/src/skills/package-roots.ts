@@ -3,7 +3,7 @@
  *
  * Application data lives under a configurable native-host data root
  * (default ~/.pi/browser): `packages/` holds skill source packages.
- * PI_BROWSER_SKILL_ROOTS adds registered external package roots
+ * TRUSTED_UA_SKILL_ROOTS adds registered external package roots
  * (path.delimiter separated).
  */
 import path from "node:path";

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Pi Browser",
+  "name": "Trusted User Agent",
   "version": "0.4.0",
-  "description": "Pi Coding Agent sidebar: multi-session ACP client with browser tools over Firefox Native Messaging",
+  "description": "Chat with pi, Claude Code or Codex in the sidebar and let agents use your browser tabs, with your approval. Multi-session ACP client over Native Messaging.",
   "icons": {
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"
@@ -24,7 +24,7 @@
     "scripts": ["background.js"]
   },
   "sidebar_action": {
-    "default_title": "Pi",
+    "default_title": "Trusted Agent",
     "default_panel": "sidebar/index.html",
     "default_icon": "icons/icon.svg"
   },
@@ -44,7 +44,7 @@
     }
   ],
   "action": {
-    "default_title": "Pi Screenshot",
+    "default_title": "Trusted Agent",
     "default_icon": "icons/icon.svg"
   },
   "browser_specific_settings": {

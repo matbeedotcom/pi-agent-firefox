@@ -274,5 +274,5 @@ test("caller: revoking in settings asks again, only for that app and caller", as
 
 test("caller: a missing app is a tool error naming the app", async () => {
   const rig = setup({ withThunderbird: false });
-  await assert.rejects(callAs(rig, "mcp:n", codex, "mail_search"), /mail_search needs Thunderbird with the Pi add-on running/);
+  await assert.rejects(callAs(rig, "mcp:n", codex, "mail_search"), /mail_search needs Thunderbird with the Trusted User Agent add-on running/);
 });

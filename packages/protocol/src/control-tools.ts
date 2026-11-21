@@ -40,7 +40,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   {
     name: "pi_get_state",
     description:
-      "Get the state of the Pi Browser integration: connection status, the known Pi sessions " +
+      "Get the state of the Trusted User Agent add-on: connection status, the known chat sessions " +
       "(id, title, cwd, streaming flag, config options, bound tab) and the currently active session.",
     inputSchema: { ...OBJECT_SCHEMA_BASE, properties: {} },
     readOnly: true,
@@ -48,7 +48,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   {
     name: "pi_new_session",
     description:
-      "Create a new Pi session (ACP session/new) with the given working directory. " +
+      "Create a new chat session (ACP session/new) with the given working directory. " +
       "Returns the new session id. The session immediately has the browser tools available " +
       "once a tab is bound to it.",
     inputSchema: {
@@ -63,7 +63,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   {
     name: "pi_select_session",
     description:
-      "Make a Pi session the active one in the Firefox sidebar. Loads (or re-resumes) its " +
+      "Make a chat session the active one in the Firefox sidebar. Loads (or re-resumes) its " +
       "transcript on the host. Use before prompting a session that is not currently active.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
@@ -75,7 +75,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   {
     name: "pi_prompt",
     description:
-      "Send a prompt to a Pi session (ACP session/prompt). Returns immediately with " +
+      "Send a prompt to a chat session (ACP session/prompt). Returns immediately with " +
       "{accepted: true}; the turn then streams via session updates. Poll pi_get_state " +
       "(streaming flag) or wait for the turn to finish.",
     inputSchema: {
@@ -90,7 +90,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   },
   {
     name: "pi_cancel",
-    description: "Cancel the currently streaming turn of a Pi session (ACP session/cancel).",
+    description: "Cancel the currently streaming turn of a chat session (ACP session/cancel).",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: { sessionId: SESSION_ID },
@@ -100,7 +100,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   },
   {
     name: "pi_close_session",
-    description: "Close a Pi session on the host (ACP session/close). It can be resumed later.",
+    description: "Close a chat session on the host (ACP session/close). It can be resumed later.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: { sessionId: SESSION_ID },
@@ -130,7 +130,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   {
     name: "pi_bind_current_tab",
     description:
-      "Bind the currently active Firefox tab to a Pi session. After this, the session's " +
+      "Bind the currently active Firefox tab to a chat session. After this, the session's " +
       "browser tools (browser_get_page, browser_click, ...) operate on that tab only.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
@@ -142,7 +142,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   {
     name: "pi_bind_tab",
     description:
-      "Bind an existing Firefox tab to a Pi session: the session's browser tools (browser_get_page, " +
+      "Bind an existing Firefox tab to a chat session: the session's browser tools (browser_get_page, " +
       "browser_click, ...) operate on that tab. The tab id comes from pi_list_tabs. Replaces the " +
       "session's current binding and releases the tab from any other session bound to it.",
     inputSchema: {
@@ -187,7 +187,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   },
   {
     name: "pi_unbind_tab",
-    description: "Remove the tab binding of a Pi session; its browser tools fail until re-bound.",
+    description: "Remove the tab binding of a chat session; its browser tools fail until re-bound.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,
       properties: { sessionId: SESSION_ID },
@@ -198,7 +198,7 @@ export const CONTROL_TOOLS: readonly ControlToolDef[] = [
   {
     name: "pi_open_bound_tab",
     description:
-      "Activate the tab bound to a Pi session (focus its window and make the tab visible). " +
+      "Activate the tab bound to a chat session (focus its window and make the tab visible). " +
       "Use before browser_screenshot, which can only capture the visible tab.",
     inputSchema: {
       ...OBJECT_SCHEMA_BASE,

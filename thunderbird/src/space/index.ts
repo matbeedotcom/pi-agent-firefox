@@ -86,7 +86,7 @@ function addBlock(sessionId: string, block: Block): void {
 function action<A>(name: string, payload?: Record<string, unknown>): Promise<A> {
   return new Promise((resolve, reject) => {
     browser.runtime
-      .sendMessage({ type: "pi/action", action: name, ...(payload !== undefined ? { payload } : {}) })
+      .sendMessage({ type: "tua/action", action: name, ...(payload !== undefined ? { payload } : {}) })
       .then((resp) => {
         if (resp && resp.ok === false) {
           reject(new Error(resp.error?.message ?? "action failed"));
@@ -286,7 +286,7 @@ function renderStatus(): void {
     case "connected": {
       el.classList.add("ok");
       const agent = s.agentInfo ? `${s.agentInfo.name ?? "agent"} ${s.agentInfo.version ?? ""}`.trim() : "connected";
-      el.textContent = `Pi · ${agent}`;
+      el.textContent = `Trusted Agent · ${agent}`;
       break;
     }
     case "connecting":
@@ -350,11 +350,11 @@ function renderCaps(): void {
     ? "capabilities: chat · read-only mail · browsing"
     : "capabilities: chat · read-only mail";
   el.title =
-    "Pi can read the mail you select or view (context, messages, bodies, search, attachments, accounts, folders). " +
+    "The agent can read the mail you select or view (context, messages, bodies, search, attachments, accounts, folders). " +
     "It cannot send, move, or delete. Compose (drafts) arrives in a later phase. " +
     (browsing
-      ? "The browser add-on is connected, so Pi can also use your browser."
-      : "Connect the browser add-on to also give Pi your browser.");
+      ? "The browser add-on is connected, so the agent can also use your browser."
+      : "Connect the browser add-on to also give the agent your browser.");
 }
 
 function renderActive(): void {
@@ -566,16 +566,16 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     request?: PermissionRequestUi;
     params?: { sessionId: string; toolCallId: string; tool: string; application: string };
   };
-  if (msg.type === "pi/state" && msg.state) {
+  if (msg.type === "tua/state" && msg.state) {
     uiState = msg.state;
     activeSessionId = msg.state.activeSessionId;
     applyTrustedUaTheme(msg.state.theme);
     renderAll();
-  } else if (msg.type === "pi/session_update" && msg.sessionId && msg.update) {
+  } else if (msg.type === "tua/session_update" && msg.sessionId && msg.update) {
     applySessionUpdate(msg.sessionId, msg.update);
-  } else if (msg.type === "pi/permission_request" && msg.request) {
+  } else if (msg.type === "tua/permission_request" && msg.request) {
     showPermissionPrompt(msg.request);
-  } else if (msg.type === "pi/permission_prompted" && msg.params) {
+  } else if (msg.type === "tua/permission_prompted" && msg.params) {
     const { sessionId, toolCallId, tool, application } = msg.params;
     remotePrompts.set(`${sessionId}:${toolCallId}`, { tool, application });
     renderRemotePromptBanner();
@@ -599,7 +599,7 @@ interface PermissionRequestUi {
 }
 
 function answerPermission(permId: string, optionId: string): void {
-  browser.runtime.sendMessage({ type: "pi/permission_response", permId, optionId }).catch(() => {});
+  browser.runtime.sendMessage({ type: "tua/permission_response", permId, optionId }).catch(() => {});
   hidePermissionPrompt();
 }
 
@@ -613,7 +613,7 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
   // host never hangs, rather than crashing the message handler.
   if (!overlay || !desc || !optionsWrap) {
     browser.runtime
-      .sendMessage({ type: "pi/permission_response", permId, optionId: "cancelled" })
+      .sendMessage({ type: "tua/permission_response", permId, optionId: "cancelled" })
       .catch(() => {});
     return;
   }
@@ -760,7 +760,7 @@ $<HTMLDivElement>("settings-card").addEventListener("click", (e) => e.stopPropag
 
 $<HTMLButtonElement>("onboard-check").addEventListener("click", () => {
   browser.runtime
-    .sendMessage({ type: "pi/ensure_connected" })
+    .sendMessage({ type: "tua/ensure_connected" })
     .then((res: { connected?: boolean } | undefined) => {
       if (res?.connected) {
         void action<UiState>("get_state")
@@ -825,9 +825,9 @@ void (async () => {
 
 // The Pi Space button was clicked while an external app's approval prompt
 // waits: bring the approval window to the front (openspec external-mcp-callers D6).
-void browser.runtime.sendMessage({ type: "pi/approval_focus" }).catch(() => undefined);
+void browser.runtime.sendMessage({ type: "tua/approval_focus" }).catch(() => undefined);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    void browser.runtime.sendMessage({ type: "pi/approval_focus" }).catch(() => undefined);
+    void browser.runtime.sendMessage({ type: "tua/approval_focus" }).catch(() => undefined);
   }
 });

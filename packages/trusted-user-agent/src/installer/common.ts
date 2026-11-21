@@ -57,7 +57,7 @@ export interface InstallerEnv {
 export function buildManifest(launcherPath: string): NativeHostManifest {
   return {
     name: NATIVE_HOST_NAME,
-    description: "Pi Agent Desktop Integration",
+    description: "Trusted User Agent desktop integration",
     path: launcherPath,
     type: "stdio",
     allowed_extensions: ALLOWED_EXTENSIONS,

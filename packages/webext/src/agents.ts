@@ -31,13 +31,15 @@ export async function fetchAgents(
   }
 }
 
-const CHOICE_KEY = "piAgentChoice";
+const CHOICE_KEY = "trustedUaAgentChoice";
+/** v0.4.0 key, read when the new one is absent. */
+const LEGACY_CHOICE_KEY = "piAgentChoice";
 
 /** The agent last used for a new session in this app (pi when none). */
 export async function loadAgentChoice(app: AgentApplication): Promise<string> {
   try {
-    const stored = (await browser.storage.local.get(CHOICE_KEY)) as Record<string, Record<string, string> | undefined>;
-    return stored[CHOICE_KEY]?.[app] ?? PI_AGENT_ID;
+    const stored = (await browser.storage.local.get([CHOICE_KEY, LEGACY_CHOICE_KEY])) as Record<string, Record<string, string> | undefined>;
+    return stored[CHOICE_KEY]?.[app] ?? stored[LEGACY_CHOICE_KEY]?.[app] ?? PI_AGENT_ID;
   } catch {
     return PI_AGENT_ID;
   }
@@ -75,7 +77,7 @@ export function planStatus(entries: PlanEntryLike[]): "completed" | "in_progress
 }
 
 /** Tool call id of the per-session plan card. */
-export const PLAN_CARD_ID = "pi-browser-plan";
+export const PLAN_CARD_ID = "trusted-ua-plan";
 
 const MAX_DIFF_LINES = 400;
 

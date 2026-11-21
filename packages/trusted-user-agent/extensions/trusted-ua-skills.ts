@@ -3,7 +3,7 @@
  *
  * Loaded explicitly via an agent's `extensions:` list in the host broker:
  *
- *   extensions: ["<repo>/packages/trusted-user-agent/extensions/pi-skills.ts"]
+ *   extensions: ["<repo>/packages/trusted-user-agent/extensions/trusted-ua-skills.ts"]
  *
  * The factory registers nothing in a plain pi session (no host bridge) and
  * is never loaded into isolated job sessions (noExtensions). All behavior

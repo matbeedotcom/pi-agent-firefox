@@ -1,5 +1,5 @@
 /**
- * `/trusted-ua mcp` — register the pi-browser MCP server in Pi's global
+ * `/trusted-ua mcp` — register the trusted-ua MCP server in Pi's global
  * MCP config (`~/.pi/agent/mcp.json`).
  *
  * The broker process (native-host/main.js) exposes the add-on tools as an
@@ -17,9 +17,9 @@
  * existing entry, and status checks only command + args.
  *
  * Sub-commands (mirroring the host commands):
- *   mcp [install]   write/update the pi-browser entry (idempotent)
+ *   mcp [install]   write/update the trusted-ua entry (idempotent)
  *   mcp status      report the configured entry vs. the expected one
- *   mcp uninstall   remove the pi-browser entry
+ *   mcp uninstall   remove the trusted-ua entry
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -135,7 +135,7 @@ export function runMcpCommand(sub: McpSubcommand, homeDir: string, entryOpts: Mc
       ];
       if (replacesLegacy) lines.push(`  replaced the old ${LEGACY_MCP_SERVER_NAME} entry`);
       if (!already) {
-        lines.push("  new Pi sessions pick the config up at startup");
+        lines.push("  new pi sessions pick the config up at startup");
         lines.push(`  tool names: mcp__${MCP_SERVER_NAME}__<tool> (pi built-in MCP; exposure "deferred" — the model loads them via tool_search) or mcp:${MCP_SERVER_NAME}/<tool> (pi-mcp-adapter)`);
         lines.push("  works before Firefox/Thunderbird start; calls succeed once an app with the Trusted User Agent add-on is running");
       }

@@ -75,9 +75,9 @@ import { setEnvBoth, piAgentDir, envValue } from "../env.js";
 const require = createRequire(import.meta.url);
 
 /**
- * Mock-mode skills config (test seam; PI_BROWSER_BACKEND=mock only).
+ * Mock-mode skills config (test seam; TRUSTED_UA_BACKEND=mock only).
  *
- * PI_BROWSER_SKILLS_CONFIG is a JSON file path (or inline JSON):
+ * TRUSTED_UA_SKILLS_CONFIG is a JSON file path (or inline JSON):
  * {
  *   "grants":   [{ "skillKey": "pkg/skill", "revision": "*", "capabilities": ["context.read"],
  *                  "mode": "review-before-submit" }],  // optional; defaults to advisory
@@ -121,7 +121,7 @@ function loadMockSkillsConfig(
  * ~/.pi/browser/logs/host-<pid>.log. Native-host stderr only survives in the
  * about:debugging runtime log, so a file is what makes mid-session drops
  * (e.g. a tool call stuck at in_progress) diagnosable after the fact.
- * PI_BROWSER_LOG_FILE overrides the path; "off" (or empty) disables logging
+ * TRUSTED_UA_LOG_FILE overrides the path; "off" (or empty) disables logging
  * to file (stderr stays on).
  */
 function resolveLogPath(): string | undefined {
@@ -536,7 +536,7 @@ async function main(): Promise<void> {
   try {
     mcpServer = await startMcpBrowserServer({ log, bridge: toolBridge, instanceId });
   } catch (err) {
-    // Non-fatal: the in-process bridge (extensions/pi-browser-tools.ts)
+    // Non-fatal: the in-process bridge (extensions/trusted-ua-tools.ts)
     // keeps working for foreground children; only subagent MCP access is
     // unavailable until the socket is free again.
     log.warn("could not start mcp browser server", err);
@@ -586,6 +586,6 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   // stderr only — stdout is protocol data.
-  process.stderr.write(`[pi-browser-host] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+  process.stderr.write(`[trusted-ua-host] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
   process.exit(1);
 });

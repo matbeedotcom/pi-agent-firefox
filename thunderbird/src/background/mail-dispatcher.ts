@@ -584,7 +584,7 @@ function abortActiveSearch(state: ActiveSearch): void {
  */
 function mailLog(msg: string): void {
   try {
-    console.info(`[pi-thunderbird:mail] ${msg}`);
+    console.info(`[trusted-ua-thunderbird:mail] ${msg}`);
   } catch {
     /* logging must never break a tool call */
   }

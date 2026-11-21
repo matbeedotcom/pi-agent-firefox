@@ -120,12 +120,12 @@ export class ToolDispatcher {
     if (previous && previous !== sessionId && isCallerSessionId(sessionId) && !isCallerSessionId(previous)) {
       throw new TrustedUaProtocolError(
         TRUSTED_UA_ERROR.INTERNAL,
-        `tab ${tabId} is in use by a Pi chat session in the sidebar — bind another tab, or open one with browser_open_tab`,
+        `tab ${tabId} is in use by a chat session in the sidebar — bind another tab, or open one with browser_open_tab`,
       );
     }
     if (previous && previous !== sessionId) {
       this.store.unbind(previous);
-      console.info(`[pi-browser] bind_tab: tab ${tabId} released from session ${previous}`);
+      console.info(`[trusted-ua] bind_tab: tab ${tabId} released from session ${previous}`);
     }
     this.store.bind(sessionId, {
       ref: tabId,

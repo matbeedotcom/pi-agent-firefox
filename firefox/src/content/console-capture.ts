@@ -7,7 +7,7 @@
  *   - wraps console.* before any page script runs (document_start),
  *   - records uncaught window errors, unhandled promise rejections and
  *     failed resource loads (capture-phase `error`),
- *   - exposes a ring buffer on window.__PI_BROWSER_CONSOLE__ that the
+ *   - exposes a ring buffer on window.__TRUSTED_UA_CONSOLE__ that the
  *     content script reads (directly, or via the __trustedUaConsoleRead
  *     round-trip as a fallback).
  *
@@ -93,7 +93,7 @@ interface ConsoleEntry {
     );
 
     // 3) Console buffer access for the isolated-world content script:
-    //    direct window.__PI_BROWSER_CONSOLE__ read, plus a postMessage
+    //    direct window.__TRUSTED_UA_CONSOLE__ read, plus a postMessage
     //    read/clear fallback (cross-world object access is the unusual
     //    case; structured-clone messages always work).
     window.addEventListener("message", ((e: MessageEvent) => {
@@ -114,7 +114,7 @@ interface ConsoleEntry {
       }
     }));
 
-    Object.defineProperty(window, "__PI_BROWSER_CONSOLE__", {
+    Object.defineProperty(window, "__TRUSTED_UA_CONSOLE__", {
       value: {
         get messages(): ConsoleEntry[] {
           return messages;

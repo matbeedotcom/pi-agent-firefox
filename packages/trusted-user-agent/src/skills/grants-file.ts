@@ -1,10 +1,10 @@
 /**
  * Real-user skill grants (skills-runtime-design.md §12 seam).
  *
- * The mock backend gets grants from PI_BROWSER_SKILLS_CONFIG (test seam,
+ * The mock backend gets grants from TRUSTED_UA_SKILLS_CONFIG (test seam,
  * main.ts). Real users get grants from ONE file in the data root:
  *
- *   <PI_BROWSER_DATA_ROOT || ~/.pi/browser>/skills-grants.json
+ *   <TRUSTED_UA_DATA_ROOT || ~/.pi/browser>/skills-grants.json
  *
  *   {
  *     "grants": [{

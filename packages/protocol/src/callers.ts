@@ -11,7 +11,7 @@
  *   (the MCP client's `clientInfo` from `initialize`, plus process ids).
  *   Direct socket clients are named from their own `initialize`.
  * - Processes the host itself spawned (pi subagents and their MCP servers)
- *   inherit `PI_BROWSER_HOST_CHILD=<broker instance id>`; when the value the
+ *   inherit `TRUSTED_UA_HOST_CHILD=<broker instance id>`; when the value the
  *   bridge reports matches the running broker, the call keeps the old
  *   "most recently active add-on session" routing.
  * - Permission prompts for caller sessions carry `_meta.trustedUa.caller`.
@@ -46,10 +46,10 @@ export interface CallerInfo {
   pid?: number;
   /** Parent process id of the stdio bridge (the MCP client process). */
   ppid?: number;
-  /** Value of PI_BROWSER_HOST_CHILD the bridge inherited, if any. */
+  /** Value of TRUSTED_UA_HOST_CHILD the bridge inherited, if any. */
   hostChild?: string;
   /**
-   * Value of PI_BROWSER_PARENT_SESSION: the sidebar session an external ACP
+   * Value of TRUSTED_UA_PARENT_SESSION: the sidebar session an external ACP
    * agent's bridge belongs to (sidebar-acp-agents). Honoured only together
    * with a matching `hostChild`.
    */

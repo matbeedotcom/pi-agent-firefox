@@ -164,7 +164,7 @@ export class PiSdkBackend implements PiBackend {
     const t0 = Date.now();
     const extensionFactories = [
       ...(await this.builtinFactoriesOnce()),
-      { name: "pi-browser-skills", factory: createSkillsExtensionFactory() },
+      { name: "trusted-ua-skills", factory: createSkillsExtensionFactory() },
     ];
     const services = await createAgentSessionServices({
       cwd,
@@ -199,7 +199,7 @@ export class PiSdkBackend implements PiBackend {
    * host. NOTE: the load blocks the event loop for its whole duration (pi
    * transpiles extensions synchronously), so this must run when nothing is
    * waiting on the host — the caller schedules it right after the first
-   * client has initialized. Disable with PI_BROWSER_PREWARM=0.
+   * client has initialized. Disable with TRUSTED_UA_PREWARM=0.
    */
   prewarmWorkspace(createDir: () => Promise<string>): void {
     if (this.prewarmStarted || envValue("PREWARM") === "0") return;
@@ -249,7 +249,7 @@ export class PiSdkBackend implements PiBackend {
     if (!info) {
       throw new TrustedUaProtocolError(
         TRUSTED_UA_ERROR.SESSION_NOT_FOUND,
-        `Pi session not found: ${opts.sessionId}`,
+        `pi session not found: ${opts.sessionId}`,
       );
     }
     const sessionManager = SessionManager.open(info.path);
@@ -299,7 +299,7 @@ export class PiSdkBackend implements PiBackend {
     } catch (err) {
       throw new TrustedUaProtocolError(
         TRUSTED_UA_ERROR.PI_START_FAILED,
-        `failed to start Pi session: ${err instanceof Error ? err.message : String(err)}`,
+        `failed to start pi session: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
     const m = (agentSession as { model?: { provider?: string; id?: string } }).model;

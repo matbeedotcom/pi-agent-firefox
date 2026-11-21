@@ -1,5 +1,5 @@
 /**
- * Pi Browser tools MCP server (MCP over unix socket / Windows named pipe).
+ * Trusted User Agent tools MCP server (MCP over unix socket / Windows named pipe).
  *
  * Pi subagent children run as separate node processes: they have no ACP
  * channel to the connected app and no in-process tool bridge (the bridge
@@ -29,7 +29,7 @@
  * with no add-on chat session, go through the caller gate (external access +
  * per-app caller approval) and keep their own grants and REPL state; the
  * session ends when the connection closes. A connection whose bridge
- * reports the broker's own PI_BROWSER_HOST_CHILD (or whose parent process
+ * reports the broker's own TRUSTED_UA_HOST_CHILD (or whose parent process
  * is the broker) belongs to a pi session the host spawned: its calls keep
  * the old routing to the most recently active add-on session.
  *
@@ -76,10 +76,10 @@ export interface McpBrowserServerOptions {
   log: Logger;
   /** Bridge tool calls are routed through (caller sessions; host children → last-active ACP session). */
   bridge: BrowserToolBridge;
-  /** Socket path; defaults to the broker run dir (env PI_BROWSER_BROKER_DIR honored). */
+  /** Socket path; defaults to the broker run dir (env TRUSTED_UA_BROKER_DIR honored). */
   socketPath?: string;
   /**
-   * The broker instance id the host put in PI_BROWSER_HOST_CHILD. A caller
+   * The broker instance id the host put in TRUSTED_UA_HOST_CHILD. A caller
    * reporting it (or whose parent pid is `brokerPid`) was spawned by the host.
    */
   instanceId?: string;
@@ -132,7 +132,7 @@ export function mcpInitializeResult(): Record<string, unknown> {
     capabilities: { tools: { listChanged: false } },
     serverInfo: SERVER_INFO,
     instructions:
-      "Pi Browser tools: browser_* act on the Firefox tab bound to this connection — start with " +
+      "Trusted User Agent tools: browser_* act on the Firefox tab bound to this connection — start with " +
       "browser_list_tabs + browser_bind_tab (or browser_open_tab). mail_*, compose_*, contacts_* act on " +
       "Thunderbird. Each tool runs in the app that serves it, and the user approves each tool call there.",
   };
@@ -149,7 +149,7 @@ export function mcpToolListResult(): { tools: Array<Record<string, unknown>> } {
   };
 }
 
-/** The broker's MCP endpoint (PI_BROWSER_BROKER_DIR honored): unix socket, or a named pipe on Windows. */
+/** The broker's MCP endpoint (TRUSTED_UA_BROKER_DIR honored): unix socket, or a named pipe on Windows. */
 export function defaultMcpEndpoint(): string {
   return ipcEndpoint(runDir(), TRUSTED_UA_BROKER.mcpSocketFile);
 }

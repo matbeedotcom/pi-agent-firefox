@@ -89,7 +89,7 @@ export function describePermissionRequest(request: RequestPermissionRequest): Pe
   if (caller) {
     return {
       title: `${caller} wants to run ${tool}`,
-      description: base.replace(/^Pi wants to/, `${caller} wants to`).replace(/\bPi\b(?= (?:needs|can continue))/g, caller),
+      description: base.replace(/^The agent wants to/, `${caller} wants to`).replace(/\bthe agent\b(?= (?:needs|can continue))/g, caller),
       caller,
       tool,
       callerApproval: false,

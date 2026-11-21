@@ -291,7 +291,7 @@ export class AcpClient {
       try {
         this.handlers.onSessionUpdate(params as SessionNotification);
       } catch (err) {
-        console.error(`[pi-agent] session_update handler failed`, err);
+        console.error(`[trusted-ua] session_update handler failed`, err);
       }
       return;
     }
@@ -299,7 +299,7 @@ export class AcpClient {
       try {
         this.handlers.onCapabilitiesChanged?.(params as CapabilitiesChangedParams);
       } catch (err) {
-        console.error(`[pi-agent] capabilities_changed handler failed`, err);
+        console.error(`[trusted-ua] capabilities_changed handler failed`, err);
       }
       return;
     }
@@ -308,7 +308,7 @@ export class AcpClient {
         if (method === PERMISSION_WITHDRAWN_METHOD) this.handlers.onPermissionWithdrawn?.(params as PermissionWithdrawnParams);
         else this.handlers.onSessionEnded?.(params as SessionEndedParams);
       } catch (err) {
-        console.error(`[pi-agent] ${method} handler failed`, err);
+        console.error(`[trusted-ua] ${method} handler failed`, err);
       }
       return;
     }
@@ -427,7 +427,7 @@ export class AcpClient {
     try {
       this.port?.postMessage(this.encode(msg));
     } catch (err) {
-      console.error(`[pi-agent] postMessage failed`, err);
+      console.error(`[trusted-ua] postMessage failed`, err);
     }
   }
 

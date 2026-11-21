@@ -47,7 +47,7 @@ import { dispatchContactsTool } from "./contacts-dispatcher.js";
 // State
 // ---------------------------------------------------------------------------
 
-const store = new SessionStore("piThunderbirdState");
+const store = new SessionStore("trustedUaThunderbirdState");
 
 let hostStatus: HostStatus = { state: "connecting" };
 let activeSessionId: string | undefined;
@@ -114,11 +114,11 @@ const approvals = new ApprovalWindowController({
   setBadge: (text) => {
     if (spaceId === undefined) return;
     void browser.spaces.update(spaceId, undefined, { badgeText: text }).catch((err: unknown) => {
-      console.warn("[pi-thunderbird] could not set the Pi Space badge", err);
+      console.warn("[trusted-ua-thunderbird] could not set the Trusted Agent space badge", err);
     });
   },
   notifyPage: (requests) => {
-    browser.runtime.sendMessage({ type: "pi/approval_state", requests }).catch(() => {
+    browser.runtime.sendMessage({ type: "tua/approval_state", requests }).catch(() => {
       /* approval window not open */
     });
   },
@@ -131,7 +131,7 @@ function pushPermissionRequest(request: RequestPermissionRequest): void {
     approvals.add(request);
     return;
   }
-  broadcastUi({ type: "pi/permission_request", request });
+  broadcastUi({ type: "tua/permission_request", request });
 }
 
 /** Resolve a pending permission prompt (from the space/pane or a timeout). */
@@ -141,7 +141,7 @@ function resolvePermission(permId: string, optionId: string | "cancelled"): void
     // The event page reloaded (map wiped) or the prompt already resolved:
     // the click is lost. Log it — a silent no-op here hides the
     // "I clicked Allow and nothing happened" class of stall.
-    console.warn(`[pi-thunderbird] resolvePermission: no pending prompt for ${permId}, option=${optionId}`);
+    console.warn(`[trusted-ua-thunderbird] resolvePermission: no pending prompt for ${permId}, option=${optionId}`);
     return;
   }
   clearTimeout(pending.timer);
@@ -181,7 +181,7 @@ function requestPermissionFromUser(
 // Pi Space (THUNDERBIRD-PLAN.md §5)
 // ---------------------------------------------------------------------------
 
-const SPACE_NAME = "Pi";
+const SPACE_NAME = "Trusted Agent";
 const SPACE_URL = () => browser.runtime.getURL("space/index.html");
 
 /**
@@ -204,13 +204,13 @@ async function ensurePiSpace(): Promise<number | undefined> {
     const space = await browser.spaces.create(
       SPACE_NAME,
       { url: SPACE_URL(), linkHandler: "balanced" },
-      { title: "Pi Agent", defaultIcon: "icons/icon.svg" },
+      { title: "Trusted Agent", defaultIcon: "icons/icon.svg" },
     );
     spaceId = space.id;
     await browser.trustedUaPane.registerSpaceButton(SPACE_NAME);
     return spaceId;
   } catch (err) {
-    console.error("[pi-thunderbird] ensurePiSpace failed", err);
+    console.error("[trusted-ua-thunderbird] ensurePiSpace failed", err);
     return undefined;
   }
 }
@@ -296,7 +296,7 @@ const client = new AcpClient(
     // Cross-app heads-up: a tool's approval prompt is showing in ANOTHER app
     // (e.g. the browser). Point the user there; we do not answer it.
     onPermissionPrompted: (params) => {
-      broadcastUi({ type: "pi/permission_prompted", params });
+      broadcastUi({ type: "tua/permission_prompted", params });
     },
     // The host gave up on a prompt (timeout, or its MCP caller disconnected).
     onPermissionWithdrawn: (params) => {
@@ -385,11 +385,11 @@ function broadcastUi(message: Record<string, unknown>): void {
 }
 
 function pushState(): void {
-  broadcastUi({ type: "pi/state", state: currentUiState() });
+  broadcastUi({ type: "tua/state", state: currentUiState() });
 }
 
 function pushSessionUpdate(sessionId: string, update: SessionUpdate): void {
-  broadcastUi({ type: "pi/session_update", sessionId, update });
+  broadcastUi({ type: "tua/session_update", sessionId, update });
 }
 
 // ---------------------------------------------------------------------------
@@ -402,7 +402,7 @@ async function refreshSessionList(): Promise<void> {
     store.upsertFromList(res.sessions ?? []);
     pushState();
   } catch (err) {
-    console.warn("[pi-thunderbird] session/list failed", err);
+    console.warn("[trusted-ua-thunderbird] session/list failed", err);
   }
 }
 
@@ -473,7 +473,7 @@ async function bootstrap(): Promise<void> {
     await client.initialize();
     initialized = true;
   } catch (err) {
-    console.error("[pi-thunderbird] initialize failed", err);
+    console.error("[trusted-ua-thunderbird] initialize failed", err);
     if (client.connected && hostStatus.state === "connecting") {
       hostStatus = { state: "disconnected", detail: err instanceof Error ? err.message : String(err) };
       pushState();
@@ -491,7 +491,7 @@ async function bootstrap(): Promise<void> {
         activeSessionId = undefined;
       }
     } catch (err) {
-      console.warn("[pi-thunderbird] resuming last session failed", err);
+      console.warn("[trusted-ua-thunderbird] resuming last session failed", err);
     }
   }
   pushState();
@@ -508,30 +508,30 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
     action?: string;
     payload?: Record<string, unknown>;
   };
-  if (msg.type === "pi/permission_response") {
+  if (msg.type === "tua/permission_response") {
     const permId = String((msg as { permId?: unknown }).permId ?? "");
     const optionId = String((msg as { optionId?: unknown }).optionId ?? "cancelled");
     resolvePermission(permId, optionId);
     sendResponse({ ok: true });
     return;
   }
-  if (msg.type === "pi/approval_get") {
+  if (msg.type === "tua/approval_get") {
     sendResponse({ requests: approvals.pending() });
     return;
   }
-  if (msg.type === "pi/approval_focus") {
+  if (msg.type === "tua/approval_focus") {
     // The Space page opened (its button was clicked): show a waiting approval window.
     sendResponse({ focused: approvals.focus() });
     return;
   }
-  if (msg.type === "pi/ensure_connected") {
+  if (msg.type === "tua/ensure_connected") {
     // Onboarding: the space's "Check again now" button. Idempotent no-op when
     // already connected; otherwise attempts the connect immediately.
     client.ensureConnected();
     sendResponse({ ok: true, connected: client.connected });
     return;
   }
-  if (msg.type !== "pi/action") return;
+  if (msg.type !== "tua/action") return;
   void handleAction(msg.action ?? "", (msg.payload ?? {}) as never)
     .then((result) => sendResponse({ ok: true, ...(result !== undefined ? { result } : {}) }))
     .catch((err) => {
@@ -631,7 +631,7 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
         // Space not created yet (startup race); try to ensure it now.
         await ensurePiSpace();
       }
-      if (spaceId === undefined) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "Pi Space not available");
+      if (spaceId === undefined) throw new TrustedUaProtocolError(TRUSTED_UA_ERROR.INTERNAL, "Trusted Agent space not available");
       await browser.spaces.open(spaceId);
       return {};
     }
@@ -690,7 +690,7 @@ browser.runtime.onConnect.addListener((port: browser.runtime.Port) => {
       requestId?: number;
     };
 
-    if (msg.type === "pi/permission_response") {
+    if (msg.type === "tua/permission_response") {
       // The pane's permission modal answers the pending prompt.
       const permId = String((msg as { permId?: unknown }).permId ?? "");
       const optionId = String((msg as { optionId?: unknown }).optionId ?? "cancelled");
@@ -705,7 +705,7 @@ browser.runtime.onConnect.addListener((port: browser.runtime.Port) => {
       // The Pi Space button opened the pane: show a waiting approval window.
       approvals.focus();
       try {
-        port.postMessage({ type: "pi/state", state: currentUiState() });
+        port.postMessage({ type: "tua/state", state: currentUiState() });
       } catch {
         /* port already gone */
       }

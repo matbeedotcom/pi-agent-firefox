@@ -141,7 +141,7 @@ for (const platform of ["linux", "macos"] as const) {
         assert.equal(manifest.name, "com.matbee.agent", `${app} manifest host name`);
         assert.equal(manifest.type, "stdio");
         assert.deepEqual(manifest.allowed_extensions, EXPECTED_ALLOWED);
-        assert.ok(manifest.path.endsWith("native/pi-agent-host"));
+        assert.ok(manifest.path.endsWith("native/trusted-ua-host"));
         const launcher = await readFile(manifest.path, "utf8");
         assert.ok(launcher.startsWith("#!/bin/sh"));
         assert.ok(launcher.includes(path.join(pkgRoot, "dist", "native-host", "main.js")));
@@ -289,7 +289,7 @@ test("windows: registry-based install/status/uninstall for both apps (mocked reg
     const manifestFile = path.join(pkgRoot, "native", "com_matbee_agent.json");
     const manifest = JSON.parse(await readFile(manifestFile, "utf8")) as { path: string; name: string; allowed_extensions: string[] };
     assert.equal(manifest.name, "com.matbee.agent");
-    assert.ok(manifest.path.endsWith("pi-agent-host.cmd"));
+    assert.ok(manifest.path.endsWith("trusted-ua-host.cmd"));
     assert.deepEqual(manifest.allowed_extensions, EXPECTED_ALLOWED);
     const launcher = await readFile(manifest.path, "utf8");
     assert.ok(launcher.startsWith("@echo off"));
@@ -376,7 +376,7 @@ test("install fails clearly when the host build is missing", async () => {
   }
 });
 
-// ── /pi-browser mcp (global ~/.pi/agent/mcp.json) ─────────────────────────
+// ── /trusted-ua mcp (global ~/.pi/agent/mcp.json) ─────────────────────────
 
 test("mcp: install → status → idempotent reinstall → uninstall lifecycle", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "pi-agent-mcp-"));

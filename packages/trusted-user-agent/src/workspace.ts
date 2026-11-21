@@ -19,7 +19,7 @@ import { randomBytes } from "node:crypto";
 import { workspacesRoot } from "./paths.js";
 
 export interface TaskWorkspaceOptions {
-  /** Root for per-task workspaces (default ~/.pi/workspaces, env PI_BROWSER_WORKSPACE_DIR). */
+  /** Root for per-task workspaces (default ~/.pi/workspaces, env TRUSTED_UA_WORKSPACE_DIR). */
   root?: string;
 }
 

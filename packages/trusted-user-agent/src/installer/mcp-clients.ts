@@ -1,7 +1,7 @@
 /**
  * `mcp <install|status|uninstall> [client]` for MCP clients other than pi
  * (openspec external-mcp-callers, D7): Claude Code, Codex, Cursor, Gemini
- * CLI and VS Code each get the same stdio bridge entry, named `pi-browser`,
+ * CLI and VS Code each get the same stdio bridge entry, named `trusted-ua`,
  * at user (global) scope.
  *
  * | Client | Install / uninstall                         | Status (read-only)            |
@@ -14,7 +14,7 @@
  * | vscode | user mcp.json `servers` (type "stdio")       | same file                     |
  *
  * Rules (spec mcp-client-installers):
- * - only the `pi-browser` entry changes; other servers and settings stay,
+ * - only the `trusted-ua` entry changes; other servers and settings stay,
  *   and keys the user added to the entry are kept;
  * - an unchanged launch is reported `current` and nothing is written;
  * - a file that can't be parsed is never written: the error is reported

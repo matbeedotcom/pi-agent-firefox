@@ -51,7 +51,7 @@ export interface InstallTargets {
 }
 
 const BASE = {
-  launcherPath: (pkgRoot: string) => path.join(pkgRoot, "native", "pi-agent-host"),
+  launcherPath: (pkgRoot: string) => path.join(pkgRoot, "native", "trusted-ua-host"),
   windowsManifestPath: (pkgRoot: string) => path.join(pkgRoot, "native", `${NATIVE_HOST_FILE}.json`),
 };
 
@@ -72,7 +72,7 @@ export const MACOS: InstallTargets = {
 export const WINDOWS: InstallTargets = {
   id: "windows",
   ...BASE,
-  launcherPath: (pkgRoot: string) => path.join(pkgRoot, "native", "pi-agent-host.cmd"),
+  launcherPath: (pkgRoot: string) => path.join(pkgRoot, "native", "trusted-ua-host.cmd"),
   launcherContent: cmdLauncherContent,
   needsChmod: false,
 };

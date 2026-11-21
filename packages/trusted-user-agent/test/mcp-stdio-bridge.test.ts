@@ -1,6 +1,6 @@
 /**
  * stdio MCP bridge (dist/native-host/mcp-stdio-main.js) — the command
- * `/pi-browser mcp install` registers, so pi's built-in MCP client (stdio /
+ * `/trusted-ua mcp install` registers, so pi's built-in MCP client (stdio /
  * HTTP only) can reach the broker's socket/pipe MCP server.
  *
  * Runs the real built entry point as a child process, exactly as an MCP
@@ -113,7 +113,7 @@ test("bridge: initialize + tools/list answer locally — no broker running", asy
     // tools/call without a broker: a tool error that tells the model what to do (no hang).
     const call = await client.request("tools/call", { name: "browser_get_page", arguments: {} });
     assert.equal((call.result as { isError?: boolean }).isError, true);
-    assert.match(callText(call), /Pi Browser is not running/);
+    assert.match(callText(call), /Trusted User Agent is not running/);
 
     const unknown = await client.request("bogus/method");
     assert.equal((unknown.error as { code: number }).code, -32601);
@@ -142,7 +142,7 @@ test("bridge: tools/call is forwarded to the broker, and reconnects after a brok
     server = undefined;
     const down = await client.request("tools/call", { name: "browser_get_page", arguments: {} });
     assert.equal((down.result as { isError?: boolean }).isError, true);
-    assert.match(callText(down), /Pi Browser is not running|Lost the connection/);
+    assert.match(callText(down), /Trusted User Agent is not running|Lost the connection/);
 
     // Broker comes back (e.g. Firefox restarted): the bridge reconnects on the next call.
     server = await startMcpBrowserServer({ log: quiet, bridge: fakeBridge() });

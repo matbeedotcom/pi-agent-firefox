@@ -223,7 +223,8 @@ test("SessionStore: hydration from persisted state restores bindings", async () 
   const backing = new Map<string, unknown>();
   const realGet = stub.storage.local.get;
   const realSet = stub.storage.local.set;
-  stub.storage.local.get = async (key: string) => (backing.has(key) ? { [key]: backing.get(key) } : {});
+  stub.storage.local.get = (async (key: string | string[]) =>
+    Object.fromEntries((Array.isArray(key) ? key : [key]).filter((k) => backing.has(k)).map((k) => [k, backing.get(k)]))) as never;
   stub.storage.local.set = async (obj: Record<string, unknown>) => {
     for (const [k, v] of Object.entries(obj)) backing.set(k, v);
   };
@@ -240,6 +241,15 @@ test("SessionStore: hydration from persisted state restores bindings", async () 
     assert.equal(store2.getBinding("s9")?.tabId, 77);
     assert.equal(store2.lastSession, "s9");
     assert.equal(store2.get("s9"), undefined);
+
+    // v0.4.0 state under the old key is read once and saved under the new one.
+    backing.clear();
+    backing.set("piBrowserState", { bindings: { old1: { tabId: 5, windowId: 1 } }, lastSessionId: "old1" });
+    const store3 = new SessionStore();
+    await store3.hydrate();
+    assert.equal(store3.getBinding("old1")?.tabId, 5);
+    assert.equal((backing.get("trustedUaState") as { lastSessionId?: string } | undefined)?.lastSessionId, "old1");
+    assert.ok(backing.has("piBrowserState"), "old key left in place");
   } finally {
     stub.storage.local.get = realGet;
     stub.storage.local.set = realSet;
@@ -1297,7 +1307,7 @@ test("ToolDispatcher: a caller session cannot take a tab from the user's chat se
   store.bind("chat-1", { tabId: 7, windowId: 1 });
   stub.tabs.get = async (tabId: number) => ({ id: tabId, windowId: 1, title: "Mine", url: "https://example.com" });
   const d = new ToolDispatcher(store);
-  await assert.rejects(d.bindSessionTab("mcp:abc", 7), /in use by a Pi chat session/);
+  await assert.rejects(d.bindSessionTab("mcp:abc", 7), /in use by a chat session/);
   assert.equal(store.getBinding("chat-1")?.tabId, 7, "the chat session keeps its tab");
   // Another caller's tab can be taken over; the user's session always wins.
   store.bind("mcp:other", { tabId: 8, windowId: 1 });

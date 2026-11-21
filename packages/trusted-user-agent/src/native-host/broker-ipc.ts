@@ -37,7 +37,7 @@ import { runDir } from "../paths.js";
  * POSIX: the socket file itself. Windows: a named pipe whose name is derived
  * from the run dir (case-folded — Windows paths are case-insensitive), so it
  * is per-user (the run dir lives in the user's profile) and every
- * PI_BROWSER_BROKER_DIR override gets its own pipe, exactly like a socket
+ * TRUSTED_UA_BROKER_DIR override gets its own pipe, exactly like a socket
  * file in that dir would.
  */
 export function ipcEndpoint(dir: string, file: string, platform: NodeJS.Platform = process.platform): string {

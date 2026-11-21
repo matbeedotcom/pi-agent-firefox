@@ -34,7 +34,7 @@
     "!dist/**/*.d.ts.map",
     "extensions",
     "skills",
-    "native/pi-agent-host",
+    "native/trusted-ua-host",
     "native/pi-browser-host",
     "native/pi-browser-host.cmd"
   ],

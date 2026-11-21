@@ -1,7 +1,7 @@
 /**
  * Deterministic scripted Pi backend (PRODUCT.md §6 seam).
  *
- * Selected with PI_BROWSER_BACKEND=mock. Used by the integration test
+ * Selected with TRUSTED_UA_BACKEND=mock. Used by the integration test
  * harness (tests/) and by users who want a token-free smoke of the full
  * ACP surface. Behaves like the real backend through the PiBackend seam:
  * sessions, streaming events, cancellation, history replay, and — when a
@@ -42,7 +42,7 @@ export interface ScriptedTurn {
   delayMs?: number;
 }
 
-/** Entry in an external mock script file (PI_BROWSER_MOCK_SCRIPT). */
+/** Entry in an external mock script file (TRUSTED_UA_MOCK_SCRIPT). */
 export interface MockScriptEntry extends ScriptedTurn {
   /** Substring that must appear in the prompt text to trigger this entry. */
   match?: string;
@@ -214,7 +214,7 @@ export class MockBackend implements PiBackend {
   readonly sessions = new Map<string, MockSession>();
   /** Sessions that exist (or existed) — the mock's stand-in for persisted sessions. */
   private readonly known = new Map<string, { cwd: string; tools: ToolSpec[] }>();
-  /** Optional external script (PI_BROWSER_MOCK_SCRIPT) or inline entries. */
+  /** Optional external script (TRUSTED_UA_MOCK_SCRIPT) or inline entries. */
   readonly script: MockScriptEntry[];
 
   constructor(script?: string | MockScriptEntry[]) {

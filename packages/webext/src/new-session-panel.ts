@@ -165,7 +165,7 @@ export function mountNewSessionPanel(container: HTMLElement, api: NewSessionPane
   function renderCwd(): void {
     const root = api.workspaceRoot();
     const sep = root && root.includes("\\") && !root.includes("/") ? "\\" : "/";
-    cwdPath.textContent = root ? `${root.replace(/[\\/]+$/, "")}${sep}…` : "created by Pi for this task";
+    cwdPath.textContent = root ? `${root.replace(/[\\/]+$/, "")}${sep}…` : "created for this task";
     cwdPath.title = root ? `A fresh folder is created under ${root}` : "";
     cwdButton.hidden = editing;
     editRow.hidden = !editing;
@@ -216,8 +216,8 @@ export function mountNewSessionPanel(container: HTMLElement, api: NewSessionPane
               ? `Starting a ${name} session… ${s} s`
               : `Starting a ${name} session… ${s} s — the first session starts ${name}, which can take a while.`
             : s < SLOW_HINT_AFTER_S
-              ? `Starting a Pi session… ${s} s`
-              : `Starting a Pi session… ${s} s — loading your Pi packages and extensions; the first session can take 15 s or more.`,
+              ? `Starting a pi session… ${s} s`
+              : `Starting a pi session… ${s} s — loading your pi packages and extensions; the first session can take 15 s or more.`,
         );
       };
       tick();

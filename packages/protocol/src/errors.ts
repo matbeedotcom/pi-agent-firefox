@@ -75,7 +75,7 @@ export function isTrustedUaErrorCode(value: unknown): value is TrustedUaErrorCod
   return typeof value === "string" && TRUSTED_UA_ERROR_CODES.has(value as TrustedUaErrorCode);
 }
 
-/** JSON-RPC numeric code for a Pi Browser error code. */
+/** JSON-RPC numeric code for a Trusted User Agent error code. */
 export function trustedUaErrorNumeric(code: TrustedUaErrorCode): number {
   return TRUSTED_UA_ERROR_CODES.get(code) ?? APP_ERROR_BASE;
 }

@@ -1,11 +1,11 @@
 /**
- * stdio ⇄ broker bridge for the Pi Browser MCP server.
+ * stdio ⇄ broker bridge for the Trusted User Agent MCP server.
  *
  * The broker serves MCP over a private unix socket / Windows named pipe
  * (mcp-server.ts). pi-mcp-adapter can dial that socket directly, but pi's
  * built-in MCP client (pi >= 1.5) only speaks stdio and HTTP. This script is
  * a plain stdio MCP server that every client can launch
- * (`/pi-browser mcp install` writes `{ command: <node>, args: [<dist>/native-host/mcp-stdio-main.js] }`):
+ * (`/trusted-ua mcp install` writes `{ command: <node>, args: [<dist>/native-host/mcp-stdio-main.js] }`):
  *
  * - initialize, ping and tools/list are answered locally, from the same
  *   static tool list the broker serves (mcp-server.ts). The server is
@@ -20,7 +20,7 @@
  * - Caller identity: the bridge remembers the client's `initialize`
  *   clientInfo and, as the first line of every broker connection (including
  *   reconnects), sends the `trusted-ua/caller` notification: name, version,
- *   its own pid and parent pid, and the PI_BROWSER_HOST_CHILD value it
+ *   its own pid and parent pid, and the TRUSTED_UA_HOST_CHILD value it
  *   inherited. The broker runs the connection as that caller's session.
  *   An older broker ignores the notification.
  *
@@ -37,7 +37,7 @@ import { envValue } from "../env.js";
 const CONNECT_TIMEOUT_MS = 3_000;
 
 const NOT_RUNNING =
-  "Pi Browser is not running: open Firefox (or Thunderbird) with the Pi add-on — its native host serves these tools — then retry.";
+  "Trusted User Agent is not running: open Firefox (or Thunderbird) with the Trusted User Agent add-on — its native host serves these tools — then retry.";
 
 interface Message {
   jsonrpc?: unknown;
@@ -53,7 +53,7 @@ export interface BridgeOptions {
   output: NodeJS.WritableStream;
   /** Diagnostics sink (stderr). */
   log?: (line: string) => void;
-  /** Environment to read PI_BROWSER_HOST_CHILD from (default process.env). */
+  /** Environment to read TRUSTED_UA_HOST_CHILD from (default process.env). */
   env?: NodeJS.ProcessEnv;
 }
 
@@ -119,7 +119,7 @@ export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
         });
         const lost = () => {
           if (socket === s) socket = undefined;
-          for (const id of pending) toolError(id, "Lost the connection to Pi Browser while the tool was running. Retry the call.");
+          for (const id of pending) toolError(id, "Lost the connection to Trusted User Agent while the tool was running. Retry the call.");
           pending.clear();
         };
         s.on("close", lost);
