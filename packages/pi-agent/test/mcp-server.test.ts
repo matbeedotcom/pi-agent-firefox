@@ -217,7 +217,7 @@ interface RecordedCall {
 }
 
 async function callerServer(
-  extra: { instanceId?: string; brokerPid?: number } = {},
+  extra: { instanceId?: string; brokerPid?: number; parents?: Record<string, string> } = {},
 ): Promise<{ handle: McpBrowserServerHandle; seen: RecordedCall[]; closed: string[] }> {
   const seen: RecordedCall[] = [];
   const closed: string[] = [];
@@ -226,11 +226,13 @@ async function callerServer(
     socketPath: ipcEndpoint(tmp, `caller-${Math.random().toString(36).slice(2)}.sock`),
     // The test process is not a broker: no parent-pid matches by accident.
     brokerPid: -1,
-    ...extra,
+    ...(extra.instanceId !== undefined ? { instanceId: extra.instanceId } : {}),
+    ...(extra.brokerPid !== undefined ? { brokerPid: extra.brokerPid } : {}),
     bridge: {
       registerSession: () => undefined,
       touchSession: () => undefined,
       closeSession: (id) => closed.push(id),
+      resolveParentSession: (token) => extra.parents?.[token],
       call: async (o) => {
         seen.push({
           tool: o.tool,
@@ -314,6 +316,40 @@ test("mcp server: host children (matching marker or broker parent pid) keep last
     marker.close();
     child.close();
     stale.close();
+    await handle.close();
+  }
+});
+
+test("mcp server: an agent session's bridge (host child + parentSession) runs for that sidebar session; a forged one is a caller", async () => {
+  const { handle, seen } = await callerServer({ instanceId: "inst-3", parents: { "tok-A": "sess-A", "tok-B": "sess-B" } });
+  const a = new MiniMcpClient(handle.socketPath);
+  const b = new MiniMcpClient(handle.socketPath);
+  const forged = new MiniMcpClient(handle.socketPath);
+  const gone = new MiniMcpClient(handle.socketPath);
+  try {
+    await Promise.all([a.ready(), b.ready(), forged.ready(), gone.ready()]);
+    a.notify("pi-browser/caller", { name: "claude-code", hostChild: "inst-3", parentSession: "tok-A" });
+    b.notify("pi-browser/caller", { name: "codex", hostChild: "inst-3", parentSession: "tok-B" });
+    // Not started by this broker: the reported token is ignored.
+    forged.notify("pi-browser/caller", { name: "evil", parentSession: "tok-A" });
+    // A host child whose session closed: refused, never routed elsewhere.
+    gone.notify("pi-browser/caller", { name: "codex", hostChild: "inst-3", parentSession: "tok-CLOSED" });
+    await a.request("tools/call", { name: "browser_get_page", arguments: {} });
+    await b.request("tools/call", { name: "browser_get_page", arguments: {} });
+    await forged.request("tools/call", { name: "browser_get_page", arguments: {} });
+    const res = (await gone.request("tools/call", { name: "browser_get_page", arguments: {} })) as { isError?: boolean; content?: Array<{ text: string }> };
+    assert.deepEqual(seen[0], { tool: "browser_get_page", sessionId: "sess-A" });
+    assert.deepEqual(seen[1], { tool: "browser_get_page", sessionId: "sess-B" });
+    assert.match(String(seen[2].sessionId), /^mcp:/, "forged parentSession: external caller session");
+    assert.deepEqual(seen[2].caller, { name: "evil" });
+    assert.equal(seen.length, 3, "the closed session's call never reached the bridge");
+    assert.equal(res.isError, true);
+    assert.match(res.content?.[0]?.text ?? "", /session this agent was started for is closed/);
+  } finally {
+    a.close();
+    b.close();
+    forged.close();
+    gone.close();
     await handle.close();
   }
 });

@@ -8,7 +8,7 @@
  * Shared by Firefox (tab bindings) and Thunderbird (message bindings land in
  * T2; the binding map is simply unused until then).
  */
-import type { SessionInfo, SessionConfigOption } from "@pi-browser/protocol";
+import { agentRefOf, type AgentRef, type SessionInfo, type SessionConfigOption } from "@pi-browser/protocol";
 
 /**
  * App-specific context attached to a session (Firefox: tab, TB: message/folder).
@@ -67,6 +67,8 @@ export interface SessionView {
   /** True once the UI has the transcript (fresh create or session/load replay). */
   loaded: boolean;
   configOptions?: SessionConfigOption[];
+  /** The external ACP agent the session runs on (absent: pi). */
+  agent?: AgentRef;
 }
 
 export interface PersistedState {
@@ -129,11 +131,12 @@ export class SessionStore {
         streaming: existing?.streaming ?? false,
         loaded: existing?.loaded ?? false,
         configOptions: existing?.configOptions,
+        ...((agentRefOf(s) ?? existing?.agent) ? { agent: agentRefOf(s) ?? existing?.agent } : {}),
       });
     }
   }
 
-  upsertCreated(sessionId: string, cwd: string, configOptions?: SessionConfigOption[]): SessionView {
+  upsertCreated(sessionId: string, cwd: string, configOptions?: SessionConfigOption[], agent?: AgentRef): SessionView {
     const view: SessionView = {
       sessionId,
       cwd,
@@ -141,6 +144,7 @@ export class SessionStore {
       streaming: false,
       loaded: true,
       configOptions,
+      ...(agent ? { agent } : {}),
     };
     this.sessions.set(sessionId, view);
     return view;
@@ -236,6 +240,7 @@ export class SessionStore {
       loaded: boolean;
       binding?: Binding;
       configOptions?: SessionConfigOption[];
+      agent?: AgentRef;
     }>;
     lastSessionId?: string;
   } {
@@ -248,6 +253,7 @@ export class SessionStore {
         streaming: s.streaming,
         loaded: s.loaded,
         configOptions: s.configOptions,
+        ...(s.agent ? { agent: s.agent } : {}),
         binding: this.bindings.get(s.sessionId),
       })),
       ...(this.lastSessionId ? { lastSessionId: this.lastSessionId } : {}),

@@ -19,6 +19,9 @@ import {
   PROTOCOL_VERSION,
   toErrorObject,
   parseAgentHello,
+  requestedAgentId,
+  PI_AGENT_ID,
+  type AgentsResult,
   type AgentApplication,
   type AgentCapability,
   type PiAgentMeta,
@@ -60,6 +63,8 @@ import type { ImageAttachment } from "./backend.js";
 import { touchClientHeartbeat } from "../client-heartbeat.js";
 import type { CapabilityRegistry } from "../capability-registry.js";
 import type { BrowserToolBridge } from "../tool-bridge.js";
+import type { ExternalAgents } from "./agents/manager.js";
+import type { AcpRelaySession } from "./agents/relay-session.js";
 
 export interface AcpAgentOptions {
   backend: PiBackend;
@@ -96,6 +101,12 @@ export interface AcpAgentOptions {
    * the request; otherwise the agent answers METHOD_NOT_FOUND.
    */
   extendedRequest?: (method: string, params: unknown, id: number) => boolean | void | Promise<boolean | void>;
+  /**
+   * External ACP agents (openspec sidebar-acp-agents), shared by every
+   * client of the broker. Without it every session runs on pi and
+   * x-pi-browser/agents lists pi only.
+   */
+  externalAgents?: ExternalAgents;
 }
 
 interface SessionState {
@@ -138,6 +149,8 @@ const PREWARM_DELAY_MS = 2_000;
 
 export class AcpAgent {
   private readonly sessions = new Map<string, SessionState>();
+  /** Sessions of this client that run on an external ACP agent. */
+  private readonly relays = new Map<string, AcpRelaySession>();
   /** Name of the connected client (set on initialize) — for the add-on heartbeat. */
   private clientIdentityName: string | undefined;
   /**
@@ -229,6 +242,9 @@ export class AcpAgent {
           return;
         case AGENT_METHODS.session_set_config_option:
           this.transport().respond(id, await this.sessionSetConfigOption(params as SetSessionConfigOptionRequest));
+          return;
+        case X_PI_BROWSER.agents:
+          this.transport().respond(id, this.listAgents());
           return;
         case X_PI_BROWSER.permissions:
           this.transport().respond(id, this.opts.provider.permissionConfig());
@@ -386,7 +402,16 @@ export class AcpAgent {
     };
   }
 
+  private listAgents(): AgentsResult {
+    return this.opts.externalAgents?.list() ?? {
+      agents: [{ id: PI_AGENT_ID, name: "pi", available: true }],
+      defaultAgent: PI_AGENT_ID,
+    };
+  }
+
   private async sessionNew(req: NewSessionRequest) {
+    const agentId = requestedAgentId(req);
+    if (agentId && agentId !== PI_AGENT_ID) return this.relayNew(agentId, req);
     // A session with no meaningful requested cwd (the add-on's empty-field
     // fallback is "/") gets a fresh per-task workspace as its cwd, so the
     // model's file tools and the REPL share one task-scoped scratch.
@@ -407,6 +432,10 @@ export class AcpAgent {
   }
 
   private async sessionResume(req: ResumeSessionRequest) {
+    if (this.isRelaySession(req.sessionId)) {
+      const relay = await this.relayOpen(req.sessionId, "resume", req.mcpServers, req.cwd);
+      return { configOptions: relay.configOptions, _meta: { piBrowser: this.relayMeta(relay) } };
+    }
     const { state } = await this.openBackendSession(
       // Resumed sessions must keep the browser/`javascript` tool surface
       // (same as sessionNew) — dropping customTools here silently removes
@@ -421,6 +450,10 @@ export class AcpAgent {
   }
 
   private async sessionLoad(req: LoadSessionRequest) {
+    if (this.isRelaySession(req.sessionId)) {
+      const relay = await this.relayOpen(req.sessionId, "load", req.mcpServers, req.cwd);
+      return { configOptions: relay.configOptions, _meta: { piBrowser: this.relayMeta(relay) } };
+    }
     const existing = this.sessions.get(req.sessionId);
     if (existing) {
       for (const update of await this.replayHistory(existing)) this.sendSessionUpdate(existing.id, update);
@@ -444,14 +477,36 @@ export class AcpAgent {
   }
 
   private async sessionList(req: ListSessionsRequest) {
-    const sessions = await this.opts.backend.listSessions(req.cwd ?? undefined);
+    const sessions = (await this.opts.backend.listSessions(req.cwd ?? undefined)).map(toSessionInfo);
+    const ext = this.opts.externalAgents;
+    if (ext) {
+      // External-agent sessions from the host's index (D5), each labelled
+      // with its agent; newest first across both kinds.
+      for (const e of ext.index.list(req.cwd ?? undefined)) {
+        sessions.push({
+          sessionId: e.sessionId,
+          cwd: e.cwd,
+          updatedAt: e.updatedAt,
+          title: e.title ?? null,
+          _meta: { piBrowser: { agent: { id: e.agent, name: ext.registry.nameOf(e.agent) } } },
+        });
+      }
+      sessions.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
+    }
     return {
-      sessions: sessions.map(toSessionInfo),
+      sessions,
       nextCursor: null,
     };
   }
 
   private async sessionPrompt(req: PromptRequest) {
+    const relay = this.relays.get(req.sessionId);
+    if (relay) {
+      this.opts.bridge?.touchSession(req.sessionId);
+      if (!req.prompt?.length) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.INTERNAL, "empty prompt");
+      this.opts.log.info(`session/prompt ${req.sessionId} -> ${relay.agentId} (${req.prompt.length} blocks)`);
+      return relay.prompt(req.prompt);
+    }
     const st = this.sessions.get(req.sessionId);
     if (!st) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${req.sessionId}`);
     // Bridge fallback target: bridge tool calls without an explicit session
@@ -471,6 +526,12 @@ export class AcpAgent {
   }
 
   private sessionCancel(req: CancelNotification): void {
+    const relay = this.relays.get(req.sessionId);
+    if (relay) {
+      this.opts.log.info(`session/cancel ${req.sessionId} -> ${relay.agentId}`);
+      relay.cancel();
+      return;
+    }
     const st = this.sessions.get(req.sessionId);
     if (!st) {
       this.opts.log.warn(`cancel for unknown session ${req.sessionId}`);
@@ -487,6 +548,8 @@ export class AcpAgent {
   }
 
   private async sessionSetConfigOption(req: SetSessionConfigOptionRequest) {
+    const relay = this.relays.get(req.sessionId);
+    if (relay) return { configOptions: await relay.setConfigOption(req.configId, req.value) };
     const st = this.sessions.get(req.sessionId);
     if (!st) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.SESSION_NOT_FOUND, `unknown session: ${req.sessionId}`);
 
@@ -696,6 +759,13 @@ export class AcpAgent {
   }
 
   disposeSession(sessionId: string): void {
+    const relay = this.relays.get(sessionId);
+    if (relay) {
+      this.relays.delete(sessionId);
+      void relay.close();
+      void this.opts.provider.disposeSession(sessionId);
+      return;
+    }
     const st = this.sessions.get(sessionId);
     if (!st) return;
     st.unsubscribe();
@@ -707,6 +777,70 @@ export class AcpAgent {
   /** Tear down every session (host shutdown). */
   shutdown(): void {
     for (const id of [...this.sessions.keys()]) this.disposeSession(id);
+    for (const id of [...this.relays.keys()]) {
+      this.disposeSession(id);
+      this.opts.bridge?.closeSession(id);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // External ACP agent sessions (openspec sidebar-acp-agents)
+  // ------------------------------------------------------------------
+
+  private isRelaySession(sessionId: string): boolean {
+    return this.relays.has(sessionId) || (this.opts.externalAgents?.isAgentSession(sessionId) ?? false);
+  }
+
+  private relayMeta(relay: AcpRelaySession) {
+    return { workspace: relay.cwd, agent: { id: relay.agentId, name: relay.agentName } };
+  }
+
+  private externalAgents(): ExternalAgents {
+    const ext = this.opts.externalAgents;
+    if (!ext) {
+      throw new PiBrowserProtocolError(PI_BROWSER_ERROR.ACP_CAPABILITY_UNSUPPORTED, "this host runs pi sessions only");
+    }
+    return ext;
+  }
+
+  private relayOwner() {
+    return { transport: this.opts.transport, ...(this.opts.clientId !== undefined ? { clientId: this.opts.clientId } : {}) };
+  }
+
+  private async relayNew(agentId: string, req: NewSessionRequest) {
+    const ext = this.externalAgents();
+    // Same default folder as pi: a fresh per-task workspace, not a project.
+    const cwd = isNeutralCwd(req.cwd) ? await this.workspaces.create() : req.cwd;
+    const relay = await ext.createSession(agentId, cwd, this.relayOwner());
+    this.adoptRelay(relay, req.mcpServers);
+    this.opts.log.info(`session/new -> ${relay.id} on ${agentId} cwd=${cwd}`);
+    return {
+      sessionId: relay.id,
+      configOptions: relay.configOptions,
+      _meta: { piBrowser: this.relayMeta(relay) },
+    };
+  }
+
+  private async relayOpen(sessionId: string, how: "load" | "resume", mcpServers: McpServer[] | undefined, cwd?: string | null) {
+    const ext = this.externalAgents();
+    const relay = await ext.openSession(sessionId, this.relayOwner(), how, cwd ?? undefined);
+    if (!this.relays.has(sessionId)) this.adoptRelay(relay, mcpServers);
+    return relay;
+  }
+
+  /** Register a relay session's routing so its bridge calls act for it (D6). */
+  private adoptRelay(relay: AcpRelaySession, mcpServers: McpServer[] | undefined): void {
+    this.relays.set(relay.id, relay);
+    const browserMode = this.opts.provider.selectMode(mcpServers);
+    const mcpServer = mcpServers?.find((s) => (s as { type?: string }).type === "acp") as { serverId?: string } | undefined;
+    this.opts.provider.bindWorkspace(relay.id, relay.cwd);
+    this.opts.bridge?.registerSession(relay.id, {
+      ...(this.opts.clientId !== undefined ? { ownerClientId: this.opts.clientId } : {}),
+      ownerApplication: this.clientApplication,
+      mode: browserMode,
+      ...(mcpServer?.serverId ? { mcpServerId: mcpServer.serverId } : {}),
+    });
+    this.opts.bridge?.touchSession(relay.id);
   }
 }
 

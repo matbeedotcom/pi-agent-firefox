@@ -24,7 +24,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@pi-browser/protocol";
-import { ApprovalWindowController, isCallerPermissionRequest } from "@pi-browser/webext";
+import { ApprovalWindowController, isCallerPermissionRequest, fetchAgents } from "@pi-browser/webext";
 import { AcpClient, SESSION_OPEN_TIMEOUT_MS, bindingRefId, fetchPiTheme, notifyHost, SessionStore, SkillsRuntime, type DocumentIdentity, type GateIdentity, type HostStatus, type PiTheme } from "@pi-browser/webext";
 import type { PagePlan } from "@pi-browser/protocol";
 import { PromptRecovery } from "./prompt-recovery.js";
@@ -381,20 +381,28 @@ async function refreshSessionList(): Promise<void> {
   }
 }
 
-async function createSession(cwd: string): Promise<string> {
+async function createSession(cwd: string, agent?: string): Promise<string> {
   const decl = mcpServer.declarePending();
   const mcpServers = [{ name: "firefox-browser", type: "acp", serverId: decl.serverId }];
   let sessionId: string;
   let configOptions: unknown;
   let effectiveCwd: string;
+  let agentRef: { id: string; name: string } | undefined;
   try {
     const res = await client.request<{
       sessionId: string;
       configOptions?: unknown;
-      _meta?: { piBrowser?: { workspace?: string } };
-    }>(AGENT_METHODS.session_new, { cwd, mcpServers }, SESSION_OPEN_TIMEOUT_MS);
+      _meta?: { piBrowser?: { workspace?: string; agent?: { id: string; name: string } } };
+    }>(
+      AGENT_METHODS.session_new,
+      // An external ACP agent (Claude Code, Codex, ...) when chosen in the
+      // new-session panel; without it the host creates a pi session.
+      { cwd, mcpServers, ...(agent ? { _meta: { piBrowser: { agent } } } : {}) },
+      SESSION_OPEN_TIMEOUT_MS,
+    );
     sessionId = res.sessionId;
     configOptions = res.configOptions;
+    agentRef = res._meta?.piBrowser?.agent;
     // The agent may provision a per-task workspace as the session cwd (when
     // the requested cwd was neutral). Record the real cwd so the UI shows
     // where the model's files land, not the fallback we sent.
@@ -404,7 +412,7 @@ async function createSession(cwd: string): Promise<string> {
     throw err;
   }
   decl.resolve(sessionId);
-  store.upsertCreated(sessionId, effectiveCwd, configOptions as never);
+  store.upsertCreated(sessionId, effectiveCwd, configOptions as never, agentRef);
   store.setLastSession(sessionId);
   activeSessionId = sessionId;
   pushState();
@@ -773,8 +781,14 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
     case "new_session": {
       if (!client.connected) throw new PiBrowserProtocolError(PI_BROWSER_ERROR.NATIVE_HOST_NOT_INSTALLED, "not connected to native host");
       const cwd = String(payload.cwd ?? "").trim() || processCwdLikeFallback();
-      const sessionId = await createSession(cwd);
+      const agent = typeof payload.agent === "string" && payload.agent ? payload.agent : undefined;
+      const sessionId = await createSession(cwd, agent);
       return { sessionId };
+    }
+    case "list_agents": {
+      // The new-session panel's agent choice; null from an older host.
+      if (!client.connected) return { agents: null };
+      return { agents: (await fetchAgents((m, p, t) => client.request(m, p, t))) ?? null };
     }
     case "select_session": {
       const sessionId = String(payload.sessionId);
@@ -938,6 +952,8 @@ async function handleAction(action: string, payload: ActionPayload, sender?: { t
 
 interface ActionPayload {
   cwd?: string;
+  /** new_session: external ACP agent id (absent: pi). */
+  agent?: string;
   sessionId?: string;
   text?: string;
   /** Qualified skills event identity (`packageId:local`) for skills actions. */

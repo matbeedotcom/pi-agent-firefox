@@ -37,7 +37,7 @@ import {
   type SessionUpdate,
 } from "@pi-browser/protocol";
 import { AcpClient, SESSION_OPEN_TIMEOUT_MS, fetchPiTheme, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
-import { ApprovalWindowController, isCallerPermissionRequest } from "@pi-browser/webext";
+import { ApprovalWindowController, isCallerPermissionRequest, fetchAgents } from "@pi-browser/webext";
 import { dispatchMailTool, type MailToolContext } from "./mail-dispatcher.js";
 import { dispatchComposeTool } from "./compose-dispatcher.js";
 import { dispatchMutationTool } from "./mutation-dispatcher.js";
@@ -406,17 +406,18 @@ async function refreshSessionList(): Promise<void> {
   }
 }
 
-async function createSession(cwd: string): Promise<string> {
+async function createSession(cwd: string, agent?: string): Promise<string> {
   const res = await client.request<{
     sessionId: string;
     configOptions?: unknown;
-    _meta?: { piBrowser?: { workspace?: string } };
+    _meta?: { piBrowser?: { workspace?: string; agent?: { id: string; name: string } } };
   }>(
     AGENT_METHODS.session_new,
     // No mcpServers: the add-on declares no MCP server. The host uses the
     // legacy transport; the mail tools are still registered because the client
     // advertises the "mail"/"attachments" capabilities in its hello.
-    { cwd },
+    // `agent`: an external ACP agent chosen in the new-session panel.
+    { cwd, ...(agent ? { _meta: { piBrowser: { agent } } } : {}) },
     SESSION_OPEN_TIMEOUT_MS,
   );
   const sessionId = res.sessionId;
@@ -424,7 +425,7 @@ async function createSession(cwd: string): Promise<string> {
   // requested cwd was neutral). Record the real cwd so the UI shows where the
   // model's files land.
   const effectiveCwd = res._meta?.piBrowser?.workspace ?? cwd;
-  store.upsertCreated(sessionId, effectiveCwd, res.configOptions as never);
+  store.upsertCreated(sessionId, effectiveCwd, res.configOptions as never, res._meta?.piBrowser?.agent);
   store.setLastSession(sessionId);
   activeSessionId = sessionId;
   pushState();
@@ -545,6 +546,8 @@ browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) 
 
 interface ActionPayload {
   cwd?: string;
+  /** new_session: external ACP agent id (absent: pi). */
+  agent?: string;
   sessionId?: string;
   text?: string;
   configId?: string;
@@ -570,8 +573,14 @@ async function handleAction(action: string, payload: ActionPayload): Promise<unk
         throw new PiBrowserProtocolError(PI_BROWSER_ERROR.NATIVE_HOST_NOT_INSTALLED, "not connected to native host");
       }
       const cwd = String(payload.cwd ?? "").trim() || processCwdLikeFallback();
-      const sessionId = await createSession(cwd);
+      const agent = typeof payload.agent === "string" && payload.agent ? payload.agent : undefined;
+      const sessionId = await createSession(cwd, agent);
       return { sessionId };
+    }
+    case "list_agents": {
+      // The new-session panel's agent choice; null from an older host.
+      if (!client.connected) return { agents: null };
+      return { agents: (await fetchAgents((m, p, t) => client.request(m, p, t))) ?? null };
     }
     case "select_session": {
       const sessionId = String(payload.sessionId);

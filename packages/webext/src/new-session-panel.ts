@@ -15,15 +15,31 @@
  * a spinner, a status line counts the seconds and explains the wait, and a
  * failure is reported inline (not a transient flash) with the button
  * re-enabled.
+ *
+ * Agent (openspec sidebar-acp-agents): when the host lists external ACP
+ * agents (Claude Code, Codex, ...), an "Agent" selector comes first; pi is
+ * the default, unavailable agents are disabled with their reason, and the
+ * last choice is remembered per app. Older hosts: no selector, pi sessions.
  */
+import { agentChoices } from "./agents.js";
+import type { AgentsResult } from "@pi-browser/protocol";
 
 export interface NewSessionPanelApi {
   /** The host's workspace root, when known (older hosts don't send it). */
   workspaceRoot(): string | undefined;
   /** A project directory worth pre-filling when the user chooses to edit (e.g. the active session's cwd). */
   suggestedCwd?(): string | undefined;
-  /** Create the session. `cwd` "" = new workspace. Rejects with an Error on failure. */
-  create(cwd: string): Promise<void>;
+  /**
+   * Create the session. `cwd` "" = new workspace; `agent` is the chosen
+   * agent id (undefined = pi). Rejects with an Error on failure.
+   */
+  create(cwd: string, agent?: string): Promise<void>;
+  /** The agents the host offers (undefined: older host, no selector). */
+  agents?(): Promise<AgentsResult | undefined>;
+  /** The agent chosen last time in this app. */
+  lastAgent?(): Promise<string | undefined>;
+  /** Remember the chosen agent for next time. */
+  rememberAgent?(agentId: string): void;
   /** Called after a successful create or a cancel, to hide the panel. */
   close(): void;
 }
@@ -61,6 +77,14 @@ function isUnder(dir: string, root: string): boolean {
 export function mountNewSessionPanel(container: HTMLElement, api: NewSessionPanelApi): NewSessionPanel {
   container.textContent = "";
   container.classList.add("nsp");
+
+  const agentRow = el("div", "nsp-agent-row");
+  const agentLabel = el("label", "nsp-label", "Agent");
+  const agentSelect = el("select", "nsp-agent");
+  agentSelect.setAttribute("aria-label", "Agent");
+  agentLabel.append(agentSelect);
+  agentRow.append(agentLabel);
+  agentRow.hidden = true;
 
   const label = el("div", "nsp-label", "Working directory");
 
@@ -100,11 +124,43 @@ export function mountNewSessionPanel(container: HTMLElement, api: NewSessionPane
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
 
-  container.append(label, cwdButton, editRow, actions, status);
+  container.append(agentRow, label, cwdButton, editRow, actions, status);
 
   let editing = false;
   let pending = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  /** Display names of the listed agents (status text). */
+  let agentNames = new Map<string, string>();
+
+  function chosenAgent(): string | undefined {
+    if (agentRow.hidden) return undefined;
+    return agentSelect.value && agentSelect.value !== "pi" ? agentSelect.value : undefined;
+  }
+
+  async function refreshAgents(): Promise<void> {
+    if (!api.agents) return;
+    let result: AgentsResult | undefined;
+    let remembered: string | undefined;
+    try {
+      [result, remembered] = await Promise.all([api.agents(), api.lastAgent?.() ?? Promise.resolve(undefined)]);
+    } catch {
+      result = undefined;
+    }
+    if (pending) return;
+    const model = agentChoices(result, remembered);
+    agentNames = new Map((result?.agents ?? []).map((a) => [a.id, a.name]));
+    agentSelect.textContent = "";
+    for (const o of model.options) {
+      const opt = document.createElement("option");
+      opt.value = o.id;
+      opt.textContent = o.label;
+      opt.disabled = o.disabled;
+      if (o.title) opt.title = o.title;
+      agentSelect.append(opt);
+    }
+    agentSelect.value = model.selected;
+    agentRow.hidden = !model.show;
+  }
 
   function renderCwd(): void {
     const root = api.workspaceRoot();
@@ -142,6 +198,7 @@ export function mountNewSessionPanel(container: HTMLElement, api: NewSessionPane
     cwdButton.disabled = on;
     input.disabled = on;
     useWorkspace.disabled = on;
+    agentSelect.disabled = on;
     createLabel.textContent = on ? "Starting…" : "Create session";
     cancelButton.textContent = on ? "Hide" : "Cancel";
     cancelButton.title = on ? "Hide this panel; the session still opens when it is ready" : "";
@@ -149,12 +206,18 @@ export function mountNewSessionPanel(container: HTMLElement, api: NewSessionPane
     timer = undefined;
     if (on) {
       const t0 = Date.now();
+      const agent = chosenAgent();
+      const name = agent ? (agentNames.get(agent) ?? agent) : undefined;
       const tick = () => {
         const s = Math.floor((Date.now() - t0) / 1000);
         setStatus(
-          s < SLOW_HINT_AFTER_S
-            ? `Starting a Pi session… ${s} s`
-            : `Starting a Pi session… ${s} s — loading your Pi packages and extensions; the first session can take 15 s or more.`,
+          name
+            ? s < SLOW_HINT_AFTER_S
+              ? `Starting a ${name} session… ${s} s`
+              : `Starting a ${name} session… ${s} s — the first session starts ${name}, which can take a while.`
+            : s < SLOW_HINT_AFTER_S
+              ? `Starting a Pi session… ${s} s`
+              : `Starting a Pi session… ${s} s — loading your Pi packages and extensions; the first session can take 15 s or more.`,
         );
       };
       tick();
@@ -172,9 +235,11 @@ export function mountNewSessionPanel(container: HTMLElement, api: NewSessionPane
       input.focus();
       return;
     }
+    const agent = chosenAgent();
     setPending(true);
     try {
-      await api.create(cwd);
+      await api.create(cwd, agent);
+      if (!agentRow.hidden) api.rememberAgent?.(agentSelect.value || "pi");
       setPending(false);
       setStatus("");
       api.close();
@@ -205,12 +270,14 @@ export function mountNewSessionPanel(container: HTMLElement, api: NewSessionPane
   });
 
   renderCwd();
+  void refreshAgents();
 
   return {
     open() {
       if (!pending) {
         setStatus("");
         setEditing(false);
+        void refreshAgents();
       } else {
         renderCwd();
       }

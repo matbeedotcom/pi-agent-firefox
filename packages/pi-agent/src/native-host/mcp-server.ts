@@ -216,10 +216,22 @@ async function dispatch(
         return;
       }
       const hostChild = isHostChild(caller.info);
-      log.info(`mcp browser: tools/call ${tool} (${hostChild ? "host child" : `caller ${caller.info.name}, ${caller.id}`})`);
+      // An external ACP agent's bridge for a sidebar session: honoured only
+      // from a host child (a forged token from elsewhere is ignored and the
+      // connection stays an external caller).
+      const parentSession =
+        hostChild && caller.info.parentSession ? bridge.resolveParentSession?.(caller.info.parentSession) : undefined;
+      log.info(
+        `mcp browser: tools/call ${tool} (${parentSession ? `agent session ${parentSession}` : hostChild ? "host child" : `caller ${caller.info.name}, ${caller.id}`})`,
+      );
       try {
         let result;
-        if (hostChild) {
+        if (parentSession) {
+          result = await bridge.call({ tool, args, sessionId: parentSession });
+        } else if (hostChild && caller.info.parentSession) {
+          // The agent session it belonged to is gone: don't guess another one.
+          throw new Error("the sidebar session this agent was started for is closed");
+        } else if (hostChild) {
           // Spawned by this host (a pi subagent's MCP client): keep the
           // routing to the most recently active add-on session.
           result = await bridge.call({ tool, args });

@@ -43,6 +43,12 @@ export interface CallerInfo {
   ppid?: number;
   /** Value of PI_BROWSER_HOST_CHILD the bridge inherited, if any. */
   hostChild?: string;
+  /**
+   * Value of PI_BROWSER_PARENT_SESSION: the sidebar session an external ACP
+   * agent's bridge belongs to (sidebar-acp-agents). Honoured only together
+   * with a matching `hostChild`.
+   */
+  parentSession?: string;
 }
 
 /** `_meta.piBrowser.caller` on a session/request_permission for a caller session. */
@@ -64,6 +70,12 @@ export interface PermissionRequestPiBrowserMeta {
   callerApproval?: boolean;
   /** The application the caller approval is for. */
   application?: AgentApplication;
+  /**
+   * Set on an external ACP agent's own permission request, relayed from the
+   * agent (sidebar-acp-agents): shown in the session's own UI, labelled with
+   * the agent's name, never remembered by the add-on.
+   */
+  agent?: { id: string; name: string };
 }
 
 /**
@@ -76,7 +88,7 @@ export const PERMISSION_WITHDRAWN_METHOD = "x-pi-browser/permission_withdrawn";
 export interface PermissionWithdrawnParams {
   sessionId: string;
   toolCallId: string;
-  reason: "timeout" | "session_closed";
+  reason: "timeout" | "session_closed" | "cancelled";
 }
 
 /**
@@ -138,5 +150,6 @@ export function parseCallerInfo(raw: unknown): CallerInfo {
   if (typeof r.pid === "number" && Number.isInteger(r.pid)) out.pid = r.pid;
   if (typeof r.ppid === "number" && Number.isInteger(r.ppid)) out.ppid = r.ppid;
   if (typeof r.hostChild === "string" && r.hostChild) out.hostChild = r.hostChild;
+  if (typeof r.parentSession === "string" && r.parentSession && r.parentSession.length <= 200) out.parentSession = r.parentSession;
   return out;
 }

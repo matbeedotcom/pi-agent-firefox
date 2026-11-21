@@ -1,4 +1,5 @@
 /** UI evidence from an executed browser operation (also used inside REPL cells). */
+import { diffText } from "../agents.js";
 export interface BrowserActivity {
   id: string;
   title: string;
@@ -14,6 +15,16 @@ export function resultParts(content: unknown): { text: string; images: ToolImage
   const images: ToolImage[] = [];
   if (!Array.isArray(content)) return { text: "", images };
   for (const entry of content) {
+    // External ACP agents (sidebar-acp-agents) send file edits as diffs and
+    // may reference terminals; pi never did.
+    if (entry?.type === "diff" && typeof entry.path === "string" && typeof entry.newText === "string") {
+      text.push(diffText(entry.path, entry.oldText, entry.newText));
+      continue;
+    }
+    if (entry?.type === "terminal") {
+      text.push(typeof entry.terminalId === "string" ? `[terminal ${entry.terminalId}]` : "[terminal]");
+      continue;
+    }
     const c = entry?.type === "content" ? entry.content : entry;
     if (c?.type === "text" && typeof c.text === "string") text.push(c.text);
     if (c?.type === "image" && typeof c.data === "string" && /^image\/(png|jpeg|webp|gif)$/.test(c.mimeType)) {

@@ -12,4 +12,5 @@ export * from "./contacts-tools.js";
 export * from "./permission.js";
 export * from "./tool-capabilities.js";
 export * from "./callers.js";
+export * from "./agents.js";
 export * from "./skills.js";

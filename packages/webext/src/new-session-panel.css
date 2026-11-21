@@ -140,3 +140,51 @@
     animation-duration: 2.4s;
   }
 }
+
+/* Agent selector (sidebar-acp-agents): hidden for older hosts. */
+.nsp .nsp-agent-row[hidden] {
+  display: none;
+}
+
+.nsp .nsp-agent-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.nsp .nsp-agent {
+  width: 100%;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  background: var(--field, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+/* Small agent label next to a session's title in the session lists. */
+.agent-label {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  line-height: 15px;
+  vertical-align: middle;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  color: var(--muted, #9a96ab);
+}
+
+/* An external agent's permission prompt: the command or diff it wants to run. */
+.perm-detail {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+}

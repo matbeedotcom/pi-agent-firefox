@@ -322,6 +322,11 @@ export const X_PI_BROWSER = {
    * makes delivery explicit (design §7: results require request IDs).
    */
   skills_result: "x-pi-browser/skills_result",
+  /**
+   * Client → host: the agents a new session can run on (built-in pi plus
+   * configured external ACP agents), with availability. See agents.ts.
+   */
+  agents: "x-pi-browser/agents",
 } as const;
 
 /** Params for x-pi-browser/ping (Firefox → host). */

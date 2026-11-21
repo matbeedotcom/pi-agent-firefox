@@ -2,8 +2,11 @@
 
 # Pi Browser Agent
 
-A Firefox MV3 add-on that is a **full ACP (Agent Client Protocol) client for [Pi](https://pi.dev)**,
-plus the host package **`trusted-user-agent`** (npm; command `trusted-ua`, also installable as a pi package) that provides the **`com.matbee.agent` Native Messaging host** (application-neutral: Firefox + Thunderbird). The same host serves the Firefox and Thunderbird tools to **any MCP client** — Claude Code, Codex, Cursor, Gemini CLI, VS Code, pi — see [Use the tools from other agents](#use-the-tools-from-other-agents).
+A Firefox MV3 add-on (and a Thunderbird add-on) that is a **full ACP (Agent Client Protocol) client for [Pi](https://pi.dev)**,
+plus the host package **`trusted-user-agent`** (npm; command `trusted-ua`, also installable as a pi package) that provides the **`com.matbee.agent` Native Messaging host** (application-neutral: Firefox + Thunderbird). It works with other agents both ways:
+
+- **Chat with Claude Code or Codex inside the apps:** a sidebar, Space or pane session can run on Claude Code, Codex or another ACP agent instead of pi, with the browser and mail tools at hand — see [Chat with Claude Code or Codex in the sidebar](#chat-with-claude-code-or-codex-in-the-sidebar).
+- **Use the tools from agents outside the apps:** the same host serves the Firefox and Thunderbird tools to **any MCP client** — Claude Code, Codex, Cursor, Gemini CLI, VS Code, pi — see [Use the tools from other agents](#use-the-tools-from-other-agents).
 
 Pi can inspect and operate a tab bound to a session — read page content/DOM (or a compact
 accessibility tree), click and type into referenced elements, wait for selectors, evaluate page
@@ -27,9 +30,12 @@ see **[Debugging ACP/MCP tools](docs/DEBUGGING-TOOLS.md)**.
 ## Layout
 
 ```
-packages/protocol/    dependency-light protocol package (shared by Firefox + Node)
-packages/pi-agent/    trusted-user-agent: native host, ACP↔Pi SDK adapter, MCP server, installers, /pi-browser
+packages/protocol/    dependency-light protocol package (shared by the add-ons + Node)
+packages/webext/      add-on code shared by Firefox and Thunderbird (ACP client, session store, panels)
+packages/pi-agent/    trusted-user-agent: native host, ACP↔Pi SDK adapter, ACP relay to external
+                      agents (Claude Code, Codex, ...), MCP server, installers, /pi-browser
 firefox/              the Firefox add-on (background / content script / sidebar)
+thunderbird/          the Thunderbird add-on (background / Space / side pane)
 tests/                integration harness: real host + real framing + fake tab set
 docs/                 verification record + evidence
 ```
@@ -62,6 +68,8 @@ pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.3.0
    (from source: clone the repo and run `sh build.sh` first — see
    “Building from source” below).
 3. Done — the sidebar shows `Pi · agent` (connected). Verify anytime with `/pi-browser doctor`.
+4. Optional: to chat with Claude Code or Codex instead of pi, install its ACP adapter and pick it
+   in the new-session panel — see [Chat with Claude Code or Codex in the sidebar](#chat-with-claude-code-or-codex-in-the-sidebar).
 
 ### Order B — install the add-on first
 
@@ -143,8 +151,8 @@ The steering for that (tool description + first-call preamble + the
 |---------|--------|
 | `/pi-browser` (no arg) | `status` |
 | `/pi-browser install` | register (re-)install the Native Messaging host |
-| `/pi-browser status` | host state + add-on detection (heartbeat) |
-| `/pi-browser doctor` | status + live framed host probe + add-on detection |
+| `/pi-browser status` | host state + add-on detection (heartbeat) + sidebar agents (available or not, `agents.json` problems) |
+| `/pi-browser doctor` | status + live framed host probe + add-on detection + sidebar agents |
 | `/pi-browser uninstall` | remove the registration |
 | `/pi-browser mcp [install\|status\|uninstall] [client]` | register the broker's MCP server in `~/.pi/agent/mcp.json` so Pi subagents can use the add-on tools: `browser_*` + `javascript` (Firefox) and `mail_*`, `compose_*`, `contacts_*` (Thunderbird). Each call runs in the app that serves the tool. The entry launches a small stdio bridge, so it works with pi's built-in MCP client (tools appear as `mcp__pi-browser__<tool>`, loaded on demand via `tool_search`; change the exposure in `/mcp`) and with pi-mcp-adapter (`mcp:pi-browser/<tool>`). It works before Firefox/Thunderbird start; calls succeed once an app with the add-on is running. `client` is `pi` (default) or another MCP client — see below. |
 
@@ -154,7 +162,9 @@ do the same without pi (after `npm i -g trusted-user-agent`).
 ## Use the tools from other agents
 
 Any MCP client can use the Firefox and Thunderbird tools while either app is running — no
-Pi chat needs to be open. Register the `pi-browser` MCP server (a small stdio bridge) in your
+Pi chat needs to be open. (This is for agents you run outside the apps, in a terminal or an
+editor. To chat with Claude Code or Codex *in* the sidebar, see
+[the next section](#chat-with-claude-code-or-codex-in-the-sidebar); that needs no MCP setup.) Register the `pi-browser` MCP server (a small stdio bridge) in your
 client's user config:
 
 | Client | Command | Where the entry goes |
@@ -196,13 +206,80 @@ settings in those files are never touched, and a file that can't be parsed is le
 
 Pi subagents that the host itself starts keep using the chat session they belong to.
 
+## Chat with Claude Code or Codex in the sidebar
+
+The new-session panel (Firefox sidebar, Thunderbird Space and pane) lets you pick the **agent**
+a session runs on: **pi** (built in, the default), **Claude Code**, **Codex**, or any other ACP
+agent you configure. The last choice is remembered per app, and the session list labels
+sessions that don't use pi. The agent's replies, thinking, tool cards, file diffs, plans and
+settings (model, mode, effort) show in the sidebar as the agent sends them.
+
+**Requirements**
+
+- The agent's ACP adapter on your `PATH`, and the agent logged in with its own CLI:
+
+  | Agent | Install the adapter | Log in |
+  |-------|---------------------|--------|
+  | Claude Code | `npm i -g @agentclientprotocol/claude-agent-acp` | run `claude` once and log in |
+  | Codex | `npm i -g @agentclientprotocol/codex-acp` | `codex login` |
+
+  Agents that aren't found are shown disabled in the panel, with the missing command.
+  `trusted-ua status` and `doctor` (and `/pi-browser status`) list them too.
+- Nothing to set up in the agent's own config: each session gets the `pi-browser` tools
+  automatically, tied to that sidebar session — its bound tab, its "allow for this session"
+  approvals, prompts in the sidebar. Firefox sessions can still use Thunderbird's mail tools
+  (and the other way round) when both apps run.
+
+**Two kinds of prompts**
+
+- *Tool prompts* ("Allow this action?" for `browser_screenshot`, `mail_search`, ...) are the
+  add-on's own, the same as for pi sessions, governed by the permissions page.
+- *Agent prompts* ("Codex wants to run a command", with the command or diff) are the agent's
+  own permission requests, with the agent's own options. The add-on never remembers them:
+  "Allow always" there is remembered by the agent. Unanswered prompts time out like tool prompts,
+  and Stop withdraws them.
+
+**How it runs**
+
+- One process per agent, shared by its sessions, started on the first session. An agent with
+  no activity for 15 minutes is stopped; the session stays in the sidebar and the next message
+  starts the agent again and reloads the conversation. Agents that can't reload sessions are
+  never stopped while a session is open.
+- Sessions are listed with the others and reopen through the agent
+  (`~/.pi/browser/agent-sessions.json` keeps the list).
+- If the agent isn't logged in, creating a session says how to log in (for example "Codex needs
+  you to log in: run `codex login` in a terminal, then try again"); the host never logs in for you.
+  If the agent crashes, the turn ends with an error and the next message restarts it.
+- One process serves both apps: a Claude Code session started in Thunderbird and one started
+  in Firefox share the same Claude Code process.
+- Claude Code and Codex work in the session's folder with their own tools and approval rules.
+  New sessions default to a fresh `~/.pi/workspaces` folder, as for pi.
+
+**`~/.pi/browser/agents.json`** adds agents or overrides a built-in one (changes apply to the
+next session, no restart):
+
+```json
+{
+  "agents": {
+    "claude": { "command": "C:\\tools\\claude-agent-acp.cmd", "idleTimeoutMinutes": 30 },
+    "my-agent": { "name": "My agent", "command": "my-agent", "args": ["--acp"], "env": { "MY_VAR": "1" } },
+    "codex": { "disabled": true }
+  }
+}
+```
+
+Fields: `name`, `command`, `args`, `env`, `idleTimeoutMinutes` (0 = never stop), `loginHint`
+(shown when the agent asks you to log in), `disabled`. Google's Antigravity CLI has no ACP mode,
+so it isn't offered; an ACP agent that does speak ACP over stdio can be added here.
+
 ## Using Firefox and Thunderbird together (cross-app broker)
 
 Both add-ons connect to the same `com.matbee.agent` host, and the host makes the two
 apps usable **from each other** — no extra setup beyond loading both add-ons and having
 the host installed:
 
-1. **First app to connect = broker.** It owns the Pi sessions and listens on private OS IPC
+1. **First app to connect = broker.** It owns the Pi sessions (and the Claude Code / Codex
+   processes of agent sessions) and listens on private OS IPC
    (`~/.pi/run/agent-broker.sock`, 0600; Windows: a per-user named pipe
    `\\.\pipe\pi-agent-<hash>-agent-broker`, gated by the broker token).
 2. **Second app = relay.** Its host process transparently forwards the app's Native
@@ -210,7 +287,8 @@ the host installed:
    there is no localhost TCP. If the broker is gone, the roles simply re-elect on the next
    connection — the add-ons' normal reconnect logic handles all of it.
 3. **Every session sees every connected app's tools** (capabilities from each app's
-   `pi.agent.hello`). Tool calls route to the app that provides the tool:
+   `pi.agent.hello`), including sessions on Claude Code or Codex. Tool calls route to the app
+   that provides the tool:
    - A session in the **Firefox sidebar** can call `mail_*`, `compose_*`, `contacts_*`
      → executed by the **Thunderbird** add-on.
    - A session in the **Thunderbird pane** can call `browser_*`
@@ -274,7 +352,7 @@ Thunderbird add-on.
 Optional verification:
 
 ```sh
-npm test             # 257 tests across the workspaces (Node 22+)
+npm test             # about 580 tests across the workspaces (Node 22+)
 sh amo/make-zip.sh   # rebuild the AMO submission zip from firefox/dist
 ```
 
@@ -303,4 +381,10 @@ sh amo/make-zip.sh   # rebuild the AMO submission zip from firefox/dist
   the same way — the prompt is asked in the app that EXECUTES the tool (Thunderbird,
   in its Pi Space or side pane); deny or timeout → `BROWSER_PERMISSION_DENIED` and
   the dispatcher is never reached
+- sessions on Claude Code, Codex or another ACP agent: the agent runs as you, in the session's
+  folder, with its own tools and approval rules. Its own permission requests are shown in the
+  session's UI and passed back as answered; the host never answers or remembers them. Its
+  pi-browser tool calls go through the same approval prompts as pi's, and the host honours the
+  session a bridge reports only from a process the host itself started (a forged report is
+  treated as an external MCP caller). The host offers agents no client file system or terminal
 - full checklist with code locations: [docs/VERIFICATION.md](docs/VERIFICATION.md)

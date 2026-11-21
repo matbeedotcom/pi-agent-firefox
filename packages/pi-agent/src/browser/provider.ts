@@ -425,6 +425,10 @@ export class CapabilityToolProvider {
     this.permissionTimeoutMs = options.permissionTimeoutMs ?? PERMISSION_TIMEOUT_MS;
   }
   private readonly permissionTimeoutMs: number;
+  /** How long a permission prompt waits for the user (also used for relayed agent prompts). */
+  get promptTimeoutMs(): number {
+    return this.permissionTimeoutMs;
+  }
   private readonly timeoutForTool: (tool: string) => number;
 
   /** The ACP transport a tool call / permission prompt goes to (legacy mode). */

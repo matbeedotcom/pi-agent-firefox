@@ -39,6 +39,12 @@ export interface BrowserToolBridge {
   /** Drop the context when a session closes. */
   closeSession(sessionId: string): void;
   /**
+   * The sidebar session a bridge's PI_BROWSER_PARENT_SESSION token names
+   * (an external ACP agent's bridge, openspec sidebar-acp-agents D6), if it
+   * is open. Callers must already have checked the host-child marker.
+   */
+  resolveParentSession?(token: string): string | undefined;
+  /**
    * Execute one tool through the provider's standard routing + approval
    * path. Omitted sessionId falls back to the most recently active ACP
    * session (the one the user is driving in the add-on UI). With `caller`,

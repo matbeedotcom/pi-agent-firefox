@@ -13,8 +13,9 @@ import {
   type PermissionConfigResult,
   type PermissionSetResult,
 } from "@pi-browser/protocol";
-import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData, mountPermissionSettings, type PermissionSettingsApi, mountNewSessionPanel } from "@pi-browser/webext";
+import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData, mountPermissionSettings, type PermissionSettingsApi, describePermissionRequest, loadAgentChoice, saveAgentChoice, planText, planStatus, PLAN_CARD_ID, type PlanEntryLike, mountNewSessionPanel } from "@pi-browser/webext";
 import type {
+  AgentsResult,
   AgentCapability,
   SessionConfigOption,
   SessionConfigSelect,
@@ -39,6 +40,8 @@ interface SessionUi {
   streaming: boolean;
   loaded: boolean;
   configOptions?: SessionConfigOption[];
+  /** External ACP agent the session runs on (absent: pi). */
+  agent?: { id: string; name: string };
 }
 
 interface UiState {
@@ -140,6 +143,28 @@ function applySessionUpdate(sessionId: string, update: SessionUpdate): void {
         ...resultParts(update.content),
         input: update.rawInput,
       });
+      break;
+    }
+    case "plan": {
+      // External ACP agents (sidebar-acp-agents) send their plan as a whole
+      // each time: one "Plan" card per plan, updated in place.
+      const entries = ((update as { entries?: PlanEntryLike[] }).entries ?? []);
+      const blocks = blocksFor(sessionId);
+      const last = [...blocks].reverse().find((b) => b.kind === "tool" && b.toolCallId.startsWith(PLAN_CARD_ID));
+      if (last && last.kind === "tool" && last.status !== "completed") {
+        last.text = planText(entries);
+        last.status = planStatus(entries);
+      } else {
+        addBlock(sessionId, {
+          id: 0,
+          kind: "tool",
+          toolCallId: `${PLAN_CARD_ID}-${blocks.length}`,
+          title: "Plan",
+          status: planStatus(entries),
+          text: planText(entries),
+          images: [],
+        });
+      }
       break;
     }
     case "tool_call_update": {
@@ -290,6 +315,12 @@ function renderSessions(): void {
     const title = document.createElement("span");
     title.className = "title";
     title.textContent = s.title || s.sessionId.slice(0, 8);
+    if (s.agent) {
+      const agent = document.createElement("span");
+      agent.className = "agent-label";
+      agent.textContent = s.agent.name;
+      title.append(agent);
+    }
     const cwd = document.createElement("span");
     cwd.className = "cwd";
     cwd.textContent = s.cwd;
@@ -562,9 +593,9 @@ interface PermissionOptionUi {
 }
 interface PermissionRequestUi {
   sessionId: string;
-  toolCall: { toolCallId: string; title?: string };
+  toolCall: { toolCallId: string; title?: string; kind?: string; content?: unknown; rawInput?: unknown };
   options: PermissionOptionUi[];
-  _meta?: { piBrowser?: { tool?: string } };
+  _meta?: { piBrowser?: { tool?: string; agent?: { id: string; name: string } } };
 }
 
 function answerPermission(permId: string, optionId: string): void {
@@ -587,8 +618,22 @@ function showPermissionPrompt(request: PermissionRequestUi): void {
     return;
   }
   const tool = request._meta?.piBrowser?.tool ?? request.toolCall.title ?? "an action";
-  desc.textContent = permissionPromptDescription(tool);
-  if (toolEl) toolEl.textContent = tool;
+  if (request._meta?.piBrowser?.agent) {
+    // The agent's own request (sidebar-acp-agents): its name, what it wants
+    // to do (command, diff) and its own options.
+    const text = describePermissionRequest(request as never);
+    desc.textContent = text.description;
+    if (text.detail) {
+      const pre = document.createElement("pre");
+      pre.className = "perm-detail";
+      pre.textContent = text.detail;
+      desc.append(pre);
+    }
+    if (toolEl) toolEl.textContent = text.title;
+  } else {
+    desc.textContent = permissionPromptDescription(tool);
+    if (toolEl) toolEl.textContent = tool;
+  }
 
   optionsWrap.textContent = "";
   renderPermissionOptions(optionsWrap, request.options, permId, (optionId) =>
@@ -651,9 +696,12 @@ const newPanelEl = $<HTMLDivElement>("new-panel");
 const newSessionPanel = mountNewSessionPanel(newPanelEl, {
   workspaceRoot: () => uiState.status.piBrowserMeta?.workspaceRoot,
   suggestedCwd: () => uiState.sessions.find((s) => s.sessionId === activeSessionId)?.cwd,
-  create: async (cwd) => {
-    await action<{ sessionId: string }>("new_session", { cwd });
+  create: async (cwd, agent) => {
+    await action<{ sessionId: string }>("new_session", { cwd, ...(agent ? { agent } : {}) });
   },
+  agents: async () => (await action<{ agents: AgentsResult | null }>("list_agents")).agents ?? undefined,
+  lastAgent: () => loadAgentChoice("thunderbird"),
+  rememberAgent: (id) => void saveAgentChoice("thunderbird", id),
   close: () => newPanelEl.classList.add("hidden"),
 });
 

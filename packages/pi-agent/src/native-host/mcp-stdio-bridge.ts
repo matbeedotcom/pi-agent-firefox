@@ -29,7 +29,7 @@
  */
 import net from "node:net";
 import { createInterface } from "node:readline";
-import { HOST_CHILD_ENV, MCP_CALLER_NOTIFICATION, normalizeCallerName, type CallerInfo } from "@pi-browser/protocol";
+import { HOST_CHILD_ENV, MCP_CALLER_NOTIFICATION, PARENT_SESSION_ENV, normalizeCallerName, type CallerInfo } from "@pi-browser/protocol";
 import { defaultMcpEndpoint, mcpInitializeResult, mcpToolListResult } from "./mcp-server.js";
 
 /** How long a tools/call waits to connect to the broker before giving up. */
@@ -72,6 +72,10 @@ export function runMcpStdioBridge(opts: BridgeOptions): Promise<void> {
   const caller: CallerInfo = { name: normalizeCallerName(undefined), pid: process.pid, ppid: process.ppid };
   const hostChild = env[HOST_CHILD_ENV];
   if (hostChild) caller.hostChild = hostChild;
+  // Started by the host for a sidebar session on an external ACP agent:
+  // the broker runs this connection's calls for that session.
+  const parentSession = env[PARENT_SESSION_ENV];
+  if (parentSession) caller.parentSession = parentSession;
 
   let socket: net.Socket | undefined;
   let connecting: Promise<net.Socket | undefined> | undefined;

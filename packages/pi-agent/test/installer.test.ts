@@ -484,3 +484,28 @@ test("mcp: install merges with an existing multi-server config", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("status lists external ACP agents and agents.json problems (sidebar-acp-agents)", async () => {
+  const { agentLines } = await import("../src/installer/index.js");
+  const root = await mkdtemp(path.join(tmpdir(), "pi-agent-agents-"));
+  try {
+    const bin = path.join(root, "bin");
+    const home = path.join(root, "home");
+    await mkdir(bin, { recursive: true });
+    // Only the Claude Code adapter is on PATH.
+    const exe = process.platform === "win32" ? "claude-agent-acp.cmd" : "claude-agent-acp";
+    await writeFile(path.join(bin, exe), "");
+    const env = { PATH: bin } as NodeJS.ProcessEnv;
+    const lines = agentLines(home, env);
+    assert.ok(lines.includes("agent claude: available"), lines.join("\n"));
+    assert.ok(lines.includes("agent codex: not found (codex-acp)"), lines.join("\n"));
+
+    await mkdir(path.join(home, ".pi", "browser"), { recursive: true });
+    await writeFile(path.join(home, ".pi", "browser", "agents.json"), "{ broken");
+    const broken = agentLines(home, env);
+    assert.ok(broken.some((l) => l.startsWith("agents.json: ")), broken.join("\n"));
+    assert.ok(broken.includes("agent claude: available"), "built-ins still listed");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

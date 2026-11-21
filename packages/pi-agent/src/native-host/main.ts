@@ -55,6 +55,7 @@ import type { IsolatedSessionFactory } from "../skills/isolated-runner.js";
 import type { SkillGrant } from "../skills/planner.js";
 import { createScriptedSessionFactory, type ScriptedJob } from "../skills/mock-session-factory.js";
 import { AcpAgent } from "../acp/agent.js";
+import { ExternalAgents } from "../acp/agents/manager.js";
 import { MockBackend } from "../acp/mock-backend.js";
 import { PiSdkBackend } from "../acp/sdk-backend.js";
 import { CapabilityToolProvider } from "../browser/provider.js";
@@ -183,6 +184,7 @@ function createShutdownSequence(deps: {
   mcpServer: () => McpBrowserServerHandle | undefined;
   catalogReloader: () => SkillsCatalogReloader | undefined;
   skillsEventLog: () => SkillsEventLog | undefined;
+  externalAgents: ExternalAgents;
 }): (reason: string) => Promise<void> {
   let shuttingDown = false;
   return async (reason: string) => {
@@ -197,6 +199,12 @@ function createShutdownSequence(deps: {
     try {
       for (const agent of deps.agents.values()) agent.shutdown();
       deps.agents.clear();
+      // External ACP agent processes (Claude Code, Codex, ...) go with the host.
+      try {
+        await deps.externalAgents.shutdown();
+      } catch (err) {
+        deps.log.warn("external agents shutdown error", err);
+      }
       // Drain/abort skill jobs before the provider goes down — a running job
       // may still be routing browser tool calls through it.
       if (deps.skillsHost) {
@@ -312,12 +320,27 @@ async function main(): Promise<void> {
   // Caller sessions (external MCP clients, one per MCP connection): no ACP
   // session, no owner app; routed through the registry and the caller gate.
   const callerSessions = new Set<string>();
+  // External ACP agents for sidebar sessions (openspec sidebar-acp-agents):
+  // one process per agent, shared by every client's sessions.
+  const externalAgents = new ExternalAgents({
+    log,
+    instanceId,
+    permissionTimeoutMs: () => provider.promptTimeoutMs,
+    // Test seam (e2e): check idle agents more often than once a minute.
+    ...(Number(process.env.PI_BROWSER_AGENT_IDLE_CHECK_MS) > 0
+      ? { idleCheckMs: Number(process.env.PI_BROWSER_AGENT_IDLE_CHECK_MS) }
+      : {}),
+  });
   const toolBridge: BrowserToolBridge = {
     registerSession: (id, ctx) => {
       bridgeSessions.set(id, ctx);
     },
     touchSession: (id) => {
       lastActiveBridgeSession = id;
+    },
+    resolveParentSession: (token) => {
+      const id = externalAgents.resolveParentToken(token);
+      return id && bridgeSessions.has(id) ? id : undefined;
     },
     closeSession: (id) => {
       if (callerSessions.delete(id)) {
@@ -437,6 +460,7 @@ async function main(): Promise<void> {
     mcpServer: () => mcpServer,
     catalogReloader: () => catalogReloader,
     skillsEventLog: () => skillsEventLog,
+    externalAgents,
   });
 
   const wireClient = (clientId: string, dispatcher: Dispatcher) => {
@@ -461,6 +485,7 @@ async function main(): Promise<void> {
       registry,
       bridge: toolBridge,
       extendedRequest: clientSkills?.extendedRequest,
+      externalAgents,
     });
     agents.set(clientId, agent);
     dispatcher.transport.onEof = () => {

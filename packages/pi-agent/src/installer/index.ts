@@ -7,7 +7,8 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PI_AGENT, PI_BROWSER_META, PI_AGENT_META } from "@pi-browser/protocol";
+import { PI_AGENT, PI_AGENT_ID, PI_BROWSER_META, PI_AGENT_META } from "@pi-browser/protocol";
+import { AgentRegistry } from "../acp/agents/registry.js";
 import { ADDON_HEARTBEAT_FRESH_MS, readClientHeartbeat } from "../client-heartbeat.js";
 import { brokerPaths, isPidAlive, readBrokerState } from "../native-host/broker-ipc.js";
 import { addonLoadHint, type AgentApp, type ExecFn, type InstallerEnv, type InstallAppTarget } from "./common.js";
@@ -153,6 +154,25 @@ export function buildEnv(ctx: InstallerContext = {}): { env: InstallerEnv; targe
     return { lines, detected: true, fresh: allFresh };
   }
 
+  /**
+   * External ACP agents for sidebar sessions (openspec sidebar-acp-agents):
+   * which are available, why the others aren't, and agents.json problems.
+   */
+export function agentLines(homeDir: string, processEnv: NodeJS.ProcessEnv): string[] {
+    try {
+      const root = processEnv.PI_BROWSER_DATA_ROOT?.trim() || path.join(homeDir, ".pi", "browser");
+      const file = processEnv.PI_BROWSER_AGENTS_FILE?.trim() || path.join(root, "agents.json");
+      const res = new AgentRegistry({ env: processEnv, file }).list();
+      const lines = res.agents
+        .filter((a) => a.id !== PI_AGENT_ID)
+        .map((a) => `agent ${a.id}: ${a.available ? "available" : (a.reason ?? "not available")}`);
+      if (res.configError) lines.push(`agents.json: ${res.configError}`);
+      return lines;
+    } catch (err) {
+      return [`agents: unknown (${err instanceof Error ? err.message : String(err)})`];
+    }
+  }
+
   /** Broker (cross-app) state, for status/doctor (plan §26–27). */
   function brokerLines(): string[] {
     try {
@@ -211,6 +231,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
         const addon = addonLines(env.homeDir, apps);
         for (const l of addon.lines) note(l);
         for (const l of brokerLines()) note(l);
+        for (const l of agentLines(env.homeDir, ctx.processEnv ?? process.env)) note(l);
         if (addon.fresh) note("status: OK (host + add-on connected)");
         else note(addon.detected ? "status: HOST OK — add-on heartbeat stale (reload the add-on or check the app)" : "status: HOST OK — add-on not detected yet (see steps above)");
       } else {
@@ -236,6 +257,7 @@ export async function runCommand(command: InstallerCommand, ctx: InstallerContex
       const addon = addonLines(env.homeDir, apps);
       for (const l of addon.lines) note(l);
       for (const l of brokerLines()) note(l);
+      for (const l of agentLines(env.homeDir, ctx.processEnv ?? process.env)) note(l);
       if (addon.fresh) note("doctor: OK (host + add-on connected)");
       else note(addon.detected ? "doctor: HOST OK — add-on heartbeat stale (reload the add-on or check the app)" : "doctor: HOST OK — next: load the add-on (see steps above; it auto-connects within ~10s)");
       return { ok: true, lines };
