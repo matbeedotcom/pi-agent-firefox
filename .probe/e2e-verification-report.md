@@ -10,7 +10,7 @@ All six gates were executed independently, in order, from `/home/acidhax/dev/per
 |---|---|---|
 | 1. Typecheck | PASS | `npm run typecheck`, exit 0; agent, protocol, webext, Thunderbird succeed. |
 | 2. Build | PASS | `npm run build`, exit 0; protocol, webext, agent, Firefox, Thunderbird succeed. |
-| 3. Tests | PASS | `npm test`, exit 0: protocol 18/18, agent 107/107, Firefox 33/33, Thunderbird 78/78, pi-browser-tests e2e 24/24. All have 0 failed/skipped/cancelled. Total 260 passed. |
+| 3. Tests | PASS | `npm test`, exit 0: protocol 18/18, agent 107/107, Firefox 33/33, Thunderbird 78/78, trusted-ua-tests e2e 24/24. All have 0 failed/skipped/cancelled. Total 260 passed. |
 | 4. Fresh live walk | PASS | `node .probe/live-repl.mjs`, exit 0; `--- live verification: 14/14 checks passed ---` and `LIVE VERIFICATION PASSED`. No Xvfb collision or retry. |
 | 5. Evidence spot-check | PASS | Parsed fresh results: array length 14, every `ok === true`; host session/prompt/permission lines below; checkpoint evidence mode 600; 12 PNGs including final and typing overlays; mock backend explicitly confirmed. |
 | 6. Cleanup audit | PASS | `pgrep -af 'pi-live-|Xvfb :9'` produced no output, exit 1 (no matches). Explicit `ps -p 522179,522571 -o pid=,args=` also produced no output: this run's Xvfb on `:0` and native host are gone. No processes killed by verifier. |
@@ -83,7 +83,7 @@ The probe header states (verbatim):
 
 ```text
  * Real Firefox (155.0.1) + real built add-on (firefox/dist) + real native
- * host (packages/pi-agent/dist) + real REPL worker. The agent backend is the
+ * host (packages/trusted-user-agent/dist) + real REPL worker. The agent backend is the
  * deterministic mock (scripted `javascript` cell) so the test needs no model
  * API; the BROWSER side (DOM, content scripts, tabs, screenshots) is all real.
 ```

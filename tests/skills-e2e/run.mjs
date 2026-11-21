@@ -11,7 +11,7 @@
  *     loads as a TEMPORARY add-on into web-ext's managed profile — the
  *     only install path that works on unsigned release builds) with the
  *     FAKE native host (real dist/native-host/main.js + scripted mock
- *     backend, packages/pi-agent/test/skills-host/fake-host.mjs)
+ *     backend, packages/trusted-user-agent/test/skills-host/fake-host.mjs)
  *     registered in the global ~/.mozilla/native-messaging-hosts dir
  *     (the production install path; the user's manifest is backed up and
  *     restored on exit),
@@ -43,8 +43,8 @@ const FIXTURES = path.resolve(REPO, "tests/fixtures/skills");
 const SCENARIOS = path.resolve(HERE, "scenarios");
 const SKILL_ROOTS = path.resolve(REPO, "tests/skills-packages");
 const ADDON_DIST = path.resolve(REPO, "firefox/dist");
-const AGENT_HOST = path.resolve(REPO, "packages/pi-agent/dist/native-host/main.js");
-const FAKE_HOST = path.resolve(REPO, "packages/pi-agent/test/skills-host/fake-host.mjs");
+const AGENT_HOST = path.resolve(REPO, "packages/trusted-user-agent/dist/native-host/main.js");
+const FAKE_HOST = path.resolve(REPO, "packages/trusted-user-agent/test/skills-host/fake-host.mjs");
 const AUTO_APPROVE_TOOLS = ["browser_navigate", "browser_type", "browser_click", "browser_evaluate", "browser_get_page", "browser_get_dom", "browser_wait_for", "browser_reload"];
 
 const HANDSHAKE_TIMEOUT_MS = 60_000;
@@ -112,7 +112,7 @@ async function ensureBuilt() {
       addonStale = true;
     }
   }
-  if (addonStale) needed.push("@pi-browser/firefox");
+  if (addonStale) needed.push("@trusted-ua/firefox");
   if (!needed.length) return;
   for (const workspace of needed) {
     process.stderr.write(`[run] building ${workspace}\n`);

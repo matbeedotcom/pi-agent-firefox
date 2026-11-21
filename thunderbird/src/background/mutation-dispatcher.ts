@@ -11,7 +11,7 @@
  *  - Additive tagging reads each message's current tags first (via messages.get)
  *    so it does not clobber existing tags.
  */
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
 import { createTag, listTags, resolveTagKeys } from "./tag-utils.js";
 
 export type MutationToolResult = Record<string, unknown>;

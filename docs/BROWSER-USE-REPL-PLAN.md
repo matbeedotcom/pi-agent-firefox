@@ -29,7 +29,7 @@ strategy in INTEGRATION.md §4.3).
 | `finish`/`finish_from_js` | not ported (ACP agent ends turns naturally) | design §4.2 |
 | Node | host/worker need ≥22.19 (already true: undici 8.9.0); test runs on nvm v23.10.0 | env |
 
-Repos/packages touched: `packages/protocol`, `packages/pi-agent`,
+Repos/packages touched: `packages/protocol`, `packages/trusted-user-agent`,
 `firefox/`, `tests/`, `.probe/`, `docs/`.
 
 Conventions: every task ends with its tests green (`npm run typecheck &&
@@ -46,8 +46,8 @@ semantics, kill-on-timeout — before any protocol/add-on work.
 
 | # | task | deliverable | verification |
 |---|---|---|---|
-| P0.1 | ReplWorker child: V8 realm via `node:inspector` (context name `pi-repl`), curated globals (`console`→sink, `page`/`tabs` stubs, `fetch`, `Buffer`, `URL`, timers, `structuredClone`, `TextEncoder/Decoder`), `Runtime.evaluate {contextId, awaitPromise, replMode, objectGroup:'cell'}` + `releaseObjectGroup`, output capture (1 MB hard cap, file spill), redaction pass | `packages/pi-agent/src/repl/worker.ts` (port of SDK `src/worker.ts` core, MIT attribution header) | unit: state persists across 2 cells; top-level `await` resolves; last-expression captured; sync infinite loop → timeout kills child, host survives, next cell starts fresh |
-| P0.2 | ReplRuntime host side: fork (env `{}`, `--max-old-space-size=256`), one-cell-at-a-time queue, IPC `{execute,close}`/`{ready,result,error}`, timeout → SIGKILL + `CellError` ("state reset" contract), worker-death surfacing, `dispose()` | `packages/pi-agent/src/repl/runtime.ts` | unit: double-cell rejection, kill-on-timeout, exit handling, dispose idempotent |
+| P0.1 | ReplWorker child: V8 realm via `node:inspector` (context name `pi-repl`), curated globals (`console`→sink, `page`/`tabs` stubs, `fetch`, `Buffer`, `URL`, timers, `structuredClone`, `TextEncoder/Decoder`), `Runtime.evaluate {contextId, awaitPromise, replMode, objectGroup:'cell'}` + `releaseObjectGroup`, output capture (1 MB hard cap, file spill), redaction pass | `packages/trusted-user-agent/src/repl/worker.ts` (port of SDK `src/worker.ts` core, MIT attribution header) | unit: state persists across 2 cells; top-level `await` resolves; last-expression captured; sync infinite loop → timeout kills child, host survives, next cell starts fresh |
+| P0.2 | ReplRuntime host side: fork (env `{}`, `--max-old-space-size=256`), one-cell-at-a-time queue, IPC `{execute,close}`/`{ready,result,error}`, timeout → SIGKILL + `CellError` ("state reset" contract), worker-death surfacing, `dispose()` | `packages/trusted-user-agent/src/repl/runtime.ts` | unit: double-cell rejection, kill-on-timeout, exit handling, dispose idempotent |
 | P0.3 | IPC tool-channel plumbing: worker `page`/`tabs` proxies → `{type:'tool', tool, args}` → host → (stub backend returning canned results) → back | worker + runtime | unit: one round-trip with args + structured error |
 | P0.4 | Probe | `.probe/smoke-repl.mjs` (drives 3 cells: define/await/use) | `node .probe/smoke-repl.mjs` green |
 
@@ -60,8 +60,8 @@ semantics, kill-on-timeout — before any protocol/add-on work.
 | # | task | deliverable | verification |
 |---|---|---|---|
 | P1.1 | Protocol: `javascript` tool def — `input: { code: string; timeoutMs?: number }` (default 30 000, cap 120 000), `readOnly: false`, description = terse primitive recipes (full recipe text deferred to first-call preamble, see P2.7) | `packages/protocol/src/browser-tools.ts`; `browserToolVersion` 3→4 (`integration.ts`) | protocol.test.ts updated |
-| P1.2 | TypeBox schema for `javascript` | `packages/pi-agent/src/browser/schemas.ts` | `tool-schemas.test.ts` byte-sync green |
-| P1.3 | ReplProvider: registry keyed by sessionId; `createTools` adds the `javascript` ToolSpec (execute → runtime.call → `BackendToolResult {content:[text,…images]}`); no binding → structured `BROWSER_NOT_BOUND`; runtime created lazily on first cell; `disposeSession` kills the child; `x-pi-browser/notify` binding_changed/binding_removed → invalidate page handles + ref registry, inject "binding changed: inspect before acting" note into next cell | `packages/pi-agent/src/repl/provider.ts` (+ hooks in `acp/agent.ts` / `browser/provider.ts` disposeSession path) | unit: not-bound error, lazy create, dispose, invalidation note |
+| P1.2 | TypeBox schema for `javascript` | `packages/trusted-user-agent/src/browser/schemas.ts` | `tool-schemas.test.ts` byte-sync green |
+| P1.3 | ReplProvider: registry keyed by sessionId; `createTools` adds the `javascript` ToolSpec (execute → runtime.call → `BackendToolResult {content:[text,…images]}`); no binding → structured `BROWSER_NOT_BOUND`; runtime created lazily on first cell; `disposeSession` kills the child; `x-pi-browser/notify` binding_changed/binding_removed → invalidate page handles + ref registry, inject "binding changed: inspect before acting" note into next cell | `packages/trusted-user-agent/src/repl/provider.ts` (+ hooks in `acp/agent.ts` / `browser/provider.ts` disposeSession path) | unit: not-bound error, lazy create, dispose, invalidation note |
 | P1.4 | Per-session workspace: `~/.pi/browser-repl/<sessionId>/` (0700) for `artifact`/`checkpoint` files; path referenced in results | runtime + worker | unit: file created 0600, name-validated (SDK regex) |
 | P1.5 | e2e: "javascript REPL (legacy transport)" subtest — scripted model: cell `x=41; x+1` → `42`; next cell `x` persists; cell returning an image (fake tab screenshot) → image content present; timeout cell killed cleanly | `tests/src/e2e.test.mjs` | 21→~24 e2e green |
 
@@ -81,7 +81,7 @@ session close reaps the child (no orphan processes in e2e).
 | P2.3 | Tab tools: `browser_open_tab {url}` → `{tabId}` (REPL-owned), `browser_close_tab {tabId}`, `browser_list_tabs` → `{tabs:[{id,url,title,bound}]}`; binding store gains owner flag (`bound`|`repl`); REPL-owned tabs closed on session close/unbind | `firefox/src/background/` + `tool-dispatcher.ts` + store | addon.test.ts: dispatcher cases, ownership cleanup, close-unbound-tab error |
 | P2.4 | Protocol: 3 tab tools (+ `javascript` from P1.1) into `BROWSER_TOOLS`; frame-param docs where relevant; no new permissions | `packages/protocol/src/browser-tools.ts` + schemas | sync test; protocol test |
 
-### 2b. Worker primitives (packages/pi-agent/src/repl/)
+### 2b. Worker primitives (packages/trusted-user-agent/src/repl/)
 
 | # | task | deliverable | verification |
 |---|---|---|---|

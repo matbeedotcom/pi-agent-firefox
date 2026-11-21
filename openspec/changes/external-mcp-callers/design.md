@@ -126,14 +126,14 @@ The naming rules that were applied:
 - The package is no longer only for pi, so the name shouldn't need pi to make sense.
 
 Packaging:
-- `packages/pi-agent/package.json` takes the new `name` and gets `"bin": {"trusted-ua": "dist/installer/cli.js"}`, with a shebang on the CLI. Its `files` already limit what's published to `dist`, `extensions` and `native`; the `*.map` files and generated `native/*` launchers must be excluded.
-- **`@pi-browser/protocol`:** the agent depends on it at runtime. Bundle it into `trusted-user-agent` (`bundleDependencies`) rather than publish a second package. The workspace package names (`@pi-browser/*`) stay as they are inside the repo.
-  - *As built:* `prepack` (`scripts/bundle-protocol.mjs copy`) copies the built protocol into `packages/pi-agent/node_modules/@pi-browser/protocol` (the workspace symlink in the root `node_modules` is not bundled by `npm pack`); `postpack` removes it.
+- `packages/trusted-user-agent/package.json` takes the new `name` and gets `"bin": {"trusted-ua": "dist/installer/cli.js"}`, with a shebang on the CLI. Its `files` already limit what's published to `dist`, `extensions` and `native`; the `*.map` files and generated `native/*` launchers must be excluded.
+- **`@trusted-ua/protocol`:** the agent depends on it at runtime. Bundle it into `trusted-user-agent` (`bundleDependencies`) rather than publish a second package. The workspace package names (`@pi-browser/*`) stay as they are inside the repo.
+  - *As built:* `prepack` (`scripts/bundle-protocol.mjs copy`) copies the built protocol into `packages/trusted-user-agent/node_modules/@trusted-ua/protocol` (the workspace symlink in the root `node_modules` is not bundled by `npm pack`); `postpack` removes it.
   - The bundled copy's `package.json` has **no `dependencies`**: npm treats a bundled package's dependencies and peers as part of the bundle and never installs them, which left empty `@agentclientprotocol/sdk` and `zod` directories in a real global install. The script checks that every protocol dependency is declared by `trusted-user-agent` itself, so npm installs it next to the bundle.
   - `files` excludes `*.map`, `*.d.ts` and the generated `native/*` launchers, and now includes `skills/` (the installer copies `skills/browser-walk/SKILL.md`). The package also carries `pi.extensions`, so `pi install npm:trusted-user-agent` works too.
-  - License: MIT (decided 2026-11-20 for the v0.3.0 release): `LICENSE` at the repo root, a copy in `packages/pi-agent/` (npm ships it), and `"license": "MIT"`.
+  - License: MIT (decided 2026-11-20 for the v0.3.0 release): `LICENSE` at the repo root, a copy in `packages/trusted-user-agent/` (npm ships it), and `"license": "MIT"`.
 - **Release:** `npm publish` (with provenance from CI, or by hand with 2FA) after the GitHub release, at the same version as the tag.
-- **pi:** `pi install git:…` keeps working. The repo's root `package.json` keeps its `pi.extensions` entry, and the root gets the same `bin` pointing into `packages/pi-agent`. `/pi-browser …` stays the pi command name.
+- **pi:** `pi install git:…` keeps working. The repo's root `package.json` keeps its `pi.extensions` entry, and the root gets the same `bin` pointing into `packages/trusted-user-agent`. `/pi-browser …` stays the pi command name.
 
 `runCommand` rejects a `pkgRoot` that contains a `_npx` path segment or sits under `os.tmpdir()`, unless `--allow-temporary` is passed (for tests). The native-host launcher (`native/pi-agent-host.cmd` or `.sh`) and the manifest are written under `pkgRoot` exactly as today. For a global npm install that's the global `node_modules`, which is stable.
 

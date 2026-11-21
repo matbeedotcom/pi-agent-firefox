@@ -2,26 +2,26 @@
 
 **Date:** 2026-09-13 · **Machine:** Linux (x86_64), Node 22.22.3
 **Apps:** real Firefox (nightly, `/home/acidhax/Desktop/Firefox`) + real Thunderbird
-**Host:** `com.matbee.agent` from this repo (`packages/pi-agent/dist/native-host/main.js`)
+**Host:** `com.matbee.agent` from this repo (`packages/trusted-user-agent/dist/native-host/main.js`)
 **Agent backend:** real Pi in the broker (user's model config)
 
 ## What was built
 
 | Component | Location |
 |---|---|
-| Broker IPC (Unix socket, 0700 dir / 0600 socket, pid+token state, handshake) | `packages/pi-agent/src/native-host/broker-ipc.ts` |
-| Relay mode (byte-transparent stdin↔socket pipe; stdout invariant kept) | `packages/pi-agent/src/native-host/relay.ts` |
-| Host topology: first app = broker (owns AcpAgent/sessions), later apps = relays; race fallback; Windows gate | `packages/pi-agent/src/native-host/main.ts` |
-| Capability provider registry (keyed by `pi.agent.hello`) | `packages/pi-agent/src/capability-registry.ts` |
-| Tool router: union tool surface per session; owner-first routing; cross-app via legacy `x-pi-browser/tool`; permission prompts go to the executing client | `packages/pi-agent/src/browser/provider.ts` |
-| Per-app registration in `initialize` | `packages/pi-agent/src/acp/agent.ts` |
+| Broker IPC (Unix socket, 0700 dir / 0600 socket, pid+token state, handshake) | `packages/trusted-user-agent/src/native-host/broker-ipc.ts` |
+| Relay mode (byte-transparent stdin↔socket pipe; stdout invariant kept) | `packages/trusted-user-agent/src/native-host/relay.ts` |
+| Host topology: first app = broker (owns AcpAgent/sessions), later apps = relays; race fallback; Windows gate | `packages/trusted-user-agent/src/native-host/main.ts` |
+| Capability provider registry (keyed by `pi.agent.hello`) | `packages/trusted-user-agent/src/capability-registry.ts` |
+| Tool router: union tool surface per session; owner-first routing; cross-app via legacy `x-pi-browser/tool`; permission prompts go to the executing client | `packages/trusted-user-agent/src/browser/provider.ts` |
+| Per-app registration in `initialize` | `packages/trusted-user-agent/src/acp/agent.ts` |
 | Tool → capability mapping (single source of truth for routing + tool surface) | `packages/protocol/src/tool-capabilities.ts` |
-| Per-app heartbeats + broker state in `/pi-browser status\|doctor` | `packages/pi-agent/src/client-heartbeat.ts`, `packages/pi-agent/src/installer/index.ts` |
-| Latent bug fixed: `onEof` never fired on stream EOF (dispose set `closed` before `emitEof`) | `packages/pi-agent/src/native-host/transport.ts` |
+| Per-app heartbeats + broker state in `/pi-browser status\|doctor` | `packages/trusted-user-agent/src/client-heartbeat.ts`, `packages/trusted-user-agent/src/installer/index.ts` |
+| Latent bug fixed: `onEof` never fired on stream EOF (dispose set `closed` before `emitEof`) | `packages/trusted-user-agent/src/native-host/transport.ts` |
 
 ## Automated evidence
 
-- **Unit:** `packages/pi-agent/test/broker-ipc.test.ts` (8), `capability-registry.test.ts` (8) — handshake/token rejection, stale-broker reclaim, race guard, permission modes, owner-first + cross-app routing, union tool surface, permission prompt targeting.
+- **Unit:** `packages/trusted-user-agent/test/broker-ipc.test.ts` (8), `capability-registry.test.ts` (8) — handshake/token rejection, stale-broker reclaim, race guard, permission modes, owner-first + cross-app routing, union tool surface, permission prompt targeting.
 - **Integration (real host processes):** `tests/src/broker.test.mjs` (5) — two real host binaries, one broker + one relay, framed JSON-RPC end-to-end:
   1. Firefox-owned session calls `mail_get_selected_messages` + `compose_prepare_reply` (→ real relay client) AND `browser_get_page` (→ owner).
   2. Reverse: Thunderbird-owned session calls browser tools (→ Firefox client).
@@ -35,7 +35,7 @@
 Topology (observed live):
 
 ```
-$ node packages/pi-agent/dist/installer/cli.js doctor mozilla
+$ node packages/trusted-user-agent/dist/installer/cli.js doctor mozilla
 probe: pong (integration v0.1.1, protocol v2)
 add-on firefox: detected (pi-browser-firefox, heartbeat 5s ago)
 add-on thunderbird: detected (pi-thunderbird, heartbeat 0s ago)

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resultParts, targetPreview, isVisualTool } from "../src/tool-activity.js";
-import { resultView, displayInput } from "@pi-browser/webext";
+import { resultView, displayInput } from "@trusted-ua/webext";
 
 test("screenshots survive both ACP envelopes and browser results", () => {
   const content = [{ type: "text", text: "result" }, { type: "image", mimeType: "image/png", data: "QUJD" }];

@@ -29,8 +29,8 @@ test-only note is given explicitly. Evidence pointers resolve as of the date abo
 
 | # | Requirement (§52) | Status | Evidence |
 |---|-------------------|--------|----------|
-| 1 | User installs the Pi Browser package | ✅ live | Package installed from this repo; host runs from it — `pgrep -af native-host/main.js` shows the launcher executing `<repo>/packages/pi-agent/dist/native-host/main.js`. The user installed it on 2026-09-11 following the sidebar onboarding screen (see README quick-start). |
-| 2 | `/pi-browser install` registers the host | ✅ live + unit | Manifest `~/.mozilla/native-messaging-hosts/com.matbee.agent.json` exists with `name: com.matbee.agent`, `allowed_extensions: ["pi-agent-firefox@matbee.com", "pi-firefox@matbee.com", "pi-agent-thunderbird@matbee.com"]`. The `/pi-browser` command (`packages/pi-agent/extensions/pi-browser.ts`) delegates to the same `runCommand("install")` that was executed live this day (`node packages/pi-agent/dist/installer/cli.js install`). `/pi-browser mcp [install\|status\|uninstall]` registers the broker's browser-tools MCP server in `~/.pi/agent/mcp.json` (subagent browser access; live-verified 2026-09-16, unit: `installer.test.ts` “mcp:” cases). Cross-platform paths (macOS, Windows registry) are test-only: `packages/pi-agent/test/installer.test.ts`. |
+| 1 | User installs the Pi Browser package | ✅ live | Package installed from this repo; host runs from it — `pgrep -af native-host/main.js` shows the launcher executing `<repo>/packages/trusted-user-agent/dist/native-host/main.js`. The user installed it on 2026-09-11 following the sidebar onboarding screen (see README quick-start). |
+| 2 | `/pi-browser install` registers the host | ✅ live + unit | Manifest `~/.mozilla/native-messaging-hosts/com.matbee.agent.json` exists with `name: com.matbee.agent`, `allowed_extensions: ["pi-agent-firefox@matbee.com", "pi-firefox@matbee.com", "pi-agent-thunderbird@matbee.com"]`. The `/pi-browser` command (`packages/trusted-user-agent/extensions/pi-browser.ts`) delegates to the same `runCommand("install")` that was executed live this day (`node packages/trusted-user-agent/dist/installer/cli.js install`). `/pi-browser mcp [install\|status\|uninstall]` registers the broker's browser-tools MCP server in `~/.pi/agent/mcp.json` (subagent browser access; live-verified 2026-09-16, unit: `installer.test.ts` “mcp:” cases). Cross-platform paths (macOS, Windows registry) are test-only: `packages/trusted-user-agent/test/installer.test.ts`. |
 | 3 | User installs the Firefox add-on | ✅ live | Temporary add-on loaded from **`firefox/dist/manifest.json`** (id `pi-browser@pi.dev`) via `about:debugging → Load Temporary Add-on` — repeated multiple times on 2026-09-11, incl. while the host was deliberately uninstalled (onboarding screen flow). |
 | 4 | Firefox calls `connectNative("com.matbee.agent")` | ✅ live | Firefox spawned the host: the host process command line carries the connecting extension id as its last arg (`… main.js …/dev.pi.browser.json pi-browser@pi.dev` — `allowed_extensions` match enforced by Firefox). The host records add-on presence in `~/.pi-browser/client.heartbeat` (written only for client identity `pi-browser-firefox`). |
 | 5 | Firefox initializes Pi as an ACP agent | ✅ live | Host log (2026-09-11T22:14:11Z, current build): `initialize: client=pi-browser-firefox v0.1.0 proto=1`. Response carries ACP capabilities + `piBrowser` integration metadata; version mismatch returns structured `PROTOCOL_VERSION_MISMATCH` (e2e `tests/src/e2e.test.mjs`). |
@@ -64,15 +64,15 @@ led to the captureTab-first implementation).
 
 ## Phase 5 — browser tools behind `BrowserToolTransport`
 
-- **Interface + two transports** (`packages/pi-agent/src/browser/`): `LegacyBrowserCallbackTransport`
+- **Interface + two transports** (`packages/trusted-user-agent/src/browser/`): `LegacyBrowserCallbackTransport`
   (`x-pi-browser/tool` host→client callbacks — the working default) and `NativeMcpOverAcpTransport`
   (MCP-over-ACP; the add-on's `McpServer` fronts the 8 browser tools + 10 `pi_*` control tools).
 - **Feature detection:** the host selects MCP-over-ACP only when the ACP handshake advertises
-  `mcpCapabilities.acp`; otherwise legacy. Verified in `packages/pi-agent/test/provider.test.ts`
+  `mcpCapabilities.acp`; otherwise legacy. Verified in `packages/trusted-user-agent/test/provider.test.ts`
   and end-to-end in `tests/src/e2e.test.mjs` (the real add-on `McpServer` class fronts the MCP path;
   the harness drives the real host over real 4-byte framing).
 - **Transport-independence:** tool names/schemas/args/results are identical across transports —
-  enforced by `packages/pi-agent/test/tool-schemas.test.ts` (byte-level schema sync with
+  enforced by `packages/trusted-user-agent/test/tool-schemas.test.ts` (byte-level schema sync with
   `packages/protocol`) and by the e2e running both paths.
 - **Live:** 107× `mcp/connect` in the host log (2026-09-11); all 10 `pi_*` control tools exercised
   live (session creation, tab binding, prompting from the control surface).
@@ -81,16 +81,16 @@ led to the captureTab-first implementation).
 
 | # | Invariant | Enforcement |
 |---|-----------|-------------|
-| 1 | `allowed_extensions` contains only the production add-on ids | `packages/pi-agent/src/installer/platforms.ts` — manifest builder hard-codes the authorized id set (`PI_BROWSER.extensionId` + Thunderbird ids); install refuses to write a manifest without it (guard at line ~159). Manifest on disk shows exactly `["pi-agent-firefox@matbee.com", "pi-firefox@matbee.com", "pi-agent-thunderbird@matbee.com"]`. |
-| 2 | Native Messaging stdout carries protocol data only | `packages/pi-agent/src/logger.ts` — stderr-only diagnostics logger; nothing in the host writes to stdout except framed protocol JSON. |
+| 1 | `allowed_extensions` contains only the production add-on ids | `packages/trusted-user-agent/src/installer/platforms.ts` — manifest builder hard-codes the authorized id set (`PI_BROWSER.extensionId` + Thunderbird ids); install refuses to write a manifest without it (guard at line ~159). Manifest on disk shows exactly `["pi-agent-firefox@matbee.com", "pi-firefox@matbee.com", "pi-agent-thunderbird@matbee.com"]`. |
+| 2 | Native Messaging stdout carries protocol data only | `packages/trusted-user-agent/src/logger.ts` — stderr-only diagnostics logger; nothing in the host writes to stdout except framed protocol JSON. |
 | 3 | Browser page content is untrusted | Page data flows only as tool results (content script → `tool-dispatcher.ts` → ACP tool result). Prompt path carries user text only — proven by transcript analysis (item 19). |
 | 4 | A web page cannot initiate an ACP user prompt | No page-originated prompt path exists: the content script exposes read/act tools only; `session/prompt` is issued exclusively by the sidebar composer (user gesture) or `pi_prompt` (an authenticated agent-side control tool). |
 | 5 | Tool calls target explicit session-bound tabs | `firefox/src/background/tool-dispatcher.ts` — every tool resolves sessionId→tabId explicitly; unbound → `BROWSER_NOT_BOUND`, tab gone → `BROWSER_TAB_CLOSED` (never silent fallback to another tab). |
 | 6 | Firefox cannot arbitrarily invoke shell commands | `grep -rn "child_process\|spawn" firefox/src/` → no matches. The add-on prompts Pi; Pi (host) owns agent execution. |
-| 7 | Pi's coding tools retain Pi's own security/permission policy | `packages/pi-agent/src/acp/sdk-backend.ts` uses the real Pi SDK session services — the host does not bypass or re-implement Pi's permission system. |
-| 8 | Browser tools use explicit schemas and bounded inputs | `packages/protocol/src/browser-tools.ts` (canonical schemas) + TypeBox validation in `packages/pi-agent/src/browser/provider.ts`/`schemas.ts`; `tool-schemas.test.ts` keeps host and protocol byte-identical. |
-| 9 | No localhost TCP port required | `grep -rn "createServer\|\.listen(" packages/pi-agent/src/` (non-test) → no matches. Transport is Native Messaging stdio framing only. |
-| 10 | No native bridge separately downloaded by the user | `packages/pi-agent/src/installer/platforms.ts` — the host ships inside the Pi package; `/pi-browser install` copies/points at the package's own build (`dist/native-host/main.js`). |
+| 7 | Pi's coding tools retain Pi's own security/permission policy | `packages/trusted-user-agent/src/acp/sdk-backend.ts` uses the real Pi SDK session services — the host does not bypass or re-implement Pi's permission system. |
+| 8 | Browser tools use explicit schemas and bounded inputs | `packages/protocol/src/browser-tools.ts` (canonical schemas) + TypeBox validation in `packages/trusted-user-agent/src/browser/provider.ts`/`schemas.ts`; `tool-schemas.test.ts` keeps host and protocol byte-identical. |
+| 9 | No localhost TCP port required | `grep -rn "createServer\|\.listen(" packages/trusted-user-agent/src/` (non-test) → no matches. Transport is Native Messaging stdio framing only. |
+| 10 | No native bridge separately downloaded by the user | `packages/trusted-user-agent/src/installer/platforms.ts` — the host ships inside the Pi package; `/pi-browser install` copies/points at the package's own build (`dist/native-host/main.js`). |
 
 ## Phase T1 — Thunderbird connection + Pi Space (2026-09-11)
 
@@ -101,7 +101,7 @@ with session list, new/resume, prompt, streaming, and cancel. T1 declares **no
 capabilities** (`capabilities: []`), so the host registers **no tools** for it (mail
 =T2, compose =T3).
 
-Shared code was extracted to `@pi-browser/webext` (the `AcpClient` + `SessionStore` the
+Shared code was extracted to `@trusted-ua/webext` (the `AcpClient` + `SessionStore` the
 Firefox and Thunderbird backgrounds both use); Firefox was migrated to it with no
 behavior change (its 14 tests still green).
 
@@ -292,12 +292,12 @@ permission `addressBooks`. Four live bugs fixed here:
 
 | Workspace | Tests | Covers |
 |-----------|-------|--------|
-| `@pi-browser/protocol` | 14 | framing helpers, JSON-RPC, structured errors, permission helpers, schema constants, **agent identity + `pi.agent.hello` (firefox + thunderbird) + capability normalization** |
+| `@trusted-ua/protocol` | 14 | framing helpers, JSON-RPC, structured errors, permission helpers, schema constants, **agent identity + `pi.agent.hello` (firefox + thunderbird) + capability normalization** |
 | `trusted-user-agent` | 62 | framing edge cases (fragmented/multiple/malformed), transport, ACP agent (multi-session isolation, stream routing, cancel, resume, close, config selection, **capability-gated tool registration**), provider (both transports, feature detection, permission gate), **application-neutral installer (`firefox`/`thunderbird`/`mozilla`, macOS path split, Windows per-app registry, legacy cleanup)**, client heartbeat |
-| `@pi-browser/webext` | — | shared `AcpClient` (injected identity + hello) + `SessionStore` (shared by both add-ons; exercised by the firefox tests + e2e) |
-| `@pi-browser/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) — now on the shared `@pi-browser/webext` |
-| `@pi-browser/thunderbird` | 59 | **mail tool dispatcher** (T2, 19 + 4 tag tests: search-by-tag name→key, `tagMode` all/any, unknown-tag error, `mail_list_tags`): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 9)**: mark read / additive+replace tags / create-unknown-tag / `keyForName` / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 16)**: MV3 `addressBooks.contacts` path, include-*-flags, **MV3 vCard parsing (no `properties` map — `FN`/`N`/`EMAIL`/`ORG`/`TEL`/`TITLE`/`NOTE`/`ADR` + RFC 5545 fold/unescape)**, email-only card, **raw vCard + flat map surfaced**, **contacts_list (enumerate/filter/paginate)**, **no-mutation guard**. **+ schema conformance (1)**: every `browser.*` call is present, MV3-available, and permitted (vs the installed `omni.ja`) |
-| `pi-browser-tests` (e2e) | 15 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat, **a fake-Thunderbird client for `capabilities: []`, one for the T2 mail set, and one for the full T4/T6 set (mailModify + contacts tools registered + round-trip over the legacy transport)** |
+| `@trusted-ua/webext` | — | shared `AcpClient` (injected identity + hello) + `SessionStore` (shared by both add-ons; exercised by the firefox tests + e2e) |
+| `@trusted-ua/firefox` | 14 | session store, tool dispatcher (binding, stale refs, closed tabs, screenshot fallback), MCP server (control tools), AcpClient (reconnect, auto-detection, lifecycle state) — now on the shared `@trusted-ua/webext` |
+| `@trusted-ua/thunderbird` | 59 | **mail tool dispatcher** (T2, 19 + 4 tag tests: search-by-tag name→key, `tagMode` all/any, unknown-tag error, `mail_list_tags`): routing, context/tab/folder/message normalization, `headerMessageId` durability, HTML→text body fallback, pagination, attachment truncation, structured not-found errors. **+ compose dispatcher (T3, 10)**: `begin*`/`setComposeDetails`/`addAttachment` args, recipient normalization, base64→File, **no-send guard**. **+ mutation dispatcher (T4, 9)**: mark read / additive+replace tags / create-unknown-tag / `keyForName` / archive / move, **no-delete guard**. **+ contacts dispatcher (T6, 16)**: MV3 `addressBooks.contacts` path, include-*-flags, **MV3 vCard parsing (no `properties` map — `FN`/`N`/`EMAIL`/`ORG`/`TEL`/`TITLE`/`NOTE`/`ADR` + RFC 5545 fold/unescape)**, email-only card, **raw vCard + flat map surfaced**, **contacts_list (enumerate/filter/paginate)**, **no-mutation guard**. **+ schema conformance (1)**: every `browser.*` call is present, MV3-available, and permitted (vs the installed `omni.ja`) |
+| `trusted-ua-tests` (e2e) | 15 | **real built host + real 4-byte framing + real add-on `McpServer`** with a fake in-memory tab set and deterministic mock backend: initialize/version-mismatch, multi-session, streaming, cancel, binding isolation, tool failures, permission flow, add-on heartbeat, **a fake-Thunderbird client for `capabilities: []`, one for the T2 mail set, and one for the full T4/T6 set (mailModify + contacts tools registered + round-trip over the legacy transport)** |
 
 ## Live real-backend smoke test
 
@@ -326,7 +326,7 @@ Verification (2026-09-12, Node 22.22.3, Linux):
 
 | Layer | Status | Evidence |
 |---|---|---|
-| Schema sync protocol ↔ TypeBox (incl. all 6 new tools + widened get_dom) | ✅ | `packages/pi-agent/test/tool-schemas.test.ts` green (byte-level compare) |
+| Schema sync protocol ↔ TypeBox (incl. all 6 new tools + widened get_dom) | ✅ | `packages/trusted-user-agent/test/tool-schemas.test.ts` green (byte-level compare) |
 | Dispatcher routing (evaluate/a11y/console/element_at/navigate arg pass-through; navigate URL validation; network answered from webRequest log without a content script) | ✅ | `firefox/test/addon.test.ts` (22 green, incl. 9 new tests) |
 | NetworkLog (per-tab isolation, filters, case-insensitivity, newest-first, limit/truncation, closed-tab cleanup) | ✅ | `addon.test.ts` `NetworkLog:` test |
 | Content-script logic against the REAL built bundles (a11y outline shape/names/pruning, dom summary fields, elementAt hit, evaluate fn+arg/error-as-data/async/page-world round-trip through the real MAIN helper, console capture/filter/clear, 15 s isolated fallback) | ✅ | `node .probe/smoke-content-dom.mjs` (and `SLOW=1 …`) — fake DOM, real `dist/content.js` + `dist/console-capture.js` |
@@ -428,11 +428,11 @@ host.log, checkpoint.json — **0600 in both the live session cwd and the eviden
 
 **Product bug found and fixed during verification** (approved as part of this phase):
 `firefox/src/background/tool-dispatcher.ts` `imageResult` returns `[image, text capture-note]`
-(two parts); `packages/pi-agent/src/repl/provider.ts` `unwrapToolResult` previously unwrapped
+(two parts); `packages/trusted-user-agent/src/repl/provider.ts` `unwrapToolResult` previously unwrapped
 images only for length-1 content, so `screenshot()` received an array and threw
 `Screenshot returned no image data.` Fix: `unwrapToolResult` extracts exactly one image even
 with accompanying text metadata (multi-image/text-only/error behavior unchanged). Regression
-tests added in `packages/pi-agent/test/repl.test.ts` (non-image/multi-image/error preservation
+tests added in `packages/trusted-user-agent/test/repl.test.ts` (non-image/multi-image/error preservation
 + real-provider `screenshot()` with capture-note), red before / green after the fix.
 
 **Test gates:** `npm test` at root — protocol, agent **107/107** (incl. 2 new), firefox
@@ -562,7 +562,7 @@ checkpoint, the probe was stopped rather than waiting out its remaining
 budget. No fourth-run all-green result is claimed.
 
 **Root cause:** the missing context is the worker's Node inspector VM realm,
-not Firefox's page execution context. `packages/pi-agent/src/repl/worker.ts`
+not Firefox's page execution context. `packages/trusted-user-agent/src/repl/worker.ts`
 creates `realm` at line 363, installs globals once with `Object.assign`, then
 retains only its numeric `executionContextId` for `Runtime.evaluate` (line
 449). Before the fix, no live callback retained `realm` after initialization; GC could destroy
@@ -616,13 +616,13 @@ single fixed-build live pass is not a statistical reliability estimate.
 
 ### Production GC fix and canonical T3.1 pass — run 5
 
-`packages/pi-agent/src/repl/worker.ts` now gives the live inspector Session
+`packages/trusted-user-agent/src/repl/worker.ts` now gives the live inspector Session
 a strong `realm` field (`evaluator.realm = realm`). A numeric inspector
 context id alone does not keep its VM realm alive. The field is retained
 for the worker lifetime; no recreation or state reset is involved.
 
 Regression: `worker realm survives forced GC between cells with state intact`
-in `packages/pi-agent/test/repl.test.ts` forks the actual compiled worker with
+in `packages/trusted-user-agent/test/repl.test.ts` forks the actual compiled worker with
 `--expose-gc` and a test-only preload. Cell 1 defines `kept.value = 41`; two GC
 cycles run outside the VM; cell 2 reads `kept.value + 1` and returns 42. It
 failed before the fix with the exact -32000 error
@@ -681,7 +681,7 @@ returned **BLOCK** with 4×P1 + 2×P2. All six were fixed and re-verified:
 | P2-1 | Windows uninstall left the installed skill behind (removal was inside the non-Windows branch) | Skill removal moved out of the platform conditional (`installer/platforms.ts`) |
 | P2-2 | Skill-removal assertion initialized `true` and could never fail | Assert `stat()` rejects with `ENOENT` (same latent defect fixed for the manifest + legacy assertions in that block) |
 
-Evidence: `packages/pi-agent` tests 116/116 (was 112; +2 net new permission
+Evidence: `packages/trusted-user-agent` tests 116/116 (was 112; +2 net new permission
 tests, the two old `page.info()`-based tests converted to `screenshot()`
 per the new contract); full repo build + suite exit 0
 (`/tmp/phase2-verify/review-fix-build.log`,

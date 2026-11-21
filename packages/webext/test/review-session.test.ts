@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ReviewSession } from "../src/skills/review-session.js";
 import type { GateIdentity, GateView, ReviewTicket, SubmissionGesture } from "../src/skills/submission-gate.js";
-import type { SkillsResultParams } from "@pi-browser/protocol";
+import type { SkillsResultParams } from "@trusted-ua/protocol";
 
 const identity = (draft = "hello"): GateIdentity => ({
   documentGeneration: "gen1",

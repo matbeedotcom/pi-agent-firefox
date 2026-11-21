@@ -1,7 +1,7 @@
 /**
  * Cross-app broker integration tests (THUNDERBIRD-PLAN.md §26–30).
  *
- * Spawns the REAL built host (packages/pi-agent/dist/native-host/main.js)
+ * Spawns the REAL built host (packages/trusted-user-agent/dist/native-host/main.js)
  * TWICE against a shared broker dir:
  *
  *   host A (mock backend): the FIRST process — becomes the broker, owns the
@@ -36,12 +36,12 @@ import {
   PI_BROWSER_ERROR,
   X_PI_BROWSER,
   toErrorObject,
-} from "@pi-browser/protocol";
-import { McpServer } from "@pi-browser/firefox/mcp-server";
+} from "@trusted-ua/protocol";
+import { McpServer } from "@trusted-ua/firefox/mcp-server";
 import { HostClient } from "./host-client.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const HOST_ENTRY = path.join(REPO_ROOT, "packages", "pi-agent", "dist", "native-host", "main.js");
+const HOST_ENTRY = path.join(REPO_ROOT, "packages", "trusted-user-agent", "dist", "native-host", "main.js");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

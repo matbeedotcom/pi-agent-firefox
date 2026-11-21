@@ -11,7 +11,7 @@ import {
   type PermissionClearResult,
   type PermissionConfigResult,
   type PermissionSetResult,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 import { grantEvaluationPermission } from "../page-evaluation-permission.js";
 import {
   applyPiTheme,
@@ -28,7 +28,7 @@ import {
   renderMarkdownInto,
   type PiTheme,
   type PermissionSettingsApi,
-} from "@pi-browser/webext";
+} from "@trusted-ua/webext";
 import type {
   AgentsResult,
   AgentCapability,
@@ -37,7 +37,7 @@ import type {
   SessionNotification,
   SessionUpdate,
   ToolCallUpdate,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 
 import { resultParts, type BrowserActivity, type ToolImage } from "../tool-activity.js";
 import { createActivityCard, type ActivityCardData } from "./activity-card.js";

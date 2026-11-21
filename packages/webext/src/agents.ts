@@ -10,7 +10,7 @@ import {
   PI_AGENT_ID,
   type AgentsResult,
   type AgentApplication,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 
 /**
  * Ask the host which agents a new session can use. Undefined when the host

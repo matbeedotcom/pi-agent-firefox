@@ -13,8 +13,8 @@
  *
  * Browser APIs are injected so the controller is unit-testable.
  */
-import type { RequestPermissionRequest } from "@pi-browser/protocol";
-import { permissionRequestMeta } from "@pi-browser/protocol";
+import type { RequestPermissionRequest } from "@trusted-ua/protocol";
+import { permissionRequestMeta } from "@trusted-ua/protocol";
 
 export interface ApprovalWindowApi {
   /** Open the approval page as a focused popup; resolves its window id. */

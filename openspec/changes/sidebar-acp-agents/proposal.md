@@ -39,7 +39,7 @@ None. `openspec/specs/` has no archived specs yet. This change builds on the una
 
 ## Impact
 
-- **Host (`packages/pi-agent`):**
+- **Host (`packages/trusted-user-agent`):**
   - `src/acp/agent.ts`: sessions get an agent kind and dispatch to either the existing pi path or a new ACP relay path.
   - New `src/acp/agents/`: the agent registry (detection, config file), the ACP client connection to an agent process, and the session relay.
   - `src/native-host/mcp-server.ts`, `mcp-stdio-bridge.ts`, `main.ts`: a bridge started for an agent session reports which sidebar session it belongs to; the broker routes its calls with that session's context.

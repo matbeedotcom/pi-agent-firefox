@@ -32,7 +32,7 @@ see **[Debugging ACP/MCP tools](docs/DEBUGGING-TOOLS.md)**.
 ```
 packages/protocol/    dependency-light protocol package (shared by the add-ons + Node)
 packages/webext/      add-on code shared by Firefox and Thunderbird (ACP client, session store, panels)
-packages/pi-agent/    trusted-user-agent: native host, ACP↔Pi SDK adapter, ACP relay to external
+packages/trusted-user-agent/    trusted-user-agent: native host, ACP↔Pi SDK adapter, ACP relay to external
                       agents (Claude Code, Codex, ...), MCP server, installers, /pi-browser
 firefox/              the Firefox add-on (background / content script / sidebar)
 thunderbird/          the Thunderbird add-on (background / Space / side pane)
@@ -337,10 +337,10 @@ sh build.sh          # 1) verifies node >= 22  2) npm ci  3) npm run build
 
 1. Verifies the Node.js version (>= 22) and npm presence.
 2. `npm ci` — installs the exact dependency versions pinned in `package-lock.json`
-   (workspaces: `packages/protocol`, `packages/webext`, `packages/pi-agent`,
+   (workspaces: `packages/protocol`, `packages/webext`, `packages/trusted-user-agent`,
    `firefox`, `thunderbird`, `tests`).
-3. `npm run build` — builds in dependency order: `@pi-browser/protocol` (tsc) →
-   `@pi-browser/webext` (tsc) → `trusted-user-agent` (tsc, the native host) →
+3. `npm run build` — builds in dependency order: `@trusted-ua/protocol` (tsc) →
+   `@trusted-ua/webext` (tsc) → `trusted-user-agent` (tsc, the native host) →
    `firefox` and `thunderbird` (tsc `--noEmit` type-check gate, then esbuild 0.25.x
    bundles each TypeScript source into the classic scripts shipped in the add-on;
    see the add-on submission's tooling note for details).
@@ -365,7 +365,7 @@ sh amo/make-zip.sh   # rebuild the AMO submission zip from firefox/dist
 - **Live smoke test** (real Pi backend, no mock): `node .probe/smoke-host.mjs`.
 - The loadable add-on is **`firefox/dist/`** (built), not the `firefox/` source dir.
 - For confined browsers (e.g. snap Firefox), the host launcher must exec a node that lives under
-  `$HOME`; see the committed `packages/pi-agent/native/pi-browser-host`.
+  `$HOME`; see the committed `packages/trusted-user-agent/native/pi-browser-host`.
 
 ## Security posture (PRODUCT.md §49, condensed)
 

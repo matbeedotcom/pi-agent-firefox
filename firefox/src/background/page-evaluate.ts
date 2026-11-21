@@ -1,4 +1,4 @@
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
 import { isFunctionExpression, toJsonSafe } from "../content/shared.js";
 
 export interface EvaluateResult {

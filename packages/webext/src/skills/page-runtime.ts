@@ -27,7 +27,7 @@
  * Pure: no browser APIs, no DOM globals — the document is injected as an
  * event target, which keeps the policy testable in Node.
  */
-import type { SkillEventDefinition, SkillDomMatcher, SkillPlanRule, SkillTarget } from "@pi-browser/protocol";
+import type { SkillEventDefinition, SkillDomMatcher, SkillPlanRule, SkillTarget } from "@trusted-ua/protocol";
 import type { GateView } from "./submission-gate.js";
 
 /** Minimal event surface the interpreter reads (composedPath + key state). */

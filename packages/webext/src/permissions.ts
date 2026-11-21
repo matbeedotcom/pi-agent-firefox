@@ -25,7 +25,7 @@ import {
   type PermissionConfigResult,
   type PermissionConfigTool,
   type PermissionToolState,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 
 /** App-specific bridge to the host's permission configuration. */
 export interface PermissionSettingsApi {

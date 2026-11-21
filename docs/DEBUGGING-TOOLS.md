@@ -10,9 +10,9 @@ for those runs, not guarantees for the current build.
 | Question | Start here | What is real |
 | --- | --- | --- |
 | Does a mail filter/page/cursor work? | `thunderbird/test/mail-dispatcher.test.ts` | Dispatcher; mailbox APIs are stubs |
-| Do permissions, routing, deadlines and updates work? | `packages/pi-agent/test/provider.test.ts` | Provider and transport test fixtures |
-| Are requests correlated correctly? | `packages/pi-agent/test/transport.test.ts` | JSON-RPC dispatcher with in-memory peers |
-| Does ACP render streamed tool updates correctly? | `packages/pi-agent/test/acp-agent.test.ts` | ACP adapter; scripted backend |
+| Do permissions, routing, deadlines and updates work? | `packages/trusted-user-agent/test/provider.test.ts` | Provider and transport test fixtures |
+| Are requests correlated correctly? | `packages/trusted-user-agent/test/transport.test.ts` | JSON-RPC dispatcher with in-memory peers |
+| Does ACP render streamed tool updates correctly? | `packages/trusted-user-agent/test/acp-agent.test.ts` | ACP adapter; scripted backend |
 | Does MCP-over-ACP work end to end? | `tests/src/e2e.test.mjs` | Built host, framing, Firefox MCP server; fake tabs and model |
 | Does cross-app routing work? | `tests/src/broker.test.mjs` | Host/broker IPC; simulated clients |
 | Does the browser operation work in Gecko? | `.probe/live-repl.mjs` | Firefox, add-on, host and REPL; model mocked by default |
@@ -21,13 +21,13 @@ for those runs, not guarantees for the current build.
 Compile tests before selecting one; running old `dist-tests` can give a false pass:
 
 ```sh
-npm run build -w @pi-browser/protocol
+npm run build -w @trusted-ua/protocol
 npx tsc -p thunderbird/tsconfig.tests.json
 node --test --test-name-pattern='mail_search' thunderbird/dist-tests/test/mail-dispatcher.test.js
 
-npx tsc -p packages/pi-agent/tsconfig.tests.json
-node --test --test-name-pattern='tool_update|timeout|parallel' packages/pi-agent/dist-tests/test/provider.test.js
-node --test packages/pi-agent/dist-tests/test/transport.test.js
+npx tsc -p packages/trusted-user-agent/tsconfig.tests.json
+node --test --test-name-pattern='tool_update|timeout|parallel' packages/trusted-user-agent/dist-tests/test/provider.test.js
+node --test packages/trusted-user-agent/dist-tests/test/transport.test.js
 ```
 
 Pass Node test options **before** filenames. These are Node's built-in tests;
@@ -35,7 +35,7 @@ Jest's `--runInBand` is not the mechanism for selecting or serializing them.
 For complete package suites:
 
 ```sh
-npm test -w @pi-browser/thunderbird
+npm test -w @trusted-ua/thunderbird
 npm test -w trusted-user-agent
 ```
 
@@ -55,9 +55,9 @@ The host's capability provider chooses the tool executor:
 
 | Execution path | Wire messages | Implementation |
 | --- | --- | --- |
-| Thunderbird mail and cross-app callbacks | `x-pi-browser/tool`, optional `x-pi-browser/tool_update` | `packages/pi-agent/src/browser/provider.ts`, `packages/webext/src/acp-client.ts`, `thunderbird/src/background/index.ts` |
-| Firefox MCP-over-ACP | `mcp/connect`, `mcp/message`, `mcp/disconnect`; nested MCP `tools/call` | `packages/pi-agent/src/browser/mcp-acp-client.ts`, `firefox/src/background/mcp-server.ts` |
-| Browser `javascript` tool | REPL worker invokes ordinary browser tools | `packages/pi-agent/src/repl/`, then the provider above |
+| Thunderbird mail and cross-app callbacks | `x-pi-browser/tool`, optional `x-pi-browser/tool_update` | `packages/trusted-user-agent/src/browser/provider.ts`, `packages/webext/src/acp-client.ts`, `thunderbird/src/background/index.ts` |
+| Firefox MCP-over-ACP | `mcp/connect`, `mcp/message`, `mcp/disconnect`; nested MCP `tools/call` | `packages/trusted-user-agent/src/browser/mcp-acp-client.ts`, `firefox/src/background/mcp-server.ts` |
+| Browser `javascript` tool | REPL worker invokes ordinary browser tools | `packages/trusted-user-agent/src/repl/`, then the provider above |
 
 Thunderbird declares no MCP server. To test mail, simulate/inspect the callback
 path; sending an MCP `tools/call` to Thunderbird does not exercise it.
@@ -84,11 +84,11 @@ host stdout: stdout is exclusively the framed protocol channel.
 ## Build, reload, and verify what is actually running
 
 ```sh
-npm run build -w @pi-browser/protocol
+npm run build -w @trusted-ua/protocol
 npm run build -w trusted-user-agent
-npm run build -w @pi-browser/thunderbird
+npm run build -w @trusted-ua/thunderbird
 # For Firefox changes:
-npm run build -w @pi-browser/firefox
+npm run build -w @trusted-ua/firefox
 ```
 
 Reload the temporary add-on in `about:debugging` after rebuilding its `dist`.
@@ -104,7 +104,7 @@ Linux inspection:
 pgrep -af 'native-host/main.js|thunderbird'
 ls -lt ~/.pi/browser/logs/host-*.log | head
 ss -lxnp | rg 'agent-broker'
-node packages/pi-agent/dist/installer/cli.js doctor
+node packages/trusted-user-agent/dist/installer/cli.js doctor
 ```
 
 Read the selected host log rather than concatenating every historical log:
@@ -226,7 +226,7 @@ Use the interactive background inspector if this occurs. The earlier
 ## Reproduce parallel calls correctly
 
 The mock backend's scripted `toolCalls` array executes **sequentially**
-(`packages/pi-agent/src/acp/mock-backend.ts`, `stepTool`). Two entries do not prove
+(`packages/trusted-user-agent/src/acp/mock-backend.ts`, `stepTool`). Two entries do not prove
 concurrent behavior. In a provider test, invoke the same tool's `execute` twice
 with distinct IDs and use `Promise.allSettled`; in a dispatcher test, invoke
 `dispatchMailTool` twice with distinct contexts.

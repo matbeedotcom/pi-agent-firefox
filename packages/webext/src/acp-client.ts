@@ -41,13 +41,13 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 import {
   PERMISSION_WITHDRAWN_METHOD,
   PI_BROWSER_ERROR,
   PiBrowserProtocolError,
   SESSION_ENDED_METHOD,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 
 export type HostStatus =
   | { state: "connecting" }

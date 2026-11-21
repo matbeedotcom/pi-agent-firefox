@@ -69,7 +69,7 @@ const tbRunning = () => {
 const hostPids = () => {
   try {
     const out = execSync(
-      `pgrep -f "packages/pi-agent/dist/native-host/main.js" || true`,
+      `pgrep -f "packages/trusted-user-agent/dist/native-host/main.js" || true`,
       { encoding: "utf8" },
     );
     return out.trim().split("\n").filter(Boolean).map(Number);
@@ -149,7 +149,7 @@ writeFileSync(
     `export PI_CODING_AGENT_DIR=${path.join(work, "agent")}`,
     `export PI_BROWSER_BROKER_DIR=${path.join(work, "broker")}`,
     `export PI_BROWSER_REPL_DIR=${path.join(work, "repl")}`,
-    "exec " + JSON.stringify(NODE) + " " + JSON.stringify(path.join(REPO, "packages/pi-agent/dist/native-host/main.js")) + " \"$@\"",
+    "exec " + JSON.stringify(NODE) + " " + JSON.stringify(path.join(REPO, "packages/trusted-user-agent/dist/native-host/main.js")) + " \"$@\"",
     "",
   ].join("\n"),
 );
@@ -202,7 +202,7 @@ function check(name, ok, detail = "") {
 const relayChildren = [];
 class AcpClient {
   constructor() {
-    this.child = spawn(NODE, [path.join(REPO, "packages/pi-agent/dist/native-host/main.js")], {
+    this.child = spawn(NODE, [path.join(REPO, "packages/trusted-user-agent/dist/native-host/main.js")], {
       stdio: ["pipe", "pipe", "pipe"],
       // Same broker dir as the probe launcher → attach to the PROBE broker,
       // never the stale production socket in ~/.pi/run.

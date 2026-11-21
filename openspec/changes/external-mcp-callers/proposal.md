@@ -39,14 +39,14 @@ None. `openspec/specs/` is empty; this is the first OpenSpec change in the repo.
 
 ## Impact
 
-- **Host (`packages/pi-agent`):**
+- **Host (`packages/trusted-user-agent`):**
   - `src/native-host/mcp-server.ts`: a caller per connection, the `pi-browser/caller` notification, and `initialize` clientInfo.
   - `src/native-host/mcp-stdio-bridge.ts`: sends caller identity when it connects.
   - `src/native-host/main.ts`: caller-session routing next to the existing `toolBridge`, and a marker in the environment of processes the host spawns.
   - `src/browser/provider.ts`: caller attribution on permission requests, and the per-app caller-approval gate.
   - `src/permission-store.ts`: stores remembered caller approvals per app, and the external-access setting.
   - `src/installer/{mcp,index,cli}.ts`: client targets, per-client config writers, and the temporary-location check.
-  - `package.json`: new npm name, `bin` entry, publish contents. `@pi-browser/protocol` is bundled or published alongside.
+  - `package.json`: new npm name, `bin` entry, publish contents. `@trusted-ua/protocol` is bundled or published alongside.
 - **Protocol (`packages/protocol`):**
   - Optional `_meta.piBrowser.caller` on `session/request_permission`.
   - The new MCP notification name.

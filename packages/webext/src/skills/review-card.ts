@@ -13,7 +13,7 @@
  */
 import { activityNode } from "../activity/activity-result-view.js";
 import type { GateView, GateState } from "./submission-gate.js";
-import type { ReviewResult } from "@pi-browser/protocol";
+import type { ReviewResult } from "@trusted-ua/protocol";
 
 export interface ReviewCardOptions {
   mode: "advisory" | "review-before-submit";

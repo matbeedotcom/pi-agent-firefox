@@ -19,8 +19,8 @@ import {
   type DisconnectMcpRequest,
   type MessageMcpRequest,
   type MessageMcpResponse,
-} from "@pi-browser/protocol";
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
+import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
 import type { ToolDispatcher } from "./tool-dispatcher.js";
 
 /**

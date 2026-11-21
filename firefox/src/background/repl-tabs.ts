@@ -9,7 +9,7 @@
  * In-memory on purpose: if the add-on restarts mid-session, orphaned REPL
  * tabs stay open (the user closes them manually) — a documented v1 limit.
  */
-import type { Binding } from "@pi-browser/webext";
+import type { Binding } from "@trusted-ua/webext";
 
 export class ReplTabs {
   private owned = new Map<string, Set<number>>();

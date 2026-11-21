@@ -1,5 +1,5 @@
 {
-  "name": "@pi-browser/thunderbird",
+  "name": "@trusted-ua/thunderbird",
   "version": "0.4.0",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
   },
   "dependencies": {
-    "@pi-browser/protocol": "0.4.0",
-    "@pi-browser/webext": "0.4.0"
+    "@trusted-ua/protocol": "0.4.0",
+    "@trusted-ua/webext": "0.4.0"
   },
   "devDependencies": {
     "@types/firefox-webext-browser": "^143.0.0",

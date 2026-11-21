@@ -56,7 +56,7 @@ await esbuild.build({
   outfile: path.join(dist, "space", "space.js"),
 });
 
-// Approval window for external MCP callers (shared page from @pi-browser/webext).
+// Approval window for external MCP callers (shared page from @trusted-ua/webext).
 const approvalSrc = path.join(root, "..", "packages", "webext", "src", "approval");
 await esbuild.build({
   ...common,

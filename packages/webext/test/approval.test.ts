@@ -9,7 +9,7 @@ import {
   buildCallerApprovalRequest,
   buildPermissionRequest,
   type RequestPermissionRequest,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 import { ApprovalWindowController, isCallerPermissionRequest } from "../src/approval/controller.js";
 import { describePermissionRequest } from "../src/approval/prompt-text.js";
 

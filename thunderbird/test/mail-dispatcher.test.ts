@@ -9,7 +9,7 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
 import { dispatchMailTool, __tests } from "../src/background/mail-dispatcher.js";
 
 // ---------------------------------------------------------------------------

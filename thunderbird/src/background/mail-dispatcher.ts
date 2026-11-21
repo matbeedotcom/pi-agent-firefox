@@ -26,7 +26,7 @@ import {
   type MailMessageRef,
   type MailSearchResult,
   type ThunderbirdContext,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 import { listTags, resolveTagKeys } from "./tag-utils.js";
 
 // ---------------------------------------------------------------------------

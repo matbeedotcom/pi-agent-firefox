@@ -21,7 +21,7 @@
  * authorization; this session adds job routing, activation history, and
  * state notifications for the card.
  */
-import type { SkillsResultParams } from "@pi-browser/protocol";
+import type { SkillsResultParams } from "@trusted-ua/protocol";
 import { ActivationHistory } from "./activation-history.js";
 import {
   SubmissionGate,

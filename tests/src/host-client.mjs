@@ -1,6 +1,6 @@
 /**
  * Shared integration-test harness: a framed client that drives the REAL
- * built native host (packages/pi-agent/dist/native-host/main.js) over
+ * built native host (packages/trusted-user-agent/dist/native-host/main.js) over
  * Firefox Native Messaging framing, exactly like the add-ons do.
  *
  * Used by e2e.test.mjs and broker.test.mjs (cross-app broker tests).
@@ -8,7 +8,7 @@
 import {
   PI_BROWSER_ERROR,
   isStructuredErrorObject,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 
 // ---------------------------------------------------------------------------
 

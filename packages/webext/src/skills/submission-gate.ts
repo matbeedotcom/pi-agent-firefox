@@ -1,4 +1,4 @@
-import type { ReviewResult } from "@pi-browser/protocol";
+import type { ReviewResult } from "@trusted-ua/protocol";
 
 export type GateState = "dirty" | "reviewing" | "clear" | "suggestion" | "unavailable" | "authorized" | "closed";
 export interface GateIdentity {

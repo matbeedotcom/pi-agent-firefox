@@ -5,8 +5,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-import { BROWSER_TOOLS, CONTROL_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
-import { AcpClient, SessionStore, bindingOwner, bindingRefId } from "@pi-browser/webext";
+import { BROWSER_TOOLS, CONTROL_TOOLS, PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
+import { AcpClient, SessionStore, bindingOwner, bindingRefId } from "@trusted-ua/webext";
 import { ToolDispatcher } from "../src/background/tool-dispatcher.js";
 import { ReplTabs } from "../src/background/repl-tabs.js";
 import { McpServer } from "../src/background/mcp-server.js";

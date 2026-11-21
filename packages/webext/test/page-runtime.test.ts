@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { PageRuntime, type ArmTimer, type PageRuntimeTarget, type SkillEventLike } from "../src/skills/page-runtime.js";
-import type { SkillPlanRule } from "@pi-browser/protocol";
+import type { SkillPlanRule } from "@trusted-ua/protocol";
 import type { GateView, GateState } from "../src/skills/submission-gate.js";
 
 // ---------------------------------------------------------------------

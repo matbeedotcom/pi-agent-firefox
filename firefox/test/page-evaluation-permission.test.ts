@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildPermissionRequest, type RequestPermissionResponse } from "@pi-browser/protocol";
+import { buildPermissionRequest, type RequestPermissionResponse } from "@trusted-ua/protocol";
 import { grantEvaluationPermission, requestBrowserToolPermission } from "../src/page-evaluation-permission.js";
 
 const allowed: RequestPermissionResponse = { outcome: { outcome: "selected", optionId: "allow_once" } };

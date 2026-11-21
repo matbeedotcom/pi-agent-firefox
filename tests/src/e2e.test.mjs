@@ -1,7 +1,7 @@
 /**
  * Integration harness (PRODUCT.md §43, §44, §52).
  *
- * Spawns the REAL built native host (packages/pi-agent/dist/native-host/main.js)
+ * Spawns the REAL built native host (packages/trusted-user-agent/dist/native-host/main.js)
  * with the deterministic mock backend and drives it over real Firefox
  * framing, speaking the client side of the protocol exactly like the
  * Firefox add-on does:
@@ -38,11 +38,11 @@ import {
   isStructuredErrorObject,
   codeFromErrorObject,
   toErrorObject,
-} from "@pi-browser/protocol";
-import { McpServer } from "@pi-browser/firefox/mcp-server";
+} from "@trusted-ua/protocol";
+import { McpServer } from "@trusted-ua/firefox/mcp-server";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const HOST_ENTRY = path.join(REPO_ROOT, "packages", "pi-agent", "dist", "native-host", "main.js");
+const HOST_ENTRY = path.join(REPO_ROOT, "packages", "trusted-user-agent", "dist", "native-host", "main.js");
 
 import { HostClient } from "./host-client.mjs";
 

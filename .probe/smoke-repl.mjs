@@ -16,7 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 
-const DIST_REPL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "packages", "pi-agent", "dist", "repl");
+const DIST_REPL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "packages", "trusted-user-agent", "dist", "repl");
 const { ReplRuntime, ReplCellError } = await import(path.join(DIST_REPL, "runtime.js"));
 
 const workspace = await mkdtemp(path.join(tmpdir(), "pi-repl-smoke-"));

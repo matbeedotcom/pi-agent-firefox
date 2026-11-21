@@ -22,7 +22,7 @@ once" and "Deny" are per call — so each tool asks at most once per scope.
 ## Flow
 
 1. Agent calls a mail tool (e.g. `mail_get_message_body`).
-2. Host (`CapabilityToolProvider.execute`, `packages/pi-agent/src/browser/
+2. Host (`CapabilityToolProvider.execute`, `packages/trusted-user-agent/src/browser/
    provider.ts`) checks `toolRequiresApproval(targetApp, tool)` and, when
    gated, sends `session/request_permission` (built by
    `buildPermissionRequest`, tool name in `_meta.piBrowser.tool`) to the

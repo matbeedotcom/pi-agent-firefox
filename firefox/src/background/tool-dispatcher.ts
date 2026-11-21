@@ -17,8 +17,8 @@ import {
   PiBrowserProtocolError,
   getBrowserTool,
   type BrowserToolCallParams,
-} from "@pi-browser/protocol";
-import { bindingOwner, bindingRefId, type SessionStore } from "@pi-browser/webext";
+} from "@trusted-ua/protocol";
+import { bindingOwner, bindingRefId, type SessionStore } from "@trusted-ua/webext";
 import type { BrowserActivity } from "../tool-activity.js";
 import { networkLog } from "./network-log.js";
 import { ReplTabs } from "./repl-tabs.js";

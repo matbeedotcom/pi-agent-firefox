@@ -5,7 +5,7 @@
  * evaluate, click a control, screenshot, and save a checkpoint."
  *
  * Real Firefox (155.0.1) + real built add-on (firefox/dist) + real native
- * host (packages/pi-agent/dist) + real REPL worker. The agent backend is the
+ * host (packages/trusted-user-agent/dist) + real REPL worker. The agent backend is the
  * deterministic mock (scripted `javascript` cell) so the test needs no model
  * API; the BROWSER side (DOM, content scripts, tabs, screenshots) is all real.
  * PI_LIVE_REAL=1 instead uses the configured real Pi model, without a script.
@@ -191,7 +191,7 @@ console.log(`work: ${work}\nevidence: ${root}\nhost log: ${hostLog}`);
     if (!/^\d+$/.test(entry)) continue;
     let cmdline = "";
     try { cmdline = readFileSync(`/proc/${entry}/cmdline`, "utf8"); } catch { continue; }
-    if (!cmdline.includes("packages/pi-agent/dist/native-host/main.js")) continue;
+    if (!cmdline.includes("packages/trusted-user-agent/dist/native-host/main.js")) continue;
     let env = "";
     try { env = readFileSync(`/proc/${entry}/environ`, "utf8"); } catch { continue; }
     if (env.includes("PI_BROWSER_LOG_FILE=/tmp/pi-live-")) stale.push(entry);
@@ -290,7 +290,7 @@ writeFileSync(
     `export PI_BROWSER_LOG_FILE=${hostLog}`,
     `export PI_BROWSER_LOG_LEVEL=${real ? "debug" : "info"}`,
     `touch ${path.join(work, "host-launched")} 2>/dev/null || true`,
-    `exec ${NODE} ${path.join(REPO, "packages/pi-agent/dist/native-host/main.js")} "$@" 2>>${path.join(work, "host-stderr.log")}`,
+    `exec ${NODE} ${path.join(REPO, "packages/trusted-user-agent/dist/native-host/main.js")} "$@" 2>>${path.join(work, "host-stderr.log")}`,
     "",
   ].join("\n"),
 );

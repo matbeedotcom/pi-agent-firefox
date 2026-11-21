@@ -32,7 +32,7 @@ import {
   type SkillsResultAck,
   type SkillsResultParams,
   type SkillsStatusResult,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 
 /** Bounded snapshot store limits (design §9, per document). */
 const MAX_SNAPSHOTS_PER_DOC = 4;

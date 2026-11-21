@@ -8,7 +8,7 @@
  * Shared by Firefox (tab bindings) and Thunderbird (message bindings land in
  * T2; the binding map is simply unused until then).
  */
-import { agentRefOf, type AgentRef, type SessionInfo, type SessionConfigOption } from "@pi-browser/protocol";
+import { agentRefOf, type AgentRef, type SessionInfo, type SessionConfigOption } from "@trusted-ua/protocol";
 
 /**
  * App-specific context attached to a session (Firefox: tab, TB: message/folder).

@@ -57,7 +57,7 @@ merged into the user prompt (plan §31–32).
   `propsFromVCard`, `unescapeVCard`) + `contacts_search` / `contacts_get` / `contacts_list`
   + `normalizeContact`.
 - `packages/protocol/src/contacts-tools.ts` — JSON tool schemas (`CONTACTS_TOOLS`).
-- `packages/pi-agent/src/contacts/schemas.ts` — TypeBox schemas (mirror the protocol).
+- `packages/trusted-user-agent/src/contacts/schemas.ts` — TypeBox schemas (mirror the protocol).
 - `thunderbird/src/types/thunderbird.d.ts` — `browser.addressBooks.*` type surface
   (`AddressBook`, `contacts.{Contact,QueryInfo}`, `list()`/`query()`/`get()`).
 - `thunderbird/test/contacts-dispatcher.test.ts` — 16 unit tests (MV3 vCard parsing,

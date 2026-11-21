@@ -23,15 +23,15 @@ The first release includes filesystem discovery and refresh, contextual suggesti
 
 | Area | Current code | Planned use |
 | --- | --- | --- |
-| SDK resources | `packages/pi-agent/src/acp/sdk-backend.ts`: `PiSdkBackend.servicesFor`, `spawnSession`, `wrapSession` | Adapt existing `createAgentSessionServices` resource loading and per-session prompt execution. |
-| Backend contract | `packages/pi-agent/src/acp/backend.ts`: `BackendSession.prompt` | Add optional typed turn input for resolved skills; preserve plain text/image prompts. Update production and mock implementations together. |
-| ACP lifecycle | `packages/pi-agent/src/acp/agent.ts`: `sessionPrompt`, `sessionLoad`, initialization | Negotiate capability, validate selections, resolve revisions, record and replay activation metadata. |
-| Host lifecycle | `packages/pi-agent/src/native-host/main.ts`: `main`, `wireClient` | Own registry lifecycle once per broker host; isolate context and activation by client/session. |
+| SDK resources | `packages/trusted-user-agent/src/acp/sdk-backend.ts`: `PiSdkBackend.servicesFor`, `spawnSession`, `wrapSession` | Adapt existing `createAgentSessionServices` resource loading and per-session prompt execution. |
+| Backend contract | `packages/trusted-user-agent/src/acp/backend.ts`: `BackendSession.prompt` | Add optional typed turn input for resolved skills; preserve plain text/image prompts. Update production and mock implementations together. |
+| ACP lifecycle | `packages/trusted-user-agent/src/acp/agent.ts`: `sessionPrompt`, `sessionLoad`, initialization | Negotiate capability, validate selections, resolve revisions, record and replay activation metadata. |
+| Host lifecycle | `packages/trusted-user-agent/src/native-host/main.ts`: `main`, `wireClient` | Own registry lifecycle once per broker host; isolate context and activation by client/session. |
 | Shared protocol/client | `packages/protocol/src/integration.ts`, `packages/webext/src/acp-client.ts` | Add contracts and capability handling through existing transport. |
 | Extension routing | Both apps' `src/background/index.ts`: `handleAction`, `sendPrompt` | Collect authoritative app context, transport selections, surface acceptance/errors. |
 | Firefox UI | `firefox/src/sidebar/index.ts`: `sendPrompt` | Suggestions, selected skill chips, library and creation entry points. |
 | Thunderbird UI/context | `thunderbird/src/pane/index.ts`: `sendPrompt`; `thunderbird/src/background/mail-dispatcher.ts`: `mailGetContext`; `packages/protocol/src/mail-tools.ts`: `ThunderbirdContext` | Reuse folder/message references and map them to matching context. |
-| Tool permissions | `packages/pi-agent/src/browser/provider.ts`: `CapabilityToolProvider.requestPermission`; `packages/protocol/src/permission.ts` | Preserve action approval across direct tools, MCP, and REPL routes. |
+| Tool permissions | `packages/trusted-user-agent/src/browser/provider.ts`: `CapabilityToolProvider.requestPermission`; `packages/protocol/src/permission.ts` | Preserve action approval across direct tools, MCP, and REPL routes. |
 
 The installed Pi SDK example `examples/sdk/04-skills.ts` documents `DefaultResourceLoader`, `skillsOverride`, `reload`, and `getSkills`. Its `docs/skills.md` documents global/project/package discovery and model-driven loading. These are evidence of reusable support, not proof that live, isolated per-turn activation already works.
 
@@ -140,7 +140,7 @@ Gate: a documented adapter contract and passing isolation/revision fixture. No s
 
 ### 1. Define contracts and filesystem registry
 
-Add `packages/protocol/src/skills.ts`, capability metadata, runtime validation, and exports. Add host modules under `packages/pi-agent/src/skills/` for SDK discovery adaptation, catalog, binding persistence, matching, and snapshot resolution. Wire shared registry lifecycle through `native-host/main.ts` and ACP options.
+Add `packages/protocol/src/skills.ts`, capability metadata, runtime validation, and exports. Add host modules under `packages/trusted-user-agent/src/skills/` for SDK discovery adaptation, catalog, binding persistence, matching, and snapshot resolution. Wire shared registry lifecycle through `native-host/main.ts` and ACP options.
 
 Gate: protocol compatibility tests plus new registry/matcher tests using temporary directories. Cover malformed frontmatter, duplicate names, broken bindings, atomic refresh, traversal, deleted resources, host normalization, mailbox parsing, mixed mail selection, and deterministic ordering. Skill discovery must cause no execution.
 
@@ -148,7 +148,7 @@ Gate: protocol compatibility tests plus new registry/matcher tests using tempora
 
 Add negotiated private handlers, shared webext skill client state, Firefox context collection, and one composer suggestion/selection flow. Extend `AcpAgent.sessionPrompt`, `BackendSession.prompt`, SDK wrapping, and both mock backends with optional resolved turn context. Record/replay skill attachments.
 
-Gate: extend `packages/pi-agent/test/acp-agent.test.ts`, `firefox/test/addon.test.ts`, and host integration tests. Prove selected bytes reach the backend exactly once, user text stays unchanged, unsupported capabilities do not drop selections, and stale revisions/concurrent prompts fail before execution. Verify bound/visible tab mismatch and navigation during submission.
+Gate: extend `packages/trusted-user-agent/test/acp-agent.test.ts`, `firefox/test/addon.test.ts`, and host integration tests. Prove selected bytes reach the backend exactly once, user text stays unchanged, unsupported capabilities do not drop selections, and stale revisions/concurrent prompts fail before execution. Verify bound/visible tab mismatch and navigation during submission.
 
 ### 3. Add Thunderbird and cross-app isolation
 

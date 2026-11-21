@@ -16,7 +16,7 @@ import {
   type SkillsEventResult,
   type SkillsPlanResult,
   type SkillsResultParams,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 import { SkillsRuntime, type DocumentIdentity } from "../src/skills/skills-runtime.js";
 import type { GateIdentity } from "../src/skills/submission-gate.js";
 

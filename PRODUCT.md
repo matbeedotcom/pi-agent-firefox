@@ -2366,7 +2366,7 @@ tool call → state? →
 Each tool's persistent state is one of **ask** (default — prompt on every
 call), **deny** (refuse without asking) or **allow** (always approved), held
 in a host-side `PermissionStore`
-(`packages/pi-agent/src/permission-store.ts`), a small JSON file at
+(`packages/trusted-user-agent/src/permission-store.ts`), a small JSON file at
 `~/.pi/browser/permissions.json` (override: `PI_BROWSER_PERMISSIONS_FILE`,
 v2 format `{ "version": 2, "tools": { name: "allow"|"deny" } }`; v1 allow
 files migrate on load). One broker = one store, shared by every connected
@@ -2399,7 +2399,7 @@ from the real tool surface. App-managed rows (`browser_evaluate`,
 `page.*`/`tabs.*` primitives are gated individually) have no state control.
 
 Tests: unit coverage for the store and provider gate in
-`packages/pi-agent/test/permission-store.test.ts` and
-`packages/pi-agent/test/provider.test.ts`; the e2e and broker tests isolate
+`packages/trusted-user-agent/test/permission-store.test.ts` and
+`packages/trusted-user-agent/test/provider.test.ts`; the e2e and broker tests isolate
 the store via `PI_BROWSER_PERMISSIONS_FILE` so the developer's real states
 never leak into a test run (and vice versa).

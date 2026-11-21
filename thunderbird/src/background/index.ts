@@ -3,7 +3,7 @@
  *
  * Owns exactly one Native Messaging port, the ACP client, and the session
  * presentation state — the same core as the Firefox background, shared via
- * @pi-browser/webext. The Thunderbird-specific duties are:
+ * @trusted-ua/webext. The Thunderbird-specific duties are:
  *
  *   - owning the **Pi Space** (created via browser.spaces.create at startup,
  *     which loads the space/ page that is the chat UI)
@@ -35,9 +35,9 @@ import {
   type SessionInfo,
   type SessionNotification,
   type SessionUpdate,
-} from "@pi-browser/protocol";
-import { AcpClient, SESSION_OPEN_TIMEOUT_MS, fetchPiTheme, SessionStore, type HostStatus, type PiTheme } from "@pi-browser/webext";
-import { ApprovalWindowController, isCallerPermissionRequest, fetchAgents } from "@pi-browser/webext";
+} from "@trusted-ua/protocol";
+import { AcpClient, SESSION_OPEN_TIMEOUT_MS, fetchPiTheme, SessionStore, type HostStatus, type PiTheme } from "@trusted-ua/webext";
+import { ApprovalWindowController, isCallerPermissionRequest, fetchAgents } from "@trusted-ua/webext";
 import { dispatchMailTool, type MailToolContext } from "./mail-dispatcher.js";
 import { dispatchComposeTool } from "./compose-dispatcher.js";
 import { dispatchMutationTool } from "./mutation-dispatcher.js";

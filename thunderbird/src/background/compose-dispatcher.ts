@@ -11,7 +11,7 @@
  *  - Recipients are mailbox strings; the body is HTML. Compose fields are the
  *    user's own content (not untrusted email), so they are safe to fill in.
  */
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
 
 export type ComposeToolResult = Record<string, unknown>;
 

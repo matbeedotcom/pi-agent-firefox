@@ -8,7 +8,7 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
 import { dispatchMutationTool } from "../src/background/mutation-dispatcher.js";
 import { keyForName } from "../src/background/tag-utils.js";
 

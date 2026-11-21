@@ -1,5 +1,5 @@
 {
-  "name": "@pi-browser/webext",
+  "name": "@trusted-ua/webext",
   "version": "0.4.0",
   "private": true,
   "type": "module",
@@ -18,7 +18,7 @@
     "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
   },
   "dependencies": {
-    "@pi-browser/protocol": "0.4.0",
+    "@trusted-ua/protocol": "0.4.0",
     "streaming-markdown": "^0.2.15"
   },
   "devDependencies": {

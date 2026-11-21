@@ -246,14 +246,14 @@ export async function restoreRealHost({ fallback = "installer" } = {}) {
     return { state: "removed-no-real-backup", manifestPath };
   }
 
-  const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../packages/pi-agent/dist/installer/cli.js");
+  const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../packages/trusted-user-agent/dist/installer/cli.js");
   if (existsSync(cli)) {
     execFileSync(process.execPath, [cli, "install"], { stdio: "pipe" });
     return { state: "reinstalled-via-installer", manifestPath };
   }
   if (IS_WIN) deleteRegistryKey();
   await rm(manifestPath, { force: true });
-  return { state: "removed-no-real-backup", hint: `run: node packages/pi-agent/dist/installer/cli.js install` };
+  return { state: "removed-no-real-backup", hint: `run: node packages/trusted-user-agent/dist/installer/cli.js install` };
 }
 
 /** Report the registration state (JSON). */
@@ -280,7 +280,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const has = (name) => rest.includes(name);
 
   const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const DEFAULT_FAKE_HOST = path.join(REPO_ROOT, "packages/pi-agent/test/skills-host/fake-host.mjs");
+  const DEFAULT_FAKE_HOST = path.join(REPO_ROOT, "packages/trusted-user-agent/test/skills-host/fake-host.mjs");
 
   if (cmd === "status") {
     console.log(JSON.stringify(await mockHostStatus(), null, 2));

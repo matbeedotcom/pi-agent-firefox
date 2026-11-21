@@ -18,7 +18,7 @@
 - [x] 3.3 In `main.ts`, generate the broker instance id, set `PI_BROWSER_HOST_CHILD`, and resolve the caller-session context (no owner, mode `legacy`) in `toolBridge.call`.
 - [x] 3.4 Call `closeSession` when the connection closes. Have the provider drop permission groups and session grants and dispose the REPL worker for that id.
 - [x] 3.5 Replace the bare "no connected client provides tool" error for caller sessions with a message naming the required app (from `tool-capabilities.ts`).
-- [x] 3.6 Unit tests (`packages/pi-agent/test/mcp-server.test.ts` and a new `caller-sessions.test.ts`):
+- [x] 3.6 Unit tests (`packages/trusted-user-agent/test/mcp-server.test.ts` and a new `caller-sessions.test.ts`):
   - a call with no sidebar session runs;
   - a call while a sidebar session is active doesn't use its grants;
   - two connections don't share REPL state or grants;
@@ -78,8 +78,8 @@
 ## 8. npm package and standalone install
 
 - [x] 8.1 Check that `trusted-user-agent` and `trusted-ua` are still free on npm, and publish a placeholder `0.0.0` of `trusted-user-agent` if you want to reserve the name before release. *Done 2026-11-20:* both names still free. The placeholder `0.0.0` was not published (a public publish needs the owner's go-ahead).
-- [x] 8.2 Change the npm name of `packages/pi-agent` from `@pi-browser/agent` to `trusted-user-agent` (the folder stays). Update every reference: root `package.json` build scripts (`-w @pi-browser/agent`), `tests/package.json`, `package-lock.json`, `installer/index.ts`, `integration.ts`, tests and probes, README, PRODUCT.md and docs. Add the `bin` entry there and in the root `package.json`, and a shebang to `installer/cli.ts`. Update CLI usage text.
-- [x] 8.3 Bundle `@pi-browser/protocol` into the published package (`bundleDependencies`), or publish it alongside. Make sure `files` leaves out `*.map` files and generated `native/*` launchers. Check with `npm pack --dry-run`. *As built:* the bundled copy carries no `dependencies` (design D8); `npm pack` = 91 files, no `*.map`.
+- [x] 8.2 Change the npm name of `packages/trusted-user-agent` from `@pi-browser/agent` to `trusted-user-agent` (the folder stays). Update every reference: root `package.json` build scripts (`-w @pi-browser/agent`), `tests/package.json`, `package-lock.json`, `installer/index.ts`, `integration.ts`, tests and probes, README, PRODUCT.md and docs. Add the `bin` entry there and in the root `package.json`, and a shebang to `installer/cli.ts`. Update CLI usage text.
+- [x] 8.3 Bundle `@trusted-ua/protocol` into the published package (`bundleDependencies`), or publish it alongside. Make sure `files` leaves out `*.map` files and generated `native/*` launchers. Check with `npm pack --dry-run`. *As built:* the bundled copy carries no `dependencies` (design D8); `npm pack` = 91 files, no `*.map`.
 - [x] 8.4 Reject temporary package roots (`_npx`, `os.tmpdir()`) in `runCommand` for install and `mcp install`, with an `--allow-temporary` test override, and print `npm i -g trusted-user-agent`.
 - [x] 8.5 Test: from a clean `npm i -g <packed tarball>` into an isolated prefix in `%TEMP%`, with no pi CLI on PATH: *Done:* passed from a clean global install with only `node.exe` on PATH; the check found and fixed the bundling bug in D8. Registry restored.
   - `trusted-ua install` and `trusted-ua mcp install cursor` succeed;

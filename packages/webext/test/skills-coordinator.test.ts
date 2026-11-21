@@ -16,7 +16,7 @@ import {
   type SkillsEventResult,
   type SkillsPlanResult,
   type SkillsResultParams,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 import { SkillsCoordinator, type DocumentIdentity } from "../src/skills/coordinator.js";
 
 const doc: DocumentIdentity = {

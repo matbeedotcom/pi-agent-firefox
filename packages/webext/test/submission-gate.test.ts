@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SubmissionGate, type GateIdentity, type ReviewTicket } from "../src/skills/submission-gate.js";
-import type { ReviewResult } from "@pi-browser/protocol";
+import type { ReviewResult } from "@trusted-ua/protocol";
 
 function identity(): GateIdentity {
   return { documentGeneration: "doc", frameId: 0, accountId: "account", interactionId: "composer", replyTarget: "post",

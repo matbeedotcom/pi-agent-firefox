@@ -9,7 +9,7 @@ import {
   permissionPromptDescription,
   permissionRequestMeta,
   type RequestPermissionRequest,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 
 export interface PermissionPromptText {
   title: string;

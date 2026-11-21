@@ -1,5 +1,5 @@
-import { PageRuntime, type GateState, type GateView, type SkillEventLike } from "@pi-browser/webext";
-import type { PagePlan, SkillsPlanResult } from "@pi-browser/protocol";
+import { PageRuntime, type GateState, type GateView, type SkillEventLike } from "@trusted-ua/webext";
+import type { PagePlan, SkillsPlanResult } from "@trusted-ua/protocol";
 
 /**
  * Content script: DOM access, stable element references, and page
@@ -1484,7 +1484,7 @@ function runtimeForEvent(event: string): PageRuntime | undefined {
 }
 
 /** The primary gate view (first non-closed) for the card. */
-function primaryView(): { runtime: PageRuntime; view: import("@pi-browser/webext").GateView } | undefined {
+function primaryView(): { runtime: PageRuntime; view: import("@trusted-ua/webext").GateView } | undefined {
   for (const runtime of skillsRuntimes.values()) {
     const view = runtime.currentView;
     if (view && view.state !== "closed") return { runtime, view };

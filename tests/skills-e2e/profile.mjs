@@ -1,7 +1,7 @@
 /**
  * Fake-host preparation for the skills e2e matrix (tests/skills-e2e/run.mjs).
  *
- * Registers packages/pi-agent/test/skills-host/fake-host.mjs as the
+ * Registers packages/trusted-user-agent/test/skills-host/fake-host.mjs as the
  * com.matbee.agent native-messaging host for ONE scenario run, using the
  * GLOBAL manifest dir (~/.mozilla/native-messaging-hosts) — the production
  * install path, visible to every profile including web-ext's managed one.

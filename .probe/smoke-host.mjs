@@ -7,10 +7,10 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { PI_BROWSER } from "@pi-browser/protocol";
+import { PI_BROWSER } from "@trusted-ua/protocol";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const host = path.resolve(here, "../packages/pi-agent/dist/native-host/main.js");
+const host = path.resolve(here, "../packages/trusted-user-agent/dist/native-host/main.js");
 
 function frame(obj) {
   const payload = Buffer.from(JSON.stringify(obj), "utf8");

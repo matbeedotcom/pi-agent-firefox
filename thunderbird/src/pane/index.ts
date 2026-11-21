@@ -19,9 +19,9 @@ import {
   type PermissionClearResult,
   type PermissionConfigResult,
   type PermissionSetResult,
-} from "@pi-browser/protocol";
-import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData, mountPermissionSettings, type PermissionSettingsApi, describePermissionRequest, loadAgentChoice, saveAgentChoice, planText, planStatus, PLAN_CARD_ID, type PlanEntryLike, mountNewSessionPanel } from "@pi-browser/webext";
-import type { AgentCapability, AgentsResult, SessionUpdate, ToolCallUpdate } from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
+import { applyPiTheme, MarkdownView, renderMarkdownInto, type PiTheme, createActivityCard, resultParts, type ToolImage, type ActivityCardData, mountPermissionSettings, type PermissionSettingsApi, describePermissionRequest, loadAgentChoice, saveAgentChoice, planText, planStatus, PLAN_CARD_ID, type PlanEntryLike, mountNewSessionPanel } from "@trusted-ua/webext";
+import type { AgentCapability, AgentsResult, SessionUpdate, ToolCallUpdate } from "@trusted-ua/protocol";
 
 interface StatusInfo {
   state: string;

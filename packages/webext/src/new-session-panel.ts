@@ -22,7 +22,7 @@
  * last choice is remembered per app. Older hosts: no selector, pi sessions.
  */
 import { agentChoices } from "./agents.js";
-import type { AgentsResult } from "@pi-browser/protocol";
+import type { AgentsResult } from "@trusted-ua/protocol";
 
 export interface NewSessionPanelApi {
   /** The host's workspace root, when known (older hosts don't send it). */

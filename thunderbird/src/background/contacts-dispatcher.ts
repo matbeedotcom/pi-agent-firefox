@@ -13,7 +13,7 @@
  * flat map so the full card is visible. Contact data is untrusted; the
  * extraction is defensive over vCard field names (FN/N, EMAIL, ORG, ...).
  */
-import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@pi-browser/protocol";
+import { PI_BROWSER_ERROR, PiBrowserProtocolError } from "@trusted-ua/protocol";
 
 export type ContactsToolResult = Record<string, unknown>;
 

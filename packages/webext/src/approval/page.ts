@@ -8,7 +8,7 @@
  * "pi/approval_state" on every change, and closing this window answers the
  * waiting prompts "deny once" (handled by the background's windows.onRemoved).
  */
-import type { PermissionOption, RequestPermissionRequest } from "@pi-browser/protocol";
+import type { PermissionOption, RequestPermissionRequest } from "@trusted-ua/protocol";
 import { describePermissionRequest } from "./prompt-text.js";
 
 const OPTION_ORDER = ["allow_once", "allow_session", "allow_always", "reject_once"];

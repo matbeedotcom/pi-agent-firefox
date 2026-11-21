@@ -23,10 +23,10 @@ import {
   type SessionInfo,
   type SessionNotification,
   type SessionUpdate,
-} from "@pi-browser/protocol";
-import { ApprovalWindowController, isCallerPermissionRequest, fetchAgents } from "@pi-browser/webext";
-import { AcpClient, SESSION_OPEN_TIMEOUT_MS, bindingRefId, fetchPiTheme, notifyHost, SessionStore, SkillsRuntime, type DocumentIdentity, type GateIdentity, type HostStatus, type PiTheme } from "@pi-browser/webext";
-import type { PagePlan } from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
+import { ApprovalWindowController, isCallerPermissionRequest, fetchAgents } from "@trusted-ua/webext";
+import { AcpClient, SESSION_OPEN_TIMEOUT_MS, bindingRefId, fetchPiTheme, notifyHost, SessionStore, SkillsRuntime, type DocumentIdentity, type GateIdentity, type HostStatus, type PiTheme } from "@trusted-ua/webext";
+import type { PagePlan } from "@trusted-ua/protocol";
 import { PromptRecovery } from "./prompt-recovery.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
 import { McpServer, type ControlHandler } from "./mcp-server.js";

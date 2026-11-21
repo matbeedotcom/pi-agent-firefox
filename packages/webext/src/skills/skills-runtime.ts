@@ -20,7 +20,7 @@ import type {
   PagePlan,
   SkillsEventJob,
   SkillsResultParams,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 import { ActivationHistory } from "./activation-history.js";
 import {
   SkillsCoordinator,
@@ -30,7 +30,7 @@ import type {
   SkillsCancelResult,
   SkillsPlanResult,
   SkillsStatusResult,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 
 export type { DocumentIdentity };
 import { ReviewSession } from "./review-session.js";

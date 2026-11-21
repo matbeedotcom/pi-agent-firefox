@@ -1,5 +1,5 @@
 {
-  "name": "pi-browser",
+  "name": "trusted-ua-workspace",
   "version": "0.4.0",
   "private": true,
   "type": "module",
@@ -9,11 +9,11 @@
     "pi-package"
   ],
   "bin": {
-    "trusted-ua": "packages/pi-agent/dist/installer/cli.js"
+    "trusted-ua": "packages/trusted-user-agent/dist/installer/cli.js"
   },
   "pi": {
     "extensions": [
-      "packages/pi-agent/extensions"
+      "packages/trusted-user-agent/extensions"
     ]
   },
   "workspaces": [
@@ -23,9 +23,9 @@
     "tests"
   ],
   "scripts": {
-    "postinstall": "npm run build -w @pi-browser/protocol && npm run build -w trusted-user-agent",
-    "build": "npm run build -w @pi-browser/protocol && npm run build -w @pi-browser/webext && npm run build -w trusted-user-agent && npm run build -w @pi-browser/firefox && npm run build -w @pi-browser/thunderbird",
-    "test": "npm run test -w @pi-browser/protocol && npm run test -w @pi-browser/webext && npm run test -w trusted-user-agent && npm run test -w @pi-browser/firefox && npm run test -w @pi-browser/thunderbird && npm run test -w pi-browser-tests",
+    "postinstall": "npm run build -w @trusted-ua/protocol && npm run build -w trusted-user-agent",
+    "build": "npm run build -w @trusted-ua/protocol && npm run build -w @trusted-ua/webext && npm run build -w trusted-user-agent && npm run build -w @trusted-ua/firefox && npm run build -w @trusted-ua/thunderbird",
+    "test": "npm run test -w @trusted-ua/protocol && npm run test -w @trusted-ua/webext && npm run test -w trusted-user-agent && npm run test -w @trusted-ua/firefox && npm run test -w @trusted-ua/thunderbird && npm run test -w trusted-ua-tests",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "dependencies": {

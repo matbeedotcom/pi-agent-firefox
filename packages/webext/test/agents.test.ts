@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { JSONRPC_ERROR, type AgentsResult, type RequestPermissionRequest } from "@pi-browser/protocol";
+import { JSONRPC_ERROR, type AgentsResult, type RequestPermissionRequest } from "@trusted-ua/protocol";
 import { agentChoices, diffText, fetchAgents, planStatus, planText } from "../src/agents.js";
 import { resultParts } from "../src/activity/tool-activity.js";
 import { describePermissionRequest } from "../src/approval/prompt-text.js";

@@ -2,7 +2,7 @@ import {
   PERMISSION_ALLOW_ONCE,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
-} from "@pi-browser/protocol";
+} from "@trusted-ua/protocol";
 
 /** Check Firefox on every call so revocation and host restarts work correctly. */
 export async function requestBrowserToolPermission(

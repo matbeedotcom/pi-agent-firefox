@@ -1,2 +1,2 @@
 // Shared by Firefox and Thunderbird chat views.
-export { ActivityCardData, createActivityCard } from "@pi-browser/webext";
+export { ActivityCardData, createActivityCard } from "@trusted-ua/webext";

@@ -8,7 +8,7 @@ authoring, catalog reload, live observation via `skills-events.jsonl`) lives
 in the project skill **`create-browser-skill`**
 (`.pi/skills/create-browser-skill/SKILL.md`) — load it whenever a task
 touches skill packages (`tests/skills-packages/`), the skills runtime
-(`packages/pi-agent/src/skills/`, `packages/webext/src/skills/`), or the
+(`packages/trusted-user-agent/src/skills/`, `packages/webext/src/skills/`), or the
 e2e suite (`tests/skills-e2e/`).
 
 Where code and doc differ, the code is authoritative (known drift: the

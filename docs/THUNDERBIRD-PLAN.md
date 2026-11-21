@@ -890,7 +890,7 @@ That requires an additional shared-session layer.
 # 26. Cross-Application Agent Sessions
 
 > **Status (2026-09-13): §26–31 implemented and verified.** Broker + relay live in the
-> native host (`packages/pi-agent/src/native-host/broker-ipc.ts`, `relay.ts`); provider
+> native host (`packages/trusted-user-agent/src/native-host/broker-ipc.ts`, `relay.ts`); provider
 > registry + capability routing in `capability-registry.ts` / `browser/provider.ts`;
 > private Unix-socket IPC (`~/.pi/run/agent-broker.sock`), Windows gated as follow-up.
 > Evidence: [CROSS-APP-VERIFICATION.md](CROSS-APP-VERIFICATION.md) (unit + integration +

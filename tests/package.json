@@ -1,5 +1,5 @@
 {
-  "name": "pi-browser-tests",
+  "name": "trusted-ua-tests",
   "version": "0.4.0",
   "private": true,
   "type": "module",
@@ -9,8 +9,8 @@
   },
   "dependencies": {
     "trusted-user-agent": "0.4.0",
-    "@pi-browser/firefox": "0.4.0",
-    "@pi-browser/protocol": "0.4.0"
+    "@trusted-ua/firefox": "0.4.0",
+    "@trusted-ua/protocol": "0.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0"
