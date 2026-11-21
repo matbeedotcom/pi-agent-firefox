@@ -59,7 +59,7 @@ With pi, the plugin (`trusted-user-agent`) installs from this repository as a pi
 the plugin automatically on install):
 
 ```sh
-pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.4.0
+pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.5.0
 ```
 
 1. In any pi session: `/trusted-ua install` — registers the Native Messaging host.

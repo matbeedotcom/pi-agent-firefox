@@ -1,4 +1,4 @@
-# v0.5.0 — release notes (draft)
+# v0.5.0 — release notes
 
 ## Pi Browser is now Trusted User Agent
 

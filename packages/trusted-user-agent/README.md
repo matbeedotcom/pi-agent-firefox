@@ -188,7 +188,7 @@ The same package is a [pi](https://pi.dev) package. It adds the `/trusted-ua` co
 works like `trusted-ua`:
 
 ```sh
-pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.4.0
+pi install git:github.com/matbeedotcom/pi-agent-firefox@v0.5.0
 ```
 
 In pi: `/trusted-ua install`, `/trusted-ua doctor`, `/trusted-ua mcp install [client]`.

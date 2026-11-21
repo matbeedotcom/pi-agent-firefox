@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Trusted User Agent",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Chat with pi, Claude Code or Codex in the sidebar and let agents use your browser tabs, with your approval. Multi-session ACP client over Native Messaging.",
   "icons": {
     "48": "icons/icon.svg",

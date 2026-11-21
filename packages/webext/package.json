@@ -1,6 +1,6 @@
 {
   "name": "@trusted-ua/webext",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Shared WebExtension-side ACP client + session store for the Mozilla add-ons (Firefox, Thunderbird)",
@@ -18,7 +18,7 @@
     "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
   },
   "dependencies": {
-    "@trusted-ua/protocol": "0.4.0",
+    "@trusted-ua/protocol": "0.5.0",
     "streaming-markdown": "^0.2.15"
   },
   "devDependencies": {

@@ -13,7 +13,7 @@ export const TRUSTED_UA = {
   /** Product name (openspec rename-trusted-user-agent; was "pi-browser"). */
   name: "trusted-ua",
   /** Package release version (npm version of trusted-user-agent). */
-  version: "0.4.0",
+  version: "0.5.0",
   /**
    * Trusted User Agent integration protocol version (bump on breaking changes to
    * x-trusted-ua/* semantics or integration metadata). v2 = 2026-09-11

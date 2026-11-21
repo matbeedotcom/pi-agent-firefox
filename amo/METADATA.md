@@ -1,13 +1,13 @@
 # AMO submission — metadata & review notes
 
-**Add-on:** Trusted User Agent · **ID:** `pi-agent-firefox@matbee.com` · **Version:** 0.4.0
-**Zip:** `amo/trusted-user-agent-0.4.0.zip` (build: `sh amo/make-zip.sh`)
-**Source zip:** `amo/trusted-user-agent-0.4.0-source.zip` (build: `git archive --format=zip --prefix=pi-agent-firefox/ -o amo/trusted-user-agent-0.4.0-source.zip HEAD`) — pure TypeScript/shell source, no transpiled or machine-generated files. Build instructions: README "Building from source" + `build.sh`.
+**Add-on:** Trusted User Agent · **ID:** `pi-agent-firefox@matbee.com` · **Version:** 0.5.0
+**Zip:** `amo/trusted-user-agent-0.5.0.zip` (build: `sh amo/make-zip.sh`)
+**Source zip:** `amo/trusted-user-agent-0.5.0-source.zip` (build: `git archive --format=zip --prefix=pi-agent-firefox/ -o amo/trusted-user-agent-0.5.0-source.zip HEAD`) — pure TypeScript/shell source, no transpiled or machine-generated files. Build instructions: README "Building from source" + `build.sh`.
 
 ## Form fields
 
 - **Name:** Trusted User Agent
-- **Version:** 0.4.0
+- **Version:** 0.5.0
 - **Summary (≤60 chars):** Agent sidebar for Firefox: pi, Claude Code, Codex, your tabs
 - **Description (first paragraph, ~600 chars):**
   Trusted User Agent connects Firefox to coding agents (pi, Claude Code, Codex)

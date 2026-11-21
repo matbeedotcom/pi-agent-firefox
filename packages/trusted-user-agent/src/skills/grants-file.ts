@@ -4,7 +4,8 @@
  * The mock backend gets grants from TRUSTED_UA_SKILLS_CONFIG (test seam,
  * main.ts). Real users get grants from ONE file in the data root:
  *
- *   <TRUSTED_UA_DATA_ROOT || ~/.pi/browser>/skills-grants.json
+ *   <TRUSTED_UA_DATA_ROOT || ~/.trusted-ua>/skills-grants.json
+ *   (read from ~/.pi/browser while only a v0.4.0 copy exists)
  *
  *   {
  *     "grants": [{

@@ -1,6 +1,6 @@
 {
   "name": "@trusted-ua/firefox",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Pi Browser Firefox add-on (build workspace)",
@@ -12,8 +12,8 @@
     "test": "tsc -p tsconfig.tests.json && node --test dist-tests/test/*.test.js"
   },
   "dependencies": {
-    "@trusted-ua/protocol": "0.4.0",
-    "@trusted-ua/webext": "^0.4.0"
+    "@trusted-ua/protocol": "0.5.0",
+    "@trusted-ua/webext": "^0.5.0"
   },
   "devDependencies": {
     "@types/firefox-webext-browser": "^143.0.0",
