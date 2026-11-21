@@ -1,6 +1,6 @@
 {
   "name": "pi-browser-tests",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Cross-package integration tests for Pi Browser (fake-Firefox harness driving the real native host)",
@@ -8,9 +8,9 @@
     "test": "node --test src/*.test.mjs"
   },
   "dependencies": {
-    "trusted-user-agent": "0.3.0",
-    "@pi-browser/firefox": "0.3.0",
-    "@pi-browser/protocol": "0.3.0"
+    "trusted-user-agent": "0.4.0",
+    "@pi-browser/firefox": "0.4.0",
+    "@pi-browser/protocol": "0.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0"

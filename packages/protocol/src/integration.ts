@@ -13,7 +13,7 @@ export const PI_BROWSER = {
   /** Package name. */
   name: "pi-browser",
   /** Package release version (npm version of trusted-user-agent). */
-  version: "0.3.0",
+  version: "0.4.0",
   /**
    * Pi Browser integration protocol version (bump on breaking changes to
    * x-pi-browser/* semantics or integration metadata). v2 = 2026-09-11
@@ -30,6 +30,11 @@ export const PI_BROWSER = {
   // the x-pi-browser/permission_withdrawn notification, and caller /
   // externalAccess fields on x-pi-browser/permissions|permission_set|
   // permission_clear. Older peers ignore all of them (see callers.ts).
+  // 2026-11-20 (v0.4.0, sidebar ACP agents): additive again — the
+  // x-pi-browser/agents request, `_meta.piBrowser.agent` on session/new,
+  // listed sessions and relayed permission requests, `parentSession` on
+  // `pi-browser/caller`, and the "cancelled" permission_withdrawn reason
+  // (see agents.ts). Older peers create and see pi sessions only.
   /**
    * Browser tool schema version (bump when tool schemas change).
    * v2 = 2026-09-12: added browser_evaluate, browser_get_accessibility_tree,
